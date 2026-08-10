@@ -2,6 +2,7 @@ appId: com.piwork.desktop
 productName: Pi Work
 directories:
   output: release
+  buildResources: resources
 files:
   - out/**
   - package.json
@@ -12,6 +13,8 @@ asarUnpack:
 extraResources:
   - from: build/pi-runtime/agent-service.js
     to: pi-runtime/agent-service.js
+  - from: build/pi-runtime/chunks
+    to: pi-runtime/chunks
   - from: build/pi-runtime/package.json
     to: pi-runtime/package.json
   - from: build/pi-runtime/node_modules
@@ -19,13 +22,16 @@ extraResources:
     filter:
       - "**/*"
 mac:
+  icon: icons/generated/mac/icon.icns
   target:
     - dmg
     - zip
 win:
+  icon: icons/generated/windows/icon.ico
   target:
     - nsis
 linux:
+  icon: icons/generated/linux
   target:
     - AppImage
     - tar.gz

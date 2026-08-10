@@ -1,12 +1,33 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { getSupportedThinkingLevels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
-  createAgentSession,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
+  DefaultPackageManager,
   ModelRuntime,
   resolveCliModel,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { Plan, Task } from "@pi-work/protocol";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentRuntime,
+  ChatMessage,
+  ExtensionPackage,
+  ModelOption,
+  Plan,
+  Task,
+  ThinkingLevel,
+} from "@pi-work/protocol";
 import { z } from "zod";
 
 export type PiRuntimeHealth = {
@@ -16,9 +37,14 @@ export type PiRuntimeHealth = {
 
 export type PiProviderCredential = {
   providerId: string;
-  modelId: string;
   apiKey: string;
 };
+
+export type ToolApprovalRequester = (
+  tool: "edit" | "write" | "bash",
+  args: Record<string, unknown>,
+  cwd: string,
+) => Promise<boolean>;
 
 const generatedPlanSchema = z.object({
   summary: z.string().min(1),
@@ -40,29 +66,39 @@ export class PiAdapter {
   async createPlan(
     task: Pick<Task, "id" | "title" | "goal">,
     provider: PiProviderCredential | null,
+    modelId: string,
+    thinkingLevel: ThinkingLevel,
+    runtime: AgentRuntime,
   ): Promise<Plan> {
     if (provider === null) {
       return this.createPlanningFallback(task);
     }
 
     const credentials = new InMemoryCredentialStore();
-    const modelRuntime = await ModelRuntime.create({ credentials });
+    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    const services = await createAgentSessionServices({
+      cwd: runtime.cwd,
+      agentDir: runtime.agentDir,
+      modelRuntime,
+      settingsManager: this.settingsManager(runtime),
+    });
     await modelRuntime.setRuntimeApiKey(provider.providerId, provider.apiKey);
     const modelResolution = resolveCliModel({
-      cliModel: `${provider.providerId}/${provider.modelId}`,
+      cliModel: `${provider.providerId}/${modelId}`,
       modelRuntime,
     });
     if (modelResolution.error !== undefined) {
       throw new Error(modelResolution.error);
     }
     if (modelResolution.model === undefined) {
-      throw new Error(`Pi could not resolve ${provider.providerId}/${provider.modelId}.`);
+      throw new Error(`Pi could not resolve ${provider.providerId}/${modelId}.`);
     }
 
     const textDeltas: string[] = [];
-    const { session } = await createAgentSession({
+    const { session } = await createAgentSessionFromServices({
+      services,
       model: modelResolution.model,
-      modelRuntime,
+      thinkingLevel,
       sessionManager: SessionManager.inMemory(),
       tools: [],
     });
@@ -98,6 +134,143 @@ export class PiAdapter {
     };
   }
 
+  async chat(
+    messages: Pick<ChatMessage, "role" | "content">[],
+    provider: PiProviderCredential | null,
+    modelId: string,
+    thinkingLevel: ThinkingLevel,
+    runtime: AgentRuntime,
+    requestApproval: ToolApprovalRequester,
+  ): Promise<string> {
+    if (provider === null) {
+      return "No provider is configured. Add one in settings, or use /goal and /plan with local fallback.";
+    }
+
+    const credentials = new InMemoryCredentialStore();
+    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    const services = await createAgentSessionServices({
+      cwd: runtime.cwd,
+      agentDir: runtime.agentDir,
+      modelRuntime,
+      settingsManager: this.settingsManager(runtime),
+    });
+    await modelRuntime.setRuntimeApiKey(provider.providerId, provider.apiKey);
+    const modelResolution = resolveCliModel({
+      cliModel: `${provider.providerId}/${modelId}`,
+      modelRuntime,
+    });
+    if (modelResolution.error !== undefined) {
+      throw new Error(modelResolution.error);
+    }
+    if (modelResolution.model === undefined) {
+      throw new Error(`Pi could not resolve ${provider.providerId}/${modelId}.`);
+    }
+
+    const textDeltas: string[] = [];
+    const customTools: ToolDefinition<any, any, any>[] = [
+      boundaryTool(createReadToolDefinition(runtime.cwd), runtime.cwd),
+      boundaryTool(createGrepToolDefinition(runtime.cwd), runtime.cwd),
+      boundaryTool(createFindToolDefinition(runtime.cwd), runtime.cwd),
+      boundaryTool(createLsToolDefinition(runtime.cwd), runtime.cwd),
+      approvalTool(createEditToolDefinition(runtime.cwd), runtime.cwd, requestApproval),
+      approvalTool(createWriteToolDefinition(runtime.cwd), runtime.cwd, requestApproval),
+      approvalTool(createBashToolDefinition(runtime.cwd), runtime.cwd, requestApproval),
+    ];
+    const { session } = await createAgentSessionFromServices({
+      services,
+      model: modelResolution.model,
+      thinkingLevel,
+      sessionManager: SessionManager.inMemory(),
+      tools: ["read", "grep", "find", "ls", "edit", "write", "bash"],
+      customTools,
+    });
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        textDeltas.push(event.assistantMessageEvent.delta);
+      }
+    });
+
+    try {
+      await session.prompt([
+        "You are Pi Work, a concise assistant discussing work in the current local workspace.",
+        "Use read/search tools directly. Editing, writing, and shell commands require user approval.",
+        "Conversation:",
+        ...messages.map((message) => `${message.role}: ${message.content}`),
+        "assistant:",
+      ].join("\n\n"));
+    } finally {
+      unsubscribe();
+      session.dispose();
+    }
+
+    const content = textDeltas.join("").trim();
+    if (content.length === 0) {
+      throw new Error("Pi returned an empty chat response.");
+    }
+    return content;
+  }
+
+  listExtensions(runtime: AgentRuntime): ExtensionPackage[] {
+    return this.packageManager(runtime).manager.listConfiguredPackages()
+      .filter((item) => item.scope === "user")
+      .map((item) => ({
+        source: !isRemoteExtensionSource(item.source) && item.installedPath !== undefined
+          ? item.installedPath
+          : item.source,
+        installedPath: item.installedPath ?? null,
+      }));
+  }
+
+  async installExtension(runtime: AgentRuntime, source: string): Promise<ExtensionPackage[]> {
+    const value = source.trim();
+    assertExtensionSource(value);
+    const { manager, settings } = this.packageManager(runtime);
+    await manager.installAndPersist(value);
+    await settings.flush();
+    return this.listExtensions(runtime);
+  }
+
+  async removeExtension(runtime: AgentRuntime, source: string): Promise<ExtensionPackage[]> {
+    const value = source.trim();
+    assertExtensionSource(value);
+    const { manager, settings } = this.packageManager(runtime);
+    const removed = await manager.removeAndPersist(value);
+    await settings.flush();
+    if (!removed) {
+      throw new Error(`Pi extension is not installed: ${value}`);
+    }
+    return this.listExtensions(runtime);
+  }
+
+  async listModels(runtime: AgentRuntime): Promise<{
+    models: ModelOption[];
+    diagnostics: string[];
+  }> {
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+    });
+    const services = await createAgentSessionServices({
+      cwd: runtime.cwd,
+      agentDir: runtime.agentDir,
+      modelRuntime,
+      settingsManager: this.settingsManager(runtime),
+    });
+    const providerNames = new Map(
+      services.modelRuntime.getProviders().map((provider) => [provider.id, provider.name]),
+    );
+    return {
+      models: services.modelRuntime.getModels().map((model) => ({
+        providerId: model.provider,
+        providerName: providerNames.get(model.provider) ?? model.provider,
+        modelId: model.id,
+        modelName: model.name,
+        thinkingLevels: getSupportedThinkingLevels(model),
+      })),
+      diagnostics: services.diagnostics.map((diagnostic) => diagnostic.message),
+    };
+  }
+
   createPlanningFallback(task: Pick<Task, "id" | "title" | "goal">): Plan {
     return {
       taskId: task.id,
@@ -122,6 +295,111 @@ export class PiAdapter {
       sources: [],
     };
   }
+
+  private packageManager(runtime: AgentRuntime): {
+    manager: DefaultPackageManager;
+    settings: SettingsManager;
+  } {
+    const settings = this.settingsManager(runtime);
+    return {
+      manager: new DefaultPackageManager({
+        cwd: runtime.cwd,
+        agentDir: runtime.agentDir,
+        settingsManager: settings,
+      }),
+      settings,
+    };
+  }
+
+  private settingsManager(runtime: AgentRuntime): SettingsManager {
+    return SettingsManager.create(runtime.cwd, runtime.agentDir, {
+      projectTrusted: false,
+    });
+  }
+}
+
+function approvalTool(
+  tool: ToolDefinition<any, any, any>,
+  cwd: string,
+  requestApproval: ToolApprovalRequester,
+): ToolDefinition<any, any, any> {
+  const execute = tool.execute.bind(tool);
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate, context) => {
+      const values = params as unknown as Record<string, unknown>;
+      const name = tool.name as "edit" | "write" | "bash";
+      if (name !== "bash") {
+        await assertAuthorizedFilePath(cwd, String(values.path ?? ""));
+      }
+      if (!await requestApproval(name, values, cwd)) {
+        throw new Error(`User denied ${name} tool execution.`);
+      }
+      return execute(toolCallId, params, signal, onUpdate, context);
+    },
+  };
+}
+
+function boundaryTool(
+  tool: ToolDefinition<any, any, any>,
+  cwd: string,
+): ToolDefinition<any, any, any> {
+  const execute = tool.execute.bind(tool);
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate, context) => {
+      const values = params as unknown as Record<string, unknown>;
+      await assertAuthorizedFilePath(cwd, String(values.path ?? "."));
+      return execute(toolCallId, params, signal, onUpdate, context);
+    },
+  };
+}
+
+export async function assertAuthorizedFilePath(rootPath: string, requestedPath: string): Promise<void> {
+  const root = await realpath(rootPath);
+  const candidate = resolve(root, requestedPath);
+  if (!isWithin(root, candidate)) {
+    throw new Error(`Path is outside the authorized workspace: ${requestedPath}`);
+  }
+  let existing = candidate;
+  while (true) {
+    try {
+      existing = await realpath(existing);
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+      const parent = dirname(existing);
+      if (parent === existing) throw error;
+      existing = parent;
+    }
+  }
+  if (!isWithin(root, existing)) {
+    throw new Error(`Path is outside the authorized workspace: ${requestedPath}`);
+  }
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const difference = relative(root, candidate);
+  return difference === ""
+    || (!difference.startsWith(`..${sep}`) && difference !== ".." && !isAbsolute(difference));
+}
+
+function assertExtensionSource(source: string): void {
+  const value = source.trim();
+  if (!isRemoteExtensionSource(value) && !isAbsolute(value)) {
+    throw new Error("Local Pi extension sources must use an absolute path.");
+  }
+}
+
+function isRemoteExtensionSource(source: string): boolean {
+  return source.startsWith("npm:")
+    || source.startsWith("git:")
+    || source.startsWith("https://")
+    || source.startsWith("http://")
+    || source.startsWith("ssh://")
+    || source.startsWith("git@");
 }
 
 function extractJson(response: string): string {

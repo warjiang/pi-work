@@ -1,4 +1,16 @@
-import type { Artifact, Plan, ProviderConfig, Task, Workspace } from "@pi-work/protocol";
+import type {
+  Artifact,
+  AppSettings,
+  ChatMessage,
+  Conversation,
+  ExtensionPackage,
+  ModelCatalog,
+  Plan,
+  ProviderConfig,
+  Task,
+  ToolApproval,
+  Workspace,
+} from "@pi-work/protocol";
 
 declare global {
   interface Window {
@@ -10,6 +22,25 @@ declare global {
       provider: {
         list(): Promise<ProviderConfig[]>;
         save(input: unknown): Promise<ProviderConfig>;
+        remove(providerId: string): Promise<void>;
+      };
+      settings: {
+        get(): Promise<AppSettings>;
+        update(input: unknown): Promise<AppSettings>;
+      };
+      extension: {
+        list(): Promise<ExtensionPackage[]>;
+        install(source: string): Promise<ExtensionPackage[]>;
+        remove(source: string): Promise<ExtensionPackage[]>;
+        chooseLocal(kind: "file" | "directory"): Promise<string | null>;
+      };
+      model: {
+        list(): Promise<ModelCatalog>;
+      };
+      conversation: {
+        list(): Promise<Conversation[]>;
+        updateModel(input: unknown): Promise<Task>;
+        remove(input: unknown): Promise<void>;
       };
       task: {
         list(workspaceId: string): Promise<Task[]>;
@@ -19,6 +50,12 @@ declare global {
         abort(input: unknown): Promise<Task>;
         complete(input: unknown): Promise<Task>;
         resume(input: unknown): Promise<Task>;
+      };
+      chat: {
+        list(taskId: string): Promise<ChatMessage[]>;
+        send(input: unknown): Promise<Task>;
+        onToolApproval(listener: (approval: ToolApproval) => void): () => void;
+        resolveToolApproval(input: unknown): Promise<void>;
       };
       artifact: {
         list(taskId: string): Promise<Artifact[]>;

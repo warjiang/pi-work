@@ -5,6 +5,7 @@ export const workspaces = sqliteTable("workspaces", {
   name: text("name").notNull(),
   rootPath: text("root_path").notNull(),
   outputPath: text("output_path").notNull(),
+  kind: text("kind").notNull(),
   createdAt: text("created_at").notNull(),
 });
 
@@ -14,8 +15,19 @@ export const tasks = sqliteTable("tasks", {
   title: text("title").notNull(),
   goal: text("goal").notNull(),
   status: text("status").notNull(),
+  providerId: text("provider_id"),
+  modelId: text("model_id"),
+  thinkingLevel: text("thinking_level").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const messages = sqliteTable("messages", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  createdAt: text("created_at").notNull(),
 });
 
 export const plans = sqliteTable("plans", {
@@ -47,5 +59,10 @@ export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),
   sequence: text("sequence").notNull(),
+  value: text("value").notNull(),
+});
+
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
   value: text("value").notNull(),
 });
