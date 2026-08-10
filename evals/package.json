@@ -1,0 +1,24 @@
+{
+  "name": "@pi-work/evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "spec": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@openwork/testkit": "workspace:*",
+    "@pi-work/artifacts": "workspace:*",
+    "@pi-work/pi-adapter": "workspace:*",
+    "@pi-work/policy": "workspace:*",
+    "@pi-work/storage": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.7.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

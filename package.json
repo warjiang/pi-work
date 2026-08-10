@@ -1,0 +1,21 @@
+{
+  "name": "pi-work",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.16.0",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": "11.16.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @pi-work/desktop dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "evals": "pnpm --filter @pi-work/evals spec",
+    "check": "pnpm typecheck && pnpm test && pnpm evals",
+    "package": "pnpm --filter @pi-work/desktop package",
+    "prepare:pi": "pnpm --filter @pi-work/desktop prepare:pi-runtime"
+  }
+}

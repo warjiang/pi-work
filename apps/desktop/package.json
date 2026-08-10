@@ -1,0 +1,45 @@
+{
+  "name": "@pi-work/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first approval-led agent workspace",
+  "author": "Pi Work contributors",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "package": "pnpm build && pnpm prepare:pi-runtime && electron-builder --publish never",
+    "prepare:pi-runtime": "tsx scripts/prepare-pi-runtime.mts",
+    "verify:pi-runtime": "tsx scripts/verify-pi-runtime.mts"
+  },
+  "dependencies": {
+    "@pi-work/artifacts": "workspace:*",
+    "@pi-work/pi-adapter": "workspace:*",
+    "@pi-work/protocol": "workspace:*",
+    "@pi-work/storage": "workspace:*",
+    "@tanstack/react-query": "5.101.4",
+    "better-sqlite3": "13.0.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zustand": "5.0.14"
+  },
+  "devDependencies": {
+    "@electron-toolkit/utils": "4.0.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "24.7.2",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.1",
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  }
+}
