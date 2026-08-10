@@ -22,6 +22,14 @@ export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh
 export const thinkingLevelSchema = z.enum(thinkingLevels);
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
 
+export const permissionModes = ["explore", "ask", "auto"] as const;
+export const permissionModeSchema = z.enum(permissionModes);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
+
+export const sessionKinds = ["chat", "task"] as const;
+export const sessionKindSchema = z.enum(sessionKinds);
+export type SessionKind = z.infer<typeof sessionKindSchema>;
+
 export const workspaceSchema = z.object({
   id: z.uuid(),
   name: z.string().min(1),
@@ -41,10 +49,23 @@ export const taskSchema = z.object({
   providerId: z.string().nullable(),
   modelId: z.string().nullable(),
   thinkingLevel: thinkingLevelSchema,
+  kind: sessionKindSchema.default("chat"),
+  archived: z.boolean().default(false),
+  flagged: z.boolean().default(false),
+  unread: z.boolean().default(false),
+  statusId: z.uuid().nullable().default(null),
+  labelIds: z.array(z.uuid()).default([]),
+  projectId: z.uuid().nullable().default(null),
+  permissionMode: permissionModeSchema.default("ask"),
+  planMode: z.boolean().default(false),
+  workingDirectory: z.string().nullable().default(null),
+  running: z.boolean().default(false),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
 export type Task = z.infer<typeof taskSchema>;
+export const sessionSchema = taskSchema;
+export type Session = Task;
 
 export const chatMessageSchema = z.object({
   id: z.uuid(),
@@ -54,6 +75,180 @@ export const chatMessageSchema = z.object({
   createdAt: z.string().datetime(),
 });
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
+
+export const activityKinds = [
+  "thinking",
+  "tool_call",
+  "tool_result",
+  "file_change",
+  "approval",
+  "error",
+  "notice",
+] as const;
+export const activityKindSchema = z.enum(activityKinds);
+export const activitySchema = z.object({
+  id: z.uuid(),
+  sessionId: z.uuid(),
+  messageId: z.uuid().nullable(),
+  kind: activityKindSchema,
+  title: z.string().min(1),
+  detail: z.string(),
+  metadata: z.record(z.string(), z.unknown()),
+  createdAt: z.string().datetime(),
+});
+export type Activity = z.infer<typeof activitySchema>;
+
+export const attachmentSchema = z.object({
+  id: z.uuid(),
+  sessionId: z.uuid(),
+  messageId: z.uuid().nullable(),
+  name: z.string().min(1),
+  path: z.string().min(1),
+  mimeType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+});
+export type Attachment = z.infer<typeof attachmentSchema>;
+export const attachmentDraftSchema = attachmentSchema.pick({
+  name: true,
+  path: true,
+  mimeType: true,
+  size: true,
+});
+export type AttachmentDraft = z.infer<typeof attachmentDraftSchema>;
+export const inspectAttachmentPathsSchema = z.array(z.string().min(1)).max(20);
+
+export const statusDefinitionSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(80),
+  color: z.string().trim().min(1).max(32),
+  position: z.number().int().nonnegative(),
+});
+export type StatusDefinition = z.infer<typeof statusDefinitionSchema>;
+
+export const labelSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  parentId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(80),
+  color: z.string().trim().min(1).max(32),
+});
+export type Label = z.infer<typeof labelSchema>;
+
+export const savedViewSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(80),
+  filters: z.record(z.string(), z.unknown()),
+  position: z.number().int().nonnegative(),
+});
+export type SavedView = z.infer<typeof savedViewSchema>;
+
+export const projectSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(4_000),
+  color: z.string().trim().min(1).max(32),
+  archived: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Project = z.infer<typeof projectSchema>;
+
+export const subtaskSchema = z.object({
+  id: z.uuid(),
+  sessionId: z.uuid(),
+  title: z.string().trim().min(1).max(240),
+  completed: z.boolean(),
+  position: z.number().int().nonnegative(),
+});
+export type Subtask = z.infer<typeof subtaskSchema>;
+
+export const sourceTypes = ["mcp_stdio", "mcp_http", "openapi", "local", "google", "microsoft", "slack"] as const;
+export const sourceTypeSchema = z.enum(sourceTypes);
+export const sourceSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(120),
+  type: sourceTypeSchema,
+  enabled: z.boolean(),
+  config: z.record(z.string(), z.unknown()),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Source = z.infer<typeof sourceSchema>;
+
+export const skillSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(2_000),
+  instructions: z.string().max(100_000),
+  enabled: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Skill = z.infer<typeof skillSchema>;
+
+export const automationTriggerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("schedule"), cron: z.string().min(1).max(120) }),
+  z.object({ type: z.literal("status_changed"), statusId: z.uuid().nullable() }),
+  z.object({ type: z.literal("label_changed"), labelId: z.uuid() }),
+  z.object({ type: z.literal("tool_event"), tool: z.string().min(1).max(120) }),
+]);
+export const automationActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("create_session"), title: z.string().max(160), prompt: z.string().min(1).max(100_000) }),
+  z.object({ type: z.literal("send_prompt"), sessionId: z.uuid().nullable(), prompt: z.string().min(1).max(100_000) }),
+  z.object({ type: z.literal("webhook"), url: z.url(), method: z.enum(["POST", "PUT", "PATCH"]).default("POST") }),
+]);
+export const automationSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(120),
+  enabled: z.boolean(),
+  trigger: automationTriggerSchema,
+  action: automationActionSchema,
+  lastRunAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Automation = z.infer<typeof automationSchema>;
+
+export const automationRunSchema = z.object({
+  id: z.uuid(),
+  automationId: z.uuid(),
+  status: z.enum(["running", "completed", "failed", "skipped"]),
+  dedupeKey: z.string().min(1),
+  error: z.string().nullable(),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime().nullable(),
+});
+export type AutomationRun = z.infer<typeof automationRunSchema>;
+
+export const browserTabSchema = z.object({
+  id: z.uuid(),
+  sessionId: z.uuid().nullable(),
+  title: z.string(),
+  url: z.string(),
+  position: z.number().int().nonnegative(),
+  active: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type BrowserTab = z.infer<typeof browserTabSchema>;
+
+export const browserNavigateInputSchema = z.object({
+  url: z.string().trim().min(1).max(8_192),
+});
+
+export const browserBoundsInputSchema = z.object({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().nonnegative(),
+  height: z.number().int().nonnegative(),
+});
 
 export const runSchema = z.object({
   id: z.uuid(),
@@ -109,7 +304,47 @@ export const sendChatInputSchema = z.object({
   providerId: z.string().trim().min(1).max(80),
   modelId: z.string().trim().min(1).max(160),
   thinkingLevel: thinkingLevelSchema,
+  permissionMode: permissionModeSchema.optional(),
+  planMode: z.boolean().optional(),
+  attachments: z.array(attachmentDraftSchema).max(20).default([]),
 });
+
+export const sessionSearchInputSchema = z.object({
+  query: z.string().trim().max(500).default(""),
+  workspaceId: z.uuid().nullable().optional(),
+  archived: z.boolean().optional(),
+  flagged: z.boolean().optional(),
+  statusId: z.uuid().nullable().optional(),
+  projectId: z.uuid().nullable().optional(),
+  labelId: z.uuid().optional(),
+});
+
+export const updateSessionInputSchema = z.object({
+  sessionId: z.uuid(),
+  title: z.string().trim().min(1).max(160).optional(),
+  status: taskStatusSchema.optional(),
+  archived: z.boolean().optional(),
+  flagged: z.boolean().optional(),
+  unread: z.boolean().optional(),
+  statusId: z.uuid().nullable().optional(),
+  labelIds: z.array(z.uuid()).optional(),
+  projectId: z.uuid().nullable().optional(),
+  permissionMode: permissionModeSchema.optional(),
+  planMode: z.boolean().optional(),
+  workingDirectory: z.string().nullable().optional(),
+});
+
+export const createDomainEntityInputSchema = z.object({
+  workspaceId: z.uuid().nullable().optional(),
+  value: z.record(z.string(), z.unknown()),
+});
+
+export const updateDomainEntityInputSchema = z.object({
+  id: z.uuid(),
+  value: z.record(z.string(), z.unknown()),
+});
+
+export const removeDomainEntityInputSchema = z.object({ id: z.uuid() });
 
 export const providerConfigSchema = z.object({
   providerId: z.string().trim().min(1).max(80),
@@ -172,6 +407,11 @@ export const appSettingsSchema = z.object({
   providerId: z.string().nullable(),
   modelId: z.string().nullable(),
   thinkingLevel: thinkingLevelSchema,
+  theme: z.enum(["system", "light", "dark"]).default("system"),
+  language: z.enum(["en", "zh-CN"]).default("en"),
+  sidebarCollapsed: z.boolean().default(false),
+  focusMode: z.boolean().default(false),
+  compactMode: z.boolean().default(false),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 
@@ -179,6 +419,7 @@ export const updateAppSettingsInputSchema = appSettingsSchema.partial();
 
 export const toolApprovalSchema = z.object({
   requestId: z.uuid(),
+  sessionId: z.uuid(),
   approvalId: z.uuid(),
   tool: z.enum(["edit", "write", "bash"]),
   arguments: z.record(z.string(), z.unknown()),
@@ -233,11 +474,18 @@ export const agentRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("chat"),
     requestId: z.uuid(),
+    sessionId: z.uuid(),
     messages: z.array(chatMessageSchema.pick({ role: true, content: true })).min(1),
     provider: setProviderCredentialInputSchema.optional(),
     modelId: z.string().min(1),
     thinkingLevel: thinkingLevelSchema,
+    permissionMode: permissionModeSchema.default("ask"),
     runtime: agentRuntimeSchema,
+  }),
+  z.object({
+    type: z.literal("cancel"),
+    requestId: z.uuid(),
+    sessionId: z.uuid(),
   }),
   z.object({
     type: z.literal("tool.resolve"),
@@ -276,7 +524,14 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("chat"),
     requestId: z.uuid(),
-    content: z.string().min(1),
+    sessionId: z.uuid(),
+    content: z.string(),
+    cancelled: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("cancelled"),
+    requestId: z.uuid(),
+    sessionId: z.uuid(),
   }),
   z.object({
     type: z.literal("extensions"),
@@ -293,9 +548,20 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     message: z.string(),
   }),
   toolApprovalSchema.extend({ type: z.literal("tool.approval") }),
+  z.object({
+    type: z.literal("event"),
+    requestId: z.uuid(),
+    sessionId: z.uuid(),
+    event: z.object({
+      sequence: z.number().int().nonnegative(),
+      kind: z.enum(["text_delta", "thinking", "tool_call", "tool_result", "file_change", "approval", "error", "completed", "cancelled"]),
+      payload: z.record(z.string(), z.unknown()),
+      timestamp: z.string().datetime(),
+    }),
+  }),
 ]);
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
-export type AgentResponse = Exclude<AgentMessage, { type: "tool.approval" }>;
+export type AgentResponse = Exclude<AgentMessage, { type: "tool.approval" | "event" }>;
 export const agentResponseSchema = agentMessageSchema;
 
 export const eventSchema = z.object({
@@ -305,6 +571,7 @@ export const eventSchema = z.object({
   timestamp: z.string().datetime(),
   type: z.enum([
     "task.created",
+    "session.updated",
     "plan.proposed",
     "plan.approved",
     "plan.rejected",

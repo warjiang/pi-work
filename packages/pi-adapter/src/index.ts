@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getSupportedThinkingLevels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
@@ -18,13 +18,14 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AgentRuntime,
   ChatMessage,
   ExtensionPackage,
   ModelOption,
   Plan,
+  PermissionMode,
   Task,
   ThinkingLevel,
 } from "@pi-work/protocol";
@@ -46,6 +47,11 @@ export type ToolApprovalRequester = (
   cwd: string,
 ) => Promise<boolean>;
 
+export type AgentStreamListener = (
+  kind: "text_delta" | "thinking" | "tool_call" | "tool_result" | "file_change",
+  payload: Record<string, unknown>,
+) => void;
+
 const generatedPlanSchema = z.object({
   summary: z.string().min(1),
   steps: z.array(z.object({
@@ -56,6 +62,9 @@ const generatedPlanSchema = z.object({
 });
 
 export class PiAdapter {
+  private readonly activeSessions = new Map<string, AgentSession>();
+  private readonly cancelledSessions = new Set<string>();
+
   health(): PiRuntimeHealth {
     return {
       piSdkAvailable: true,
@@ -135,15 +144,21 @@ export class PiAdapter {
   }
 
   async chat(
+    sessionId: string,
     messages: Pick<ChatMessage, "role" | "content">[],
     provider: PiProviderCredential | null,
     modelId: string,
     thinkingLevel: ThinkingLevel,
     runtime: AgentRuntime,
     requestApproval: ToolApprovalRequester,
-  ): Promise<string> {
+    permissionMode: PermissionMode = "ask",
+    onEvent?: AgentStreamListener,
+  ): Promise<{ content: string; cancelled: boolean }> {
     if (provider === null) {
-      return "No provider is configured. Add one in settings, or use /goal and /plan with local fallback.";
+      return {
+        content: "No provider is configured. Add one in settings, or use /goal and /plan with local fallback.",
+        cancelled: false,
+      };
     }
 
     const credentials = new InMemoryCredentialStore();
@@ -167,47 +182,91 @@ export class PiAdapter {
     }
 
     const textDeltas: string[] = [];
-    const customTools: ToolDefinition<any, any, any>[] = [
+    const readTools: ToolDefinition<any, any, any>[] = [
       boundaryTool(createReadToolDefinition(runtime.cwd), runtime.cwd),
       boundaryTool(createGrepToolDefinition(runtime.cwd), runtime.cwd),
       boundaryTool(createFindToolDefinition(runtime.cwd), runtime.cwd),
       boundaryTool(createLsToolDefinition(runtime.cwd), runtime.cwd),
-      approvalTool(createEditToolDefinition(runtime.cwd), runtime.cwd, requestApproval),
-      approvalTool(createWriteToolDefinition(runtime.cwd), runtime.cwd, requestApproval),
-      approvalTool(createBashToolDefinition(runtime.cwd), runtime.cwd, requestApproval),
     ];
+    const writeTools = permissionMode === "explore" ? [] : [
+      approvalTool(
+        createEditToolDefinition(runtime.cwd),
+        runtime.cwd,
+        permissionMode === "auto" ? async () => true : requestApproval,
+        onEvent,
+      ),
+      approvalTool(
+        createWriteToolDefinition(runtime.cwd),
+        runtime.cwd,
+        permissionMode === "auto" ? async () => true : requestApproval,
+        onEvent,
+      ),
+      approvalTool(
+        createBashToolDefinition(runtime.cwd),
+        runtime.cwd,
+        permissionMode === "auto" ? async () => true : requestApproval,
+        onEvent,
+      ),
+    ];
+    const customTools: ToolDefinition<any, any, any>[] = [...readTools, ...writeTools];
+    const enabledTools = permissionMode === "explore"
+      ? ["read", "grep", "find", "ls"]
+      : ["read", "grep", "find", "ls", "edit", "write", "bash"];
+    const sessionDirectory = join(runtime.agentDir, "sessions");
+    const existing = (await SessionManager.list(runtime.cwd, sessionDirectory))
+      .find(({ id }) => id === sessionId);
+    const sessionManager = existing === undefined
+      ? SessionManager.create(runtime.cwd, sessionDirectory, { id: sessionId })
+      : SessionManager.open(existing.path, sessionDirectory, runtime.cwd);
+    const hasHistory = sessionManager.getEntries().length > 0;
     const { session } = await createAgentSessionFromServices({
       services,
       model: modelResolution.model,
       thinkingLevel,
-      sessionManager: SessionManager.inMemory(),
-      tools: ["read", "grep", "find", "ls", "edit", "write", "bash"],
+      sessionManager,
+      tools: enabledTools,
       customTools,
     });
+    this.cancelledSessions.delete(sessionId);
+    this.activeSessions.set(sessionId, session);
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         textDeltas.push(event.assistantMessageEvent.delta);
+        onEvent?.("text_delta", { delta: event.assistantMessageEvent.delta });
       }
     });
 
     try {
-      await session.prompt([
+      const latest = messages.at(-1)?.content ?? "";
+      await session.prompt(hasHistory ? latest : [
         "You are Pi Work, a concise assistant discussing work in the current local workspace.",
-        "Use read/search tools directly. Editing, writing, and shell commands require user approval.",
+        "Use read/search tools directly. Editing, writing, and shell commands follow the selected permission mode.",
         "Conversation:",
         ...messages.map((message) => `${message.role}: ${message.content}`),
         "assistant:",
       ].join("\n\n"));
+    } catch (error) {
+      if (!this.cancelledSessions.has(sessionId)) throw error;
     } finally {
+      this.activeSessions.delete(sessionId);
       unsubscribe();
       session.dispose();
     }
 
     const content = textDeltas.join("").trim();
-    if (content.length === 0) {
+    const cancelled = this.cancelledSessions.delete(sessionId);
+    if (content.length === 0 && !cancelled) {
       throw new Error("Pi returned an empty chat response.");
     }
-    return content;
+    return { content, cancelled };
+  }
+
+  async cancel(sessionId: string): Promise<boolean> {
+    const session = this.activeSessions.get(sessionId);
+    if (session === undefined) return false;
+    this.cancelledSessions.add(sessionId);
+    await session.abort();
+    return true;
   }
 
   listExtensions(runtime: AgentRuntime): ExtensionPackage[] {
@@ -260,13 +319,15 @@ export class PiAdapter {
       services.modelRuntime.getProviders().map((provider) => [provider.id, provider.name]),
     );
     return {
-      models: services.modelRuntime.getModels().map((model) => ({
-        providerId: model.provider,
-        providerName: providerNames.get(model.provider) ?? model.provider,
-        modelId: model.id,
-        modelName: model.name,
-        thinkingLevels: getSupportedThinkingLevels(model),
-      })),
+      models: services.modelRuntime.getModels()
+        .filter((model) => model.provider !== "vercel-ai-gateway")
+        .map((model) => ({
+          providerId: model.provider,
+          providerName: providerNames.get(model.provider) ?? model.provider,
+          modelId: model.id,
+          modelName: model.name,
+          thinkingLevels: getSupportedThinkingLevels(model),
+        })),
       diagnostics: services.diagnostics.map((diagnostic) => diagnostic.message),
     };
   }
@@ -322,6 +383,7 @@ function approvalTool(
   tool: ToolDefinition<any, any, any>,
   cwd: string,
   requestApproval: ToolApprovalRequester,
+  onEvent?: AgentStreamListener,
 ): ToolDefinition<any, any, any> {
   const execute = tool.execute.bind(tool);
   return {
@@ -329,13 +391,19 @@ function approvalTool(
     execute: async (toolCallId, params, signal, onUpdate, context) => {
       const values = params as unknown as Record<string, unknown>;
       const name = tool.name as "edit" | "write" | "bash";
+      onEvent?.("tool_call", { tool: name, arguments: values });
       if (name !== "bash") {
         await assertAuthorizedFilePath(cwd, String(values.path ?? ""));
       }
       if (!await requestApproval(name, values, cwd)) {
         throw new Error(`User denied ${name} tool execution.`);
       }
-      return execute(toolCallId, params, signal, onUpdate, context);
+      const result = await execute(toolCallId, params, signal, onUpdate, context);
+      onEvent?.(name === "edit" || name === "write" ? "file_change" : "tool_result", {
+        tool: name,
+        arguments: values,
+      });
+      return result;
     },
   };
 }

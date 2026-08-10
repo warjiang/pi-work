@@ -1,14 +1,27 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type {
+  Activity,
   AppSettings,
   Artifact,
+  Attachment,
+  Automation,
+  AutomationRun,
+  BrowserTab,
   ChatMessage,
   Conversation,
+  Label,
   Plan,
+  Project,
   Run,
+  SavedView,
+  Session,
+  Skill,
+  Source,
+  StatusDefinition,
+  Subtask,
   Task,
   TaskStatus,
   ThinkingLevel,
@@ -17,20 +30,88 @@ import type {
   WorkspaceKind,
 } from "@pi-work/protocol";
 import {
+  activitySchema,
   appSettingsSchema,
   artifactSchema,
+  attachmentSchema,
+  automationRunSchema,
+  automationSchema,
+  browserTabSchema,
   chatMessageSchema,
   eventSchema,
+  labelSchema,
   planSchema,
+  projectSchema,
   runSchema,
+  savedViewSchema,
+  skillSchema,
+  sourceSchema,
+  statusDefinitionSchema,
+  subtaskSchema,
   taskSchema,
   workspaceSchema,
 } from "@pi-work/protocol";
-import { appSettings, artifacts, events, messages, plans, runs, tasks, workspaces } from "./schema.js";
+import {
+  activities,
+  appSettings,
+  artifacts,
+  attachments,
+  domainEntities,
+  events,
+  messages,
+  plans,
+  runs,
+  tasks,
+  workspaces,
+} from "./schema.js";
 
 function timestamp(): string {
   return new Date().toISOString();
 }
+
+function booleanValue(value: unknown): boolean {
+  return value === true || value === "1";
+}
+
+function parseTask(row: typeof tasks.$inferSelect): Task {
+  return taskSchema.parse({
+    ...row,
+    archived: booleanValue(row.archived),
+    flagged: booleanValue(row.flagged),
+    unread: booleanValue(row.unread),
+    labelIds: JSON.parse(row.labelIds) as unknown,
+    planMode: booleanValue(row.planMode),
+    running: booleanValue(row.running),
+  });
+}
+
+function taskValues(task: Task): typeof tasks.$inferInsert {
+  return {
+    ...task,
+    archived: task.archived ? "1" : "0",
+    flagged: task.flagged ? "1" : "0",
+    unread: task.unread ? "1" : "0",
+    labelIds: JSON.stringify(task.labelIds),
+    planMode: task.planMode ? "1" : "0",
+    running: task.running ? "1" : "0",
+  };
+}
+
+function parseAttachment(row: typeof attachments.$inferSelect): Attachment {
+  return attachmentSchema.parse({
+    id: row.id,
+    sessionId: row.taskId,
+    messageId: row.messageId,
+    name: row.name,
+    path: row.path,
+    mimeType: row.mimeType,
+    size: Number(row.size),
+    createdAt: row.createdAt,
+  });
+}
+
+type DomainName = "status" | "label" | "view" | "project" | "subtask" | "source" | "skill" | "automation" | "automationRun" | "browserTab";
+type DomainValue = StatusDefinition | Label | SavedView | Project | Subtask | Source | Skill | Automation | AutomationRun | BrowserTab;
 
 export class PiWorkStore {
   private readonly sqlite: Database.Database;
@@ -79,6 +160,10 @@ export class PiWorkStore {
     providerId?: string | null;
     modelId?: string | null;
     thinkingLevel?: ThinkingLevel;
+    permissionMode?: Task["permissionMode"];
+    planMode?: boolean;
+    projectId?: string | null;
+    workingDirectory?: string | null;
     id?: string;
   }): Task {
     const createdAt = timestamp();
@@ -89,10 +174,21 @@ export class PiWorkStore {
       providerId: input.providerId ?? null,
       modelId: input.modelId ?? null,
       thinkingLevel: input.thinkingLevel ?? "off",
+      kind: "chat",
+      archived: false,
+      flagged: false,
+      unread: false,
+      statusId: null,
+      labelIds: [],
+      projectId: input.projectId ?? null,
+      permissionMode: input.permissionMode ?? "ask",
+      planMode: input.planMode ?? false,
+      workingDirectory: input.workingDirectory ?? null,
+      running: false,
       createdAt,
       updatedAt: createdAt,
     });
-    this.db.insert(tasks).values(task).run();
+    this.db.insert(tasks).values(taskValues(task)).run();
     this.createRun(task.id, task.status);
     this.appendEvent(task.id, "task.created", { title: task.title });
     return task;
@@ -127,7 +223,59 @@ export class PiWorkStore {
 
   getTask(taskId: string): Task | null {
     const row = this.db.select().from(tasks).where(eq(tasks.id, taskId)).get();
-    return row === undefined ? null : taskSchema.parse(row);
+    return row === undefined ? null : parseTask(row);
+  }
+
+  getSession(sessionId: string): Session | null {
+    return this.getTask(sessionId);
+  }
+
+  listSessions(input: {
+    query?: string;
+    workspaceId?: string | null;
+    archived?: boolean;
+    flagged?: boolean;
+    statusId?: string | null;
+    projectId?: string | null;
+    labelId?: string;
+  } = {}): Session[] {
+    const filters = [];
+    if (input.workspaceId !== undefined && input.workspaceId !== null) filters.push(eq(tasks.workspaceId, input.workspaceId));
+    if (input.archived !== undefined) filters.push(eq(tasks.archived, input.archived ? "1" : "0"));
+    if (input.flagged !== undefined) filters.push(eq(tasks.flagged, input.flagged ? "1" : "0"));
+    if (input.statusId !== undefined) filters.push(input.statusId === null ? isNull(tasks.statusId) : eq(tasks.statusId, input.statusId));
+    if (input.projectId !== undefined) filters.push(input.projectId === null ? isNull(tasks.projectId) : eq(tasks.projectId, input.projectId));
+    const query = input.query?.trim();
+    const rows = filters.length === 0
+      ? this.db.select().from(tasks).orderBy(desc(tasks.updatedAt)).all()
+      : this.db.select().from(tasks).where(and(...filters)).orderBy(desc(tasks.updatedAt)).all();
+    let sessions = rows.map(parseTask);
+    if (input.labelId !== undefined) sessions = sessions.filter(({ labelIds }) => labelIds.includes(input.labelId!));
+    if (query) {
+      const pattern = `%${query}%`;
+      const matchingTaskIds = this.sqlite.prepare(
+        "SELECT DISTINCT task_id FROM messages WHERE content LIKE ?",
+      ).all(pattern) as Array<{ task_id: string }>;
+      const ids = new Set(matchingTaskIds.map(({ task_id }) => task_id));
+      const lowered = query.toLocaleLowerCase();
+      sessions = sessions.filter((session) => (
+        session.title.toLocaleLowerCase().includes(lowered)
+        || session.goal.toLocaleLowerCase().includes(lowered)
+        || ids.has(session.id)
+      ));
+    }
+    return sessions;
+  }
+
+  updateSession(sessionId: string, input: Partial<Pick<
+    Session,
+    "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "projectId" | "permissionMode" | "planMode" | "workingDirectory" | "running"
+  >>): Session {
+    const current = this.requireTask(sessionId);
+    const next = taskSchema.parse({ ...current, ...input, updatedAt: timestamp() });
+    this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
+    this.appendEvent(sessionId, "session.updated", input);
+    return next;
   }
 
   listManagedConversations(): Conversation[] {
@@ -142,7 +290,7 @@ export class PiWorkStore {
         .get();
       return taskRow === undefined ? [] : [{
         workspace: workspaceSchema.parse(workspaceRow),
-        task: taskSchema.parse(taskRow),
+        task: parseTask(taskRow),
       }];
     });
   }
@@ -168,6 +316,8 @@ export class PiWorkStore {
       throw new Error(`Unknown workspace: ${task.workspaceId}`);
     }
     const transaction = this.sqlite.transaction(() => {
+      this.sqlite.prepare("DELETE FROM activities WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM attachments WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM artifacts WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM events WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM messages WHERE task_id = ?").run(taskId);
@@ -213,7 +363,165 @@ export class PiWorkStore {
       .where(eq(tasks.workspaceId, workspaceId))
       .orderBy(asc(tasks.createdAt))
       .all()
-      .map((row) => taskSchema.parse(row));
+      .map(parseTask);
+  }
+
+  createDomainEntity<T extends DomainValue>(
+    domain: DomainName,
+    schema: { parse(value: unknown): T },
+    value: unknown,
+  ): T {
+    const now = timestamp();
+    const entity = schema.parse({
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...(value as Record<string, unknown>),
+    });
+    this.db.insert(domainEntities).values({
+      id: entity.id,
+      domain,
+      workspaceId: "workspaceId" in entity ? (entity.workspaceId ?? null) : null,
+      value: JSON.stringify(entity),
+      createdAt: "createdAt" in entity ? String(entity.createdAt) : now,
+      updatedAt: "updatedAt" in entity ? String(entity.updatedAt) : now,
+    }).run();
+    return entity;
+  }
+
+  listDomainEntities<T extends DomainValue>(
+    domain: DomainName,
+    schema: { parse(value: unknown): T },
+    workspaceId?: string | null,
+  ): T[] {
+    const rows = workspaceId === undefined
+      ? this.db.select().from(domainEntities).where(eq(domainEntities.domain, domain)).orderBy(asc(domainEntities.createdAt)).all()
+      : this.db.select().from(domainEntities).where(and(
+        eq(domainEntities.domain, domain),
+        workspaceId === null ? isNull(domainEntities.workspaceId) : eq(domainEntities.workspaceId, workspaceId),
+      )).orderBy(asc(domainEntities.createdAt)).all();
+    return rows.map(({ value }) => schema.parse(JSON.parse(value)));
+  }
+
+  updateDomainEntity<T extends DomainValue>(
+    domain: DomainName,
+    schema: { parse(value: unknown): T },
+    id: string,
+    input: Partial<T>,
+  ): T {
+    const row = this.db.select().from(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).get();
+    if (row === undefined) throw new Error(`Unknown ${domain}: ${id}`);
+    const current = schema.parse(JSON.parse(row.value));
+    const next = schema.parse({ ...current, ...input, id, ...("updatedAt" in current ? { updatedAt: timestamp() } : {}) });
+    this.db.update(domainEntities).set({
+      value: JSON.stringify(next),
+      workspaceId: "workspaceId" in next ? (next.workspaceId ?? null) : null,
+      updatedAt: timestamp(),
+    }).where(eq(domainEntities.id, id)).run();
+    return next;
+  }
+
+  removeDomainEntity(domain: DomainName, id: string): void {
+    this.db.delete(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).run();
+  }
+
+  createProject(value: Omit<Project, "id" | "createdAt" | "updatedAt">): Project {
+    return this.createDomainEntity("project", projectSchema, value);
+  }
+  listProjects(workspaceId?: string | null): Project[] {
+    return this.listDomainEntities("project", projectSchema, workspaceId);
+  }
+  createSource(value: Omit<Source, "id" | "createdAt" | "updatedAt">): Source {
+    return this.createDomainEntity("source", sourceSchema, value);
+  }
+  listSources(workspaceId?: string | null): Source[] {
+    return this.listDomainEntities("source", sourceSchema, workspaceId);
+  }
+  createSkill(value: Omit<Skill, "id" | "createdAt" | "updatedAt">): Skill {
+    return this.createDomainEntity("skill", skillSchema, value);
+  }
+  listSkills(workspaceId?: string | null): Skill[] {
+    return this.listDomainEntities("skill", skillSchema, workspaceId);
+  }
+  createAutomation(value: Omit<Automation, "id" | "createdAt" | "updatedAt">): Automation {
+    return this.createDomainEntity("automation", automationSchema, value);
+  }
+  listAutomations(workspaceId?: string | null): Automation[] {
+    return this.listDomainEntities("automation", automationSchema, workspaceId);
+  }
+  createStatus(value: StatusDefinition): StatusDefinition {
+    return this.createDomainEntity("status", statusDefinitionSchema, value);
+  }
+  listStatuses(workspaceId?: string | null): StatusDefinition[] {
+    return this.listDomainEntities("status", statusDefinitionSchema, workspaceId);
+  }
+  createLabel(value: Label): Label {
+    return this.createDomainEntity("label", labelSchema, value);
+  }
+  listLabels(workspaceId?: string | null): Label[] {
+    return this.listDomainEntities("label", labelSchema, workspaceId);
+  }
+  createSubtask(value: Subtask): Subtask {
+    return this.createDomainEntity("subtask", subtaskSchema, value);
+  }
+  listSubtasks(sessionId: string): Subtask[] {
+    return this.listDomainEntities("subtask", subtaskSchema).filter((item) => item.sessionId === sessionId);
+  }
+
+  addActivity(input: Omit<Activity, "id" | "createdAt">): Activity {
+    this.requireTask(input.sessionId);
+    const activity = activitySchema.parse({ ...input, id: randomUUID(), createdAt: timestamp() });
+    this.db.insert(activities).values({
+      id: activity.id,
+      taskId: activity.sessionId,
+      messageId: activity.messageId,
+      kind: activity.kind,
+      title: activity.title,
+      detail: activity.detail,
+      metadata: JSON.stringify(activity.metadata),
+      createdAt: activity.createdAt,
+    }).run();
+    return activity;
+  }
+
+  listActivities(sessionId: string): Activity[] {
+    return this.db.select().from(activities).where(eq(activities.taskId, sessionId)).orderBy(asc(activities.createdAt)).all()
+      .map((row) => activitySchema.parse({
+        id: row.id,
+        sessionId: row.taskId,
+        messageId: row.messageId,
+        kind: row.kind,
+        title: row.title,
+        detail: row.detail,
+        metadata: JSON.parse(row.metadata),
+        createdAt: row.createdAt,
+      }));
+  }
+
+  addAttachment(input: Omit<Attachment, "id" | "createdAt">): Attachment {
+    this.requireTask(input.sessionId);
+    const attachment = attachmentSchema.parse({ ...input, id: randomUUID(), createdAt: timestamp() });
+    this.db.insert(attachments).values({
+      id: attachment.id,
+      taskId: attachment.sessionId,
+      messageId: attachment.messageId,
+      name: attachment.name,
+      path: attachment.path,
+      mimeType: attachment.mimeType,
+      size: String(attachment.size),
+      createdAt: attachment.createdAt,
+    }).run();
+    return attachment;
+  }
+
+  listAttachments(sessionId: string): Attachment[] {
+    return this.db.select().from(attachments).where(eq(attachments.taskId, sessionId)).orderBy(asc(attachments.createdAt)).all()
+      .map(parseAttachment);
+  }
+
+  getAttachment(attachmentId: string): Attachment | null {
+    const row = this.db.select().from(attachments).where(eq(attachments.id, attachmentId)).get();
+    return row === undefined ? null : parseAttachment(row);
   }
 
   getLatestRun(taskId: string): Run | null {
@@ -411,6 +719,17 @@ export class PiWorkStore {
         provider_id TEXT,
         model_id TEXT,
         thinking_level TEXT NOT NULL DEFAULT 'off',
+        kind TEXT NOT NULL DEFAULT 'chat',
+        archived TEXT NOT NULL DEFAULT '0',
+        flagged TEXT NOT NULL DEFAULT '0',
+        unread TEXT NOT NULL DEFAULT '0',
+        status_id TEXT,
+        label_ids TEXT NOT NULL DEFAULT '[]',
+        project_id TEXT,
+        permission_mode TEXT NOT NULL DEFAULT 'ask',
+        plan_mode TEXT NOT NULL DEFAULT '0',
+        working_directory TEXT,
+        running TEXT NOT NULL DEFAULT '0',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -453,11 +772,51 @@ export class PiWorkStore {
         key TEXT PRIMARY KEY NOT NULL,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS domain_entities (
+        id TEXT PRIMARY KEY NOT NULL,
+        domain TEXT NOT NULL,
+        workspace_id TEXT,
+        value TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS domain_entities_domain_workspace ON domain_entities(domain, workspace_id);
+      CREATE TABLE IF NOT EXISTS activities (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        message_id TEXT,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        metadata TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        message_id TEXT,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
     this.addColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'folder'");
     this.addColumn("tasks", "provider_id", "TEXT");
     this.addColumn("tasks", "model_id", "TEXT");
     this.addColumn("tasks", "thinking_level", "TEXT NOT NULL DEFAULT 'off'");
+    this.addColumn("tasks", "kind", "TEXT NOT NULL DEFAULT 'chat'");
+    this.addColumn("tasks", "archived", "TEXT NOT NULL DEFAULT '0'");
+    this.addColumn("tasks", "flagged", "TEXT NOT NULL DEFAULT '0'");
+    this.addColumn("tasks", "unread", "TEXT NOT NULL DEFAULT '0'");
+    this.addColumn("tasks", "status_id", "TEXT");
+    this.addColumn("tasks", "label_ids", "TEXT NOT NULL DEFAULT '[]'");
+    this.addColumn("tasks", "project_id", "TEXT");
+    this.addColumn("tasks", "permission_mode", "TEXT NOT NULL DEFAULT 'ask'");
+    this.addColumn("tasks", "plan_mode", "TEXT NOT NULL DEFAULT '0'");
+    this.addColumn("tasks", "working_directory", "TEXT");
+    this.addColumn("tasks", "running", "TEXT NOT NULL DEFAULT '0'");
   }
 
   private addColumn(table: string, column: string, definition: string): void {

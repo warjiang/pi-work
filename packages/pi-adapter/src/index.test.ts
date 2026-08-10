@@ -87,6 +87,7 @@ describe("PiAdapter", () => {
     });
 
     expect(catalog.models.some((model) => model.providerId === "pi-work-fixture")).toBe(false);
+    expect(catalog.models.some((model) => model.providerId === "vercel-ai-gateway")).toBe(false);
   });
 
   it("rejects traversal and symlink escapes while allowing new nested paths", async () => {

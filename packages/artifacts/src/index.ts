@@ -5,7 +5,7 @@ import { resolveArtifactPath } from "@pi-work/policy";
 
 export async function stageArtifact(
   workspace: Workspace,
-  task: Task,
+  task: Pick<Task, "id">,
   artifact: Pick<Artifact, "relativePath" | "content">,
 ): Promise<string> {
   const stagingRoot = join(workspace.rootPath, ".pi-work", "runs", task.id, "staging");
@@ -17,7 +17,7 @@ export async function stageArtifact(
 
 export async function publishArtifact(
   workspace: Workspace,
-  task: Task,
+  task: Pick<Task, "title">,
   artifact: Pick<Artifact, "relativePath" | "stagedPath">,
 ): Promise<string> {
   const publishRoot = join(workspace.outputPath, sanitizeTaskName(task.title));

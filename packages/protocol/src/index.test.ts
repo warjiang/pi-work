@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   agentRequestSchema,
+  agentMessageSchema,
   createArtifactInputSchema,
   extensionSourceSchema,
+  inspectAttachmentPathsSchema,
   sendChatInputSchema,
   taskStatusSchema,
 } from "./index.js";
@@ -53,6 +55,42 @@ describe("protocol schemas", () => {
       requestId: "018f88d1-1eb5-709a-90ef-4325747e294c",
       approvalId: "018f88d1-1eb5-709a-90ef-4325747e294d",
       approved: false,
+    }).success).toBe(true);
+  });
+
+  it("correlates chat lifecycle events and validates attachment drafts", () => {
+    const requestId = "018f88d1-1eb5-709a-90ef-4325747e294c";
+    const sessionId = "018f88d1-1eb5-709a-90ef-4325747e294d";
+    expect(agentRequestSchema.safeParse({
+      type: "cancel",
+      requestId,
+      sessionId,
+    }).success).toBe(true);
+    expect(agentMessageSchema.safeParse({
+      type: "event",
+      requestId,
+      sessionId,
+      event: {
+        sequence: 2,
+        kind: "cancelled",
+        payload: {},
+        timestamp: new Date().toISOString(),
+      },
+    }).success).toBe(true);
+    expect(inspectAttachmentPathsSchema.safeParse(["/workspace/reference.pdf"]).success).toBe(true);
+    expect(sendChatInputSchema.safeParse({
+      workspaceId: sessionId,
+      taskId: null,
+      content: "Review this file",
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      thinkingLevel: "medium",
+      attachments: [{
+        name: "reference.pdf",
+        path: "/workspace/reference.pdf",
+        mimeType: "application/pdf",
+        size: 42,
+      }],
     }).success).toBe(true);
   });
 });
