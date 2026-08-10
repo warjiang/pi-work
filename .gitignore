@@ -3,6 +3,8 @@ dist
 dist-electron
 release
 .vite
+apps/desktop/out
+apps/desktop/build
 *.log
 .DS_Store
 coverage
