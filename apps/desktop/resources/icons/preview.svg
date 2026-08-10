@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+    <g id="mark">
+      <path fill-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"/>
+      <path d="M517.36 400H634.72V634.72H517.36Z"/>
+    </g>
+    <g id="appIcon">
+      <rect x="0" y="0" width="800" height="800" rx="196" fill="#000000"/>
+      <path fill="#FFFFFF" fill-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"/>
+      <path fill="#FFFFFF" d="M517.36 400H634.72V634.72H517.36Z"/>
+    </g>
+    <g id="linearMark" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="miter">
+      <path d="M4 16V4H13V10H8V13"/>
+      <path d="M15.5 10V16"/>
+    </g>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#F4F4F4"/>
+  <text x="80" y="86" fill="#000000" font-family="Arial, sans-serif" font-size="42" font-weight="700">Pi Work — monochrome icon system</text>
+  <text x="80" y="126" fill="#666666" font-family="Arial, sans-serif" font-size="20">Flat geometry · black and white · optimized for system sizes</text>
+
+  <rect x="80" y="180" width="690" height="500" rx="32" fill="#FFFFFF"/>
+  <text x="120" y="234" fill="#000000" font-family="Arial, sans-serif" font-size="20" font-weight="700">macOS Dock / application</text>
+  <g transform="translate(245 275) scale(.45)" filter="url(#shadow)">
+    <use href="#appIcon"/>
+  </g>
+  <rect x="200" y="610" width="450" height="54" rx="18" fill="#E7E7E7" fill-opacity=".86"/>
+  <g transform="translate(412 617) scale(.054)">
+    <use href="#appIcon"/>
+  </g>
+
+  <rect x="830" y="180" width="690" height="240" rx="32" fill="#FFFFFF"/>
+  <text x="870" y="234" fill="#000000" font-family="Arial, sans-serif" font-size="20" font-weight="700">macOS menu bar template</text>
+  <rect x="870" y="270" width="610" height="56" rx="14" fill="#F4F4F4"/>
+  <circle cx="904" cy="298" r="6" fill="#000000"/>
+  <circle cx="928" cy="298" r="6" fill="#000000"/>
+  <g transform="translate(1378 288) scale(1.05)" color="#000000">
+    <use href="#linearMark"/>
+  </g>
+  <rect x="870" y="342" width="610" height="56" rx="14" fill="#111111"/>
+  <circle cx="904" cy="370" r="6" fill="#FFFFFF"/>
+  <circle cx="928" cy="370" r="6" fill="#FFFFFF"/>
+  <g transform="translate(1378 360) scale(1.05)" color="#FFFFFF">
+    <use href="#linearMark"/>
+  </g>
+
+  <rect x="830" y="460" width="690" height="220" rx="32" fill="#111111"/>
+  <text x="870" y="514" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="700">Windows desktop / Start / installer</text>
+  <g transform="translate(884 544) scale(.115)">
+    <use href="#appIcon"/>
+  </g>
+  <text x="994" y="605" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="22">Pi Work</text>
+  <g transform="translate(1298 550) scale(.075)">
+    <use href="#appIcon"/>
+  </g>
+  <g transform="translate(1394 562) scale(.045)">
+    <use href="#appIcon"/>
+  </g>
+
+  <rect x="80" y="740" width="1440" height="180" rx="32" fill="#000000"/>
+  <text x="120" y="798" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="700">Core mark</text>
+  <g transform="translate(120 814) scale(.12)" fill="#FFFFFF">
+    <use href="#mark"/>
+  </g>
+  <line x1="260" y1="790" x2="260" y2="885" stroke="#333333"/>
+  <text x="300" y="842" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="34" font-weight="700">Minimal. Technical. Platform-native.</text>
+  <text x="300" y="878" fill="#999999" font-family="Arial, sans-serif" font-size="18">One geometric identity, adapted only where operating-system constraints require it.</text>
+</svg>

@@ -11,7 +11,8 @@
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "package": "pnpm build && pnpm prepare:pi-runtime && electron-builder --publish never",
+    "package": "pnpm icons && pnpm build && pnpm prepare:pi-runtime && electron-builder --publish never",
+    "icons": "node scripts/generate-icons.mjs",
     "prepare:pi-runtime": "tsx scripts/prepare-pi-runtime.mts",
     "verify:pi-runtime": "tsx scripts/verify-pi-runtime.mts"
   },

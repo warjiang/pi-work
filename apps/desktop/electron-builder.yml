@@ -2,6 +2,7 @@ appId: com.piwork.desktop
 productName: Pi Work
 directories:
   output: release
+  buildResources: resources
 files:
   - out/**
   - package.json
@@ -19,13 +20,16 @@ extraResources:
     filter:
       - "**/*"
 mac:
+  icon: icons/generated/mac/icon.icns
   target:
     - dmg
     - zip
 win:
+  icon: icons/generated/windows/icon.ico
   target:
     - nsis
 linux:
+  icon: icons/generated/linux
   target:
     - AppImage
     - tar.gz
