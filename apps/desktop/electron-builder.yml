@@ -13,6 +13,8 @@ asarUnpack:
 extraResources:
   - from: build/pi-runtime/agent-service.js
     to: pi-runtime/agent-service.js
+  - from: build/pi-runtime/chunks
+    to: pi-runtime/chunks
   - from: build/pi-runtime/package.json
     to: pi-runtime/package.json
   - from: build/pi-runtime/node_modules

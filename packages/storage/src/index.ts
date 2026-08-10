@@ -1,17 +1,32 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import { and, asc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import type { Artifact, Plan, Run, Task, TaskStatus, WorkEvent, Workspace } from "@pi-work/protocol";
+import type {
+  AppSettings,
+  Artifact,
+  ChatMessage,
+  Conversation,
+  Plan,
+  Run,
+  Task,
+  TaskStatus,
+  ThinkingLevel,
+  WorkEvent,
+  Workspace,
+  WorkspaceKind,
+} from "@pi-work/protocol";
 import {
+  appSettingsSchema,
   artifactSchema,
+  chatMessageSchema,
   eventSchema,
   planSchema,
   runSchema,
   taskSchema,
   workspaceSchema,
 } from "@pi-work/protocol";
-import { artifacts, events, plans, runs, tasks, workspaces } from "./schema.js";
+import { appSettings, artifacts, events, messages, plans, runs, tasks, workspaces } from "./schema.js";
 
 function timestamp(): string {
   return new Date().toISOString();
@@ -31,10 +46,17 @@ export class PiWorkStore {
     this.sqlite.close();
   }
 
-  createWorkspace(input: { name: string; rootPath: string; outputPath: string }): Workspace {
+  createWorkspace(input: {
+    name: string;
+    rootPath: string;
+    outputPath: string;
+    kind?: WorkspaceKind;
+    id?: string;
+  }): Workspace {
     const workspace = workspaceSchema.parse({
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       ...input,
+      kind: input.kind ?? "folder",
       createdAt: timestamp(),
     });
     this.db.insert(workspaces).values(workspace).run();
@@ -45,12 +67,28 @@ export class PiWorkStore {
     return this.db.select().from(workspaces).orderBy(asc(workspaces.createdAt)).all().map((row) => workspaceSchema.parse(row));
   }
 
-  createTask(input: { workspaceId: string; title: string; goal: string }): Task {
+  getWorkspace(workspaceId: string): Workspace | null {
+    const row = this.db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).get();
+    return row === undefined ? null : workspaceSchema.parse(row);
+  }
+
+  createTask(input: {
+    workspaceId: string;
+    title: string;
+    goal: string;
+    providerId?: string | null;
+    modelId?: string | null;
+    thinkingLevel?: ThinkingLevel;
+    id?: string;
+  }): Task {
     const createdAt = timestamp();
     const task = taskSchema.parse({
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       ...input,
-      status: "planning",
+      status: "draft",
+      providerId: input.providerId ?? null,
+      modelId: input.modelId ?? null,
+      thinkingLevel: input.thinkingLevel ?? "off",
       createdAt,
       updatedAt: createdAt,
     });
@@ -60,9 +98,112 @@ export class PiWorkStore {
     return task;
   }
 
+  updateTaskGoal(taskId: string, goal: string): Task {
+    this.requireTask(taskId);
+    this.db.update(tasks).set({ goal, updatedAt: timestamp() }).where(eq(tasks.id, taskId)).run();
+    return this.requireTask(taskId);
+  }
+
+  addMessage(input: Pick<ChatMessage, "taskId" | "role" | "content">): ChatMessage {
+    this.requireTask(input.taskId);
+    const message = chatMessageSchema.parse({
+      id: randomUUID(),
+      ...input,
+      createdAt: timestamp(),
+    });
+    this.db.insert(messages).values(message).run();
+    return message;
+  }
+
+  listMessages(taskId: string): ChatMessage[] {
+    return this.db
+      .select()
+      .from(messages)
+      .where(eq(messages.taskId, taskId))
+      .orderBy(asc(messages.createdAt))
+      .all()
+      .map((row) => chatMessageSchema.parse(row));
+  }
+
   getTask(taskId: string): Task | null {
     const row = this.db.select().from(tasks).where(eq(tasks.id, taskId)).get();
     return row === undefined ? null : taskSchema.parse(row);
+  }
+
+  listManagedConversations(): Conversation[] {
+    const managed = this.db.select().from(workspaces)
+      .where(eq(workspaces.kind, "managed"))
+      .orderBy(desc(workspaces.createdAt))
+      .all();
+    return managed.flatMap((workspaceRow) => {
+      const taskRow = this.db.select().from(tasks)
+        .where(eq(tasks.workspaceId, workspaceRow.id))
+        .orderBy(asc(tasks.createdAt))
+        .get();
+      return taskRow === undefined ? [] : [{
+        workspace: workspaceSchema.parse(workspaceRow),
+        task: taskSchema.parse(taskRow),
+      }];
+    });
+  }
+
+  updateTaskModel(
+    taskId: string,
+    input: { providerId: string; modelId: string; thinkingLevel: ThinkingLevel },
+  ): Task {
+    this.requireTask(taskId);
+    this.db.update(tasks).set({
+      providerId: input.providerId,
+      modelId: input.modelId,
+      thinkingLevel: input.thinkingLevel,
+      updatedAt: timestamp(),
+    }).where(eq(tasks.id, taskId)).run();
+    return this.requireTask(taskId);
+  }
+
+  removeConversation(taskId: string): { task: Task; workspace: Workspace } {
+    const task = this.requireTask(taskId);
+    const workspace = this.getWorkspace(task.workspaceId);
+    if (workspace === null) {
+      throw new Error(`Unknown workspace: ${task.workspaceId}`);
+    }
+    const transaction = this.sqlite.transaction(() => {
+      this.sqlite.prepare("DELETE FROM artifacts WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM events WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM messages WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM plans WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM runs WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
+      if (workspace.kind === "managed") {
+        this.sqlite.prepare("DELETE FROM workspaces WHERE id = ?").run(workspace.id);
+      }
+    });
+    transaction();
+    return { task, workspace };
+  }
+
+  getAppSettings(): AppSettings {
+    const values = Object.fromEntries(
+      this.db.select().from(appSettings).all().map(({ key, value }) => [key, JSON.parse(value)]),
+    );
+    return appSettingsSchema.parse({
+      onboardingSkipped: false,
+      providerId: null,
+      modelId: null,
+      thinkingLevel: "off",
+      ...values,
+    });
+  }
+
+  updateAppSettings(input: { [Key in keyof AppSettings]?: AppSettings[Key] | undefined }): AppSettings {
+    for (const [key, value] of Object.entries(input)) {
+      if (value === undefined) continue;
+      this.db.insert(appSettings).values({ key, value: JSON.stringify(value) }).onConflictDoUpdate({
+        target: appSettings.key,
+        set: { value: JSON.stringify(value) },
+      }).run();
+    }
+    return this.getAppSettings();
   }
 
   listTasks(workspaceId: string): Task[] {
@@ -258,6 +399,7 @@ export class PiWorkStore {
         name TEXT NOT NULL,
         root_path TEXT NOT NULL,
         output_path TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'folder',
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS tasks (
@@ -266,12 +408,22 @@ export class PiWorkStore {
         title TEXT NOT NULL,
         goal TEXT NOT NULL,
         status TEXT NOT NULL,
+        provider_id TEXT,
+        model_id TEXT,
+        thinking_level TEXT NOT NULL DEFAULT 'off',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS plans (
         task_id TEXT PRIMARY KEY NOT NULL,
         value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY NOT NULL,
@@ -297,6 +449,21 @@ export class PiWorkStore {
         sequence TEXT NOT NULL,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL
+      );
     `);
+    this.addColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'folder'");
+    this.addColumn("tasks", "provider_id", "TEXT");
+    this.addColumn("tasks", "model_id", "TEXT");
+    this.addColumn("tasks", "thinking_level", "TEXT NOT NULL DEFAULT 'off'");
+  }
+
+  private addColumn(table: string, column: string, definition: string): void {
+    const columns = this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some(({ name }) => name === column)) {
+      this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 }

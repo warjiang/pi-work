@@ -14,6 +14,7 @@ describe("artifact lifecycle", () => {
       name: "Research",
       rootPath,
       outputPath: join(rootPath, "Pi Work"),
+      kind: "folder" as const,
       createdAt: new Date().toISOString(),
     };
     const task = {
@@ -22,6 +23,9 @@ describe("artifact lifecycle", () => {
       title: "Decision brief",
       goal: "Summarize sources",
       status: "running" as const,
+      providerId: null,
+      modelId: null,
+      thinkingLevel: "off" as const,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

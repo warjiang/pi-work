@@ -21,12 +21,13 @@ export default defineConfig({
       noExternal: Object.keys(workspaceAliases),
     },
     build: {
+      externalizeDeps: {
+        exclude: Object.keys(workspaceAliases),
+      },
       rollupOptions: {
         external: [
           "electron",
           "better-sqlite3",
-          "drizzle-orm",
-          "drizzle-orm/better-sqlite3",
           "@earendil-works/pi-coding-agent",
         ],
         input: {
@@ -40,6 +41,14 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: workspaceAliases,
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          format: "cjs",
+          entryFileNames: "[name].js",
+        },
+      },
     },
   },
   renderer: {

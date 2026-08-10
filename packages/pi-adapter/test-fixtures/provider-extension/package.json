@@ -1,0 +1,10 @@
+{
+  "name": "pi-work-provider-fixture",
+  "version": "1.0.0",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
