@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
-    "@pi-work/protocol": "workspace:*"
+    "@earendil-works/pi-ai": "0.84.1",
+    "@pi-work/protocol": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "typescript": "5.9.3",

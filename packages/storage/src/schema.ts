@@ -23,6 +23,15 @@ export const plans = sqliteTable("plans", {
   value: text("value").notNull(),
 });
 
+export const runs = sqliteTable("runs", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  status: text("status").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  completedAt: text("completed_at"),
+});
+
 export const artifacts = sqliteTable("artifacts", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),

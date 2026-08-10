@@ -46,12 +46,15 @@ test("an approved plan gates a staged artifact and explicit publication", async 
   const published = store.publishArtifact(artifact.id, publishedPath);
   expect(published.publishedPath).toBe(publishedPath);
   await expect(readFile(publishedPath, "utf8")).resolves.toBe(content);
+  expect(store.completeTask(task.id).status).toBe("completed");
+  expect(store.getLatestRun(task.id)?.completedAt).not.toBeNull();
   expect(store.listEvents(task.id).map((event) => event.type)).toEqual([
     "task.created",
     "plan.proposed",
     "plan.approved",
     "artifact.staged",
     "artifact.published",
+    "task.completed",
   ]);
 
   store.close();

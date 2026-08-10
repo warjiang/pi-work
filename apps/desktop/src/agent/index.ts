@@ -1,7 +1,7 @@
 import { PiAdapter } from "../../../../packages/pi-adapter/src/index.js";
 import { agentRequestSchema, agentResponseSchema } from "../../../../packages/protocol/src/index.js";
 
-process.parentPort?.on("message", (event) => {
+process.parentPort?.on("message", async (event) => {
   const request = agentRequestSchema.safeParse(event.data);
   if (!request.success) {
     process.parentPort?.postMessage(agentResponseSchema.parse({
@@ -21,8 +21,16 @@ process.parentPort?.on("message", (event) => {
     return;
   }
 
-  process.parentPort?.postMessage(agentResponseSchema.parse({
-    type: "plan",
-    plan: adapter.createPlanningFallback(request.data.task),
-  }));
+  try {
+    const plan = await adapter.createPlan(request.data.task, request.data.provider ?? null);
+    process.parentPort?.postMessage(agentResponseSchema.parse({
+      type: "plan",
+      plan,
+    }));
+  } catch (error) {
+    process.parentPort?.postMessage(agentResponseSchema.parse({
+      type: "error",
+      message: error instanceof Error ? error.message : "Pi planning failed.",
+    }));
+  }
 });

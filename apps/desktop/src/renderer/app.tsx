@@ -14,6 +14,9 @@ export function App() {
   const { selectedWorkspaceId, selectedTaskId, selectWorkspace, selectTask } = useWorkspaceUi();
   const [taskTitle, setTaskTitle] = useState("");
   const [taskGoal, setTaskGoal] = useState("");
+  const [providerId, setProviderId] = useState("anthropic");
+  const [modelId, setModelId] = useState("claude-sonnet-4-5");
+  const [apiKey, setApiKey] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const workspaces = useQuery({
@@ -24,6 +27,10 @@ export function App() {
     queryKey: ["tasks", selectedWorkspaceId],
     queryFn: () => window.piWork.task.list(selectedWorkspaceId ?? ""),
     enabled: selectedWorkspaceId !== null,
+  });
+  const providers = useQuery({
+    queryKey: ["providers"],
+    queryFn: () => window.piWork.provider.list(),
   });
   const task = tasks.data?.find((candidate) => candidate.id === selectedTaskId) ?? null;
   const plan = useQuery({
@@ -134,6 +141,28 @@ export function App() {
     },
   });
 
+  const completeTask = useMutation({
+    mutationFn: () => {
+      if (selectedTaskId === null) {
+        throw new Error("Choose a task before completing it.");
+      }
+      return window.piWork.task.complete({ taskId: selectedTaskId });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tasks", selectedWorkspaceId] });
+    },
+    onError: (error) => setErrorMessage(error.message),
+  });
+
+  const saveProvider = useMutation({
+    mutationFn: () => window.piWork.provider.save({ providerId, modelId, apiKey }),
+    onSuccess: async () => {
+      setApiKey("");
+      await queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+    onError: (error) => setErrorMessage(error.message),
+  });
+
   function submitTask(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     setErrorMessage(null);
@@ -177,9 +206,14 @@ export function App() {
             <p className="eyebrow">APPROVAL-LED WORKFLOW</p>
             <h2>{task?.title ?? "Start with an approved workspace"}</h2>
           </div>
-          {task !== null && task.status !== "completed" && task.status !== "cancelled" ? (
-            <Button variant="danger" onClick={() => abortTask.mutate()}>Cancel task</Button>
-          ) : null}
+          <div className="actions">
+            {task !== null && task.status === "running" && artifacts.data?.some((artifact) => artifact.publishedPath !== null) ? (
+              <Button onClick={() => completeTask.mutate()}>Complete task</Button>
+            ) : null}
+            {task !== null && task.status !== "completed" && task.status !== "cancelled" ? (
+              <Button variant="danger" onClick={() => abortTask.mutate()}>Cancel task</Button>
+            ) : null}
+          </div>
         </header>
 
         {errorMessage !== null ? <p className="error">{errorMessage}</p> : null}
@@ -256,6 +290,29 @@ export function App() {
           <span>{artifacts.data?.length ?? 0}</span>
         </div>
         <ArtifactList artifacts={artifacts.data ?? []} onPublish={(artifact) => publishArtifact.mutate(artifact)} />
+
+        <section className="provider-settings">
+          <div className="section-heading">
+            <h2>Pi provider</h2>
+            <span>{providers.data?.[0]?.providerId ?? "not configured"}</span>
+          </div>
+          <p className="muted">Credentials are encrypted by the desktop process and never returned to this view.</p>
+          <label>
+            Provider
+            <input value={providerId} onChange={(event) => setProviderId(event.target.value)} placeholder="anthropic" />
+          </label>
+          <label>
+            Model
+            <input value={modelId} onChange={(event) => setModelId(event.target.value)} placeholder="claude-sonnet-4-5" />
+          </label>
+          <label>
+            API key
+            <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Stored encrypted" />
+          </label>
+          <Button disabled={apiKey.length === 0 || saveProvider.isPending} onClick={() => saveProvider.mutate()}>
+            {saveProvider.isPending ? "Saving…" : "Save provider"}
+          </Button>
+        </section>
       </aside>
     </main>
   );

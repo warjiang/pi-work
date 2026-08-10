@@ -2,15 +2,16 @@ import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import type { Artifact, Plan, Task, TaskStatus, WorkEvent, Workspace } from "@pi-work/protocol";
+import type { Artifact, Plan, Run, Task, TaskStatus, WorkEvent, Workspace } from "@pi-work/protocol";
 import {
   artifactSchema,
   eventSchema,
   planSchema,
+  runSchema,
   taskSchema,
   workspaceSchema,
 } from "@pi-work/protocol";
-import { artifacts, events, plans, tasks, workspaces } from "./schema.js";
+import { artifacts, events, plans, runs, tasks, workspaces } from "./schema.js";
 
 function timestamp(): string {
   return new Date().toISOString();
@@ -54,6 +55,7 @@ export class PiWorkStore {
       updatedAt: createdAt,
     });
     this.db.insert(tasks).values(task).run();
+    this.createRun(task.id, task.status);
     this.appendEvent(task.id, "task.created", { title: task.title });
     return task;
   }
@@ -71,6 +73,27 @@ export class PiWorkStore {
       .orderBy(asc(tasks.createdAt))
       .all()
       .map((row) => taskSchema.parse(row));
+  }
+
+  getLatestRun(taskId: string): Run | null {
+    const row = this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.taskId, taskId))
+      .orderBy(asc(runs.createdAt))
+      .all()
+      .at(-1);
+    return row === undefined ? null : runSchema.parse(row);
+  }
+
+  listRuns(taskId: string): Run[] {
+    return this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.taskId, taskId))
+      .orderBy(asc(runs.createdAt))
+      .all()
+      .map((row) => runSchema.parse(row));
   }
 
   savePlan(plan: Plan): Plan {
@@ -144,6 +167,20 @@ export class PiWorkStore {
     return task;
   }
 
+  completeTask(taskId: string): Task {
+    const task = this.updateTaskStatus(taskId, "completed");
+    this.appendEvent(taskId, "task.completed", {});
+    return task;
+  }
+
+  resumeTask(taskId: string): Task {
+    const task = this.requireTask(taskId);
+    if (task.status === "completed" || task.status === "cancelled" || task.status === "failed") {
+      throw new Error(`Task cannot be resumed from ${task.status}.`);
+    }
+    return this.updateTaskStatus(taskId, task.status);
+  }
+
   listEvents(taskId: string): WorkEvent[] {
     return this.db
       .select()
@@ -166,11 +203,34 @@ export class PiWorkStore {
     this.requireTask(taskId);
     const updatedAt = timestamp();
     this.db.update(tasks).set({ status, updatedAt }).where(eq(tasks.id, taskId)).run();
+    const run = this.getLatestRun(taskId);
+    if (run === null) {
+      throw new Error(`Task ${taskId} has no run.`);
+    }
+    this.db.update(runs).set({
+      status,
+      updatedAt,
+      completedAt: status === "completed" || status === "cancelled" || status === "failed" ? updatedAt : null,
+    }).where(eq(runs.id, run.id)).run();
     const task = this.getTask(taskId);
     if (task === null) {
       throw new Error(`Unknown task: ${taskId}`);
     }
     return task;
+  }
+
+  private createRun(taskId: string, status: TaskStatus): Run {
+    const createdAt = timestamp();
+    const run = runSchema.parse({
+      id: randomUUID(),
+      taskId,
+      status,
+      createdAt,
+      updatedAt: createdAt,
+      completedAt: null,
+    });
+    this.db.insert(runs).values(run).run();
+    return run;
   }
 
   private appendEvent(taskId: string, type: WorkEvent["type"], payload: Record<string, unknown>): void {
@@ -212,6 +272,14 @@ export class PiWorkStore {
       CREATE TABLE IF NOT EXISTS plans (
         task_id TEXT PRIMARY KEY NOT NULL,
         value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS runs (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
       );
       CREATE TABLE IF NOT EXISTS artifacts (
         id TEXT PRIMARY KEY NOT NULL,

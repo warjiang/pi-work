@@ -35,6 +35,16 @@ export const taskSchema = z.object({
 });
 export type Task = z.infer<typeof taskSchema>;
 
+export const runSchema = z.object({
+  id: z.uuid(),
+  taskId: z.uuid(),
+  status: taskStatusSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  completedAt: z.string().datetime().nullable(),
+});
+export type Run = z.infer<typeof runSchema>;
+
 export const planStepSchema = z.object({
   id: z.uuid(),
   title: z.string().min(1).max(160),
@@ -72,6 +82,16 @@ export const createTaskInputSchema = z.object({
   goal: z.string().trim().min(1).max(10_000),
 });
 
+export const providerConfigSchema = z.object({
+  providerId: z.string().trim().min(1).max(80),
+  modelId: z.string().trim().min(1).max(160),
+});
+export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+
+export const setProviderCredentialInputSchema = providerConfigSchema.extend({
+  apiKey: z.string().trim().min(1).max(10_000),
+});
+
 export const approvePlanInputSchema = z.object({
   taskId: z.uuid(),
   approved: z.boolean(),
@@ -92,11 +112,20 @@ export const abortTaskInputSchema = z.object({
   taskId: z.uuid(),
 });
 
+export const completeTaskInputSchema = z.object({
+  taskId: z.uuid(),
+});
+
+export const resumeTaskInputSchema = z.object({
+  taskId: z.uuid(),
+});
+
 export const agentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("health") }),
   z.object({
     type: z.literal("plan"),
     task: z.object({ id: z.uuid(), title: z.string(), goal: z.string() }),
+    provider: setProviderCredentialInputSchema.optional(),
   }),
 ]);
 
@@ -127,6 +156,7 @@ export const eventSchema = z.object({
     "plan.rejected",
     "artifact.staged",
     "artifact.published",
+    "task.completed",
     "task.cancelled",
   ]),
   payload: z.record(z.string(), z.unknown()),

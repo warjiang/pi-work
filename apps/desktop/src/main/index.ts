@@ -11,17 +11,22 @@ import {
   createArtifactInputSchema,
   createTaskInputSchema,
   createWorkspaceInputSchema,
+  completeTaskInputSchema,
   planSchema,
   publishArtifactInputSchema,
+  resumeTaskInputSchema,
+  setProviderCredentialInputSchema,
   taskSchema,
   workspaceSchema,
 } from "@pi-work/protocol";
 import { stageArtifact, publishArtifact } from "@pi-work/artifacts";
 import { PiWorkStore } from "@pi-work/storage";
+import { CredentialBroker } from "./credential-broker.js";
 
 let mainWindow: BrowserWindow | null = null;
 let store: PiWorkStore;
 let agentProcess: UtilityProcess | null = null;
+let credentialBroker: CredentialBroker;
 
 function applicationDatabasePath(): string {
   return join(app.getPath("userData"), "pi-work.db");
@@ -32,6 +37,13 @@ function getStore(): PiWorkStore {
     store = new PiWorkStore(applicationDatabasePath());
   }
   return store;
+}
+
+function getCredentialBroker(): CredentialBroker {
+  if (credentialBroker === undefined) {
+    credentialBroker = new CredentialBroker(join(app.getPath("userData"), "credentials.enc"));
+  }
+  return credentialBroker;
 }
 
 function createWindow(): void {
@@ -67,7 +79,10 @@ function getAgentProcess(): UtilityProcess {
   return agentProcess;
 }
 
-async function generatePlan(task: { id: string; title: string; goal: string }): Promise<Plan> {
+async function generatePlan(
+  task: { id: string; title: string; goal: string },
+  provider: unknown,
+): Promise<Plan> {
   const response = await new Promise<unknown>((resolve, reject) => {
     const process = getAgentProcess();
     const timer = setTimeout(() => reject(new Error("Pi planning service timed out.")), 10_000);
@@ -79,7 +94,7 @@ async function generatePlan(task: { id: string; title: string; goal: string }): 
       clearTimeout(timer);
       reject(new Error("Pi planning service exited before responding."));
     });
-    process.postMessage({ type: "plan", task });
+    process.postMessage({ type: "plan", task, provider });
   });
   const parsed = agentResponseSchema.parse(response);
   if (parsed.type === "error") {
@@ -115,11 +130,20 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("workspace:list", () => getStore().listWorkspaces().map((workspace) => workspaceSchema.parse(workspace)));
+  ipcMain.handle("provider:list", () => getCredentialBroker().list());
+  ipcMain.handle("provider:save", (_event, input: unknown) => {
+    const parsed = setProviderCredentialInputSchema.parse(input);
+    return getCredentialBroker().save(parsed);
+  });
   ipcMain.handle("task:list", (_event, workspaceId: unknown) => getStore().listTasks(String(workspaceId)).map((task) => taskSchema.parse(task)));
   ipcMain.handle("task:create", async (_event, input: unknown) => {
     const parsed = createTaskInputSchema.parse(input);
     const task = getStore().createTask(parsed);
-    getStore().savePlan(await generatePlan(task));
+    const provider = (await getCredentialBroker().list())[0];
+    const credential = provider === undefined
+      ? null
+      : await getCredentialBroker().get(provider.providerId);
+    getStore().savePlan(await generatePlan(task, credential));
     return taskSchema.parse(getStore().getTask(task.id));
   });
   ipcMain.handle("task:plan", (_event, taskId: unknown) => {
@@ -133,6 +157,14 @@ function registerIpc(): void {
   ipcMain.handle("task:abort", (_event, input: unknown) => {
     const parsed = abortTaskInputSchema.parse(input);
     return taskSchema.parse(getStore().cancelTask(parsed.taskId));
+  });
+  ipcMain.handle("task:complete", (_event, input: unknown) => {
+    const parsed = completeTaskInputSchema.parse(input);
+    return taskSchema.parse(getStore().completeTask(parsed.taskId));
+  });
+  ipcMain.handle("task:resume", (_event, input: unknown) => {
+    const parsed = resumeTaskInputSchema.parse(input);
+    return taskSchema.parse(getStore().resumeTask(parsed.taskId));
   });
   ipcMain.handle("artifact:list", (_event, taskId: unknown) => getStore().listArtifacts(String(taskId)).map((artifact) => artifactSchema.parse(artifact)));
   ipcMain.handle("artifact:create", async (_event, input: unknown) => {
