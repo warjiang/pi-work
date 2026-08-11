@@ -25,10 +25,11 @@ async function symbolicLinks(path: string): Promise<string[]> {
 }
 
 test("the packaged Pi runtime is built inside the application without a global Pi install", async () => {
-  await executeFile("pnpm", ["--filter", "@pi-work/desktop", "build"], { cwd: repositoryRoot });
-  await executeFile("pnpm", ["prepare:pi"], { cwd: repositoryRoot });
+  const options = { cwd: repositoryRoot, env: { ...process.env, CI: "true" } };
+  await executeFile("pnpm", ["--filter", "@pi-work/desktop", "build"], options);
+  await executeFile("pnpm", ["prepare:pi"], options);
 
   await expect(access(resolve(runtimeRoot, "agent-service.js"))).resolves.toBeUndefined();
   await expect(access(resolve(runtimeRoot, "node_modules/@earendil-works/pi-coding-agent/package.json"))).resolves.toBeUndefined();
   await expect(symbolicLinks(runtimeRoot)).resolves.toEqual([]);
-});
+}, 120_000);

@@ -120,11 +120,12 @@ describe("PiWorkStore", () => {
     store.close();
   });
 
-  it("migrates existing workspaces and tasks without losing data", async () => {
+  it("keeps legacy project data without reading or deleting it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-work-storage-"));
     const filename = join(directory, "legacy.db");
     const workspaceId = randomUUID();
     const taskId = randomUUID();
+    const projectId = randomUUID();
     const createdAt = new Date().toISOString();
     const sqlite = new Database(filename);
     sqlite.exec(`
@@ -138,9 +139,18 @@ describe("PiWorkStore", () => {
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT NOT NULL,
+        project_id TEXT,
         title TEXT NOT NULL,
         goal TEXT NOT NULL,
         status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE domain_entities (
+        id TEXT PRIMARY KEY NOT NULL,
+        domain TEXT NOT NULL,
+        workspace_id TEXT,
+        value TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -152,12 +162,21 @@ describe("PiWorkStore", () => {
       "/workspace/legacy/Pi Work",
       createdAt,
     );
-    sqlite.prepare("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    sqlite.prepare("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
       taskId,
       workspaceId,
+      projectId,
       "Existing task",
       "Keep this task",
       "draft",
+      createdAt,
+      createdAt,
+    );
+    sqlite.prepare("INSERT INTO domain_entities VALUES (?, ?, ?, ?, ?, ?)").run(
+      projectId,
+      "project",
+      workspaceId,
+      JSON.stringify({ name: "Legacy project" }),
       createdAt,
       createdAt,
     );
@@ -172,6 +191,114 @@ describe("PiWorkStore", () => {
       thinkingLevel: "off",
     }));
     store.close();
+
+    const migrated = new Database(filename);
+    const taskColumns = migrated.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    expect(taskColumns.map(({ name }) => name)).toContain("project_id");
+    expect(migrated.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId)).toEqual({ project_id: projectId });
+    expect(migrated.prepare("SELECT domain FROM domain_entities WHERE id = ?").get(projectId)).toEqual({ domain: "project" });
+    migrated.close();
     await rm(directory, { recursive: true, force: true });
+  });
+
+  it("searches session metadata and message content while preserving session controls", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const session = store.createTask({
+      workspaceId: workspace.id,
+      title: "Desktop parity",
+      goal: "Implement the application shell",
+      permissionMode: "explore",
+    });
+    store.addMessage({ taskId: session.id, role: "user", content: "Build a searchable kanban board" });
+    const updated = store.updateSession(session.id, { status: "reviewing", flagged: true, archived: true, permissionMode: "auto" });
+
+    expect(updated).toEqual(expect.objectContaining({ status: "reviewing", flagged: true, archived: true, permissionMode: "auto" }));
+    expect(store.listSessions({ query: "kanban" }).map(({ id }) => id)).toEqual([session.id]);
+    expect(store.listSessions({ archived: true }).map(({ id }) => id)).toEqual([session.id]);
+    store.close();
+  });
+
+  it("keeps session search scoped to a work folder", () => {
+    const store = new PiWorkStore();
+    const first = store.createWorkspace({
+      name: "First",
+      rootPath: "/workspace/first",
+      outputPath: "/workspace/first/Pi Work",
+    });
+    const second = store.createWorkspace({
+      name: "Second",
+      rootPath: "/workspace/second",
+      outputPath: "/workspace/second/Pi Work",
+    });
+    const matching = store.createTask({ workspaceId: first.id, title: "First", goal: "First" });
+    const excluded = store.createTask({ workspaceId: second.id, title: "Second", goal: "Second" });
+    store.addMessage({ taskId: matching.id, role: "user", content: "shared search phrase" });
+    store.addMessage({ taskId: excluded.id, role: "user", content: "shared search phrase" });
+
+    expect(store.listSessions({ workspaceId: first.id, query: "shared" }).map(({ id }) => id)).toEqual([matching.id]);
+    store.close();
+  });
+
+  it("stores sources, skills, automations, activities, and attachments", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const session = store.createTask({ workspaceId: workspace.id, title: "Ship", goal: "Ship" });
+    expect(store.createSource({
+      workspaceId: workspace.id,
+      name: "Repository",
+      type: "local",
+      enabled: true,
+      config: { path: workspace.rootPath },
+    }).type).toBe("local");
+    expect(store.createSkill({
+      workspaceId: workspace.id,
+      name: "Reviewer",
+      description: "",
+      instructions: "Review changes.",
+      enabled: true,
+    }).enabled).toBe(true);
+    expect(store.createAutomation({
+      workspaceId: workspace.id,
+      name: "Daily review",
+      enabled: false,
+      trigger: { type: "schedule", cron: "0 9 * * 1-5" },
+      action: { type: "send_prompt", sessionId: session.id, prompt: "Review progress" },
+      lastRunAt: null,
+    }).trigger.type).toBe("schedule");
+    store.addActivity({
+      sessionId: session.id,
+      messageId: null,
+      kind: "tool_call",
+      title: "read",
+      detail: "Read package.json",
+      metadata: {},
+    });
+    const attachment = store.addAttachment({
+      sessionId: session.id,
+      messageId: null,
+      name: "brief.pdf",
+      path: "/workspace/product/brief.pdf",
+      mimeType: "application/pdf",
+      size: 42,
+    });
+
+    expect(store.listSources(workspace.id)).toHaveLength(1);
+    expect(store.listSkills(workspace.id)).toHaveLength(1);
+    expect(store.listAutomations(workspace.id)).toHaveLength(1);
+    expect(store.listActivities(session.id)).toHaveLength(1);
+    expect(store.listAttachments(session.id)).toHaveLength(1);
+    expect(store.getAttachment(attachment.id)?.path).toBe("/workspace/product/brief.pdf");
+    store.removeConversation(session.id);
+    expect(store.getAttachment(attachment.id)).toBeNull();
+    store.close();
   });
 });

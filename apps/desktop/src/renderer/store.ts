@@ -1,40 +1,77 @@
 import { create } from "zustand";
 
+export type AppView =
+  | "inbox"
+  | "attention"
+  | "completed"
+  | "board"
+  | "sources"
+  | "skills"
+  | "automations"
+  | "browser"
+  | "settings";
+
+export type InspectorTab = "task" | "plan" | "activity" | "output";
+export type WorkspaceScope = "all" | "personal" | string;
+
 type WorkspaceUiState = {
-  view: "chat" | "settings";
-  mode: "managed" | "folder";
-  selectedWorkspaceId: string | null;
+  view: AppView;
+  workspaceScope: WorkspaceScope;
   selectedTaskId: string | null;
-  newChat(): void;
-  showSettings(): void;
-  selectWorkspace(workspaceId: string): void;
-  selectConversation(workspaceId: string, taskId: string): void;
+  sidebarCollapsed: boolean;
+  sidebarDrawerOpen: boolean;
+  inspectorOpen: boolean;
+  inspectorTab: InspectorTab;
+  commandOpen: boolean;
+  newTaskOpen: boolean;
+  search: string;
+  showView(view: AppView): void;
+  setWorkspaceScope(scope: WorkspaceScope): void;
   selectTask(taskId: string | null): void;
+  openTask(taskId: string): void;
+  toggleSidebar(): void;
+  setSidebarCollapsed(collapsed: boolean): void;
+  setSidebarDrawerOpen(open: boolean): void;
+  toggleInspector(): void;
+  showInspector(tab?: InspectorTab): void;
+  setInspectorTab(tab: InspectorTab): void;
+  setCommandOpen(open: boolean): void;
+  setNewTaskOpen(open: boolean): void;
+  setSearch(value: string): void;
 };
 
 export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
-  view: "chat",
-  mode: "managed",
-  selectedWorkspaceId: null,
+  view: "inbox",
+  workspaceScope: "all",
   selectedTaskId: null,
-  newChat: () => set({
-    view: "chat",
-    mode: "managed",
-    selectedWorkspaceId: null,
+  sidebarCollapsed: false,
+  sidebarDrawerOpen: false,
+  inspectorOpen: true,
+  inspectorTab: "task",
+  commandOpen: false,
+  newTaskOpen: false,
+  search: "",
+  showView: (view) => set({ view, sidebarDrawerOpen: false }),
+  setWorkspaceScope: (workspaceScope) => set({
+    workspaceScope,
     selectedTaskId: null,
+    view: "inbox",
   }),
-  showSettings: () => set({ view: "settings" }),
-  selectWorkspace: (workspaceId) => set({
-    view: "chat",
-    mode: "folder",
-    selectedWorkspaceId: workspaceId,
-    selectedTaskId: null,
+  selectTask: (selectedTaskId) => set({ selectedTaskId }),
+  openTask: (selectedTaskId) => set({
+    selectedTaskId,
+    view: "inbox",
+    sidebarDrawerOpen: false,
   }),
-  selectConversation: (workspaceId, taskId) => set({
-    view: "chat",
-    mode: "managed",
-    selectedWorkspaceId: workspaceId,
-    selectedTaskId: taskId,
-  }),
-  selectTask: (taskId) => set({ selectedTaskId: taskId }),
+  toggleSidebar: () => set((state) => ({
+    sidebarCollapsed: !state.sidebarCollapsed,
+  })),
+  setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+  setSidebarDrawerOpen: (sidebarDrawerOpen) => set({ sidebarDrawerOpen }),
+  toggleInspector: () => set((state) => ({ inspectorOpen: !state.inspectorOpen })),
+  showInspector: (inspectorTab = "task") => set({ inspectorOpen: true, inspectorTab }),
+  setInspectorTab: (inspectorTab) => set({ inspectorTab }),
+  setCommandOpen: (commandOpen) => set({ commandOpen }),
+  setNewTaskOpen: (newTaskOpen) => set({ newTaskOpen }),
+  setSearch: (search) => set({ search }),
 }));

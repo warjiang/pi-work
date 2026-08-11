@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   agentRequestSchema,
+  agentMessageSchema,
   createArtifactInputSchema,
+  externalUrlInputSchema,
   extensionSourceSchema,
+  inspectAttachmentPathsSchema,
   sendChatInputSchema,
+  sessionSearchInputSchema,
+  taskSchema,
   taskStatusSchema,
+  updateSessionInputSchema,
 } from "./index.js";
 
 describe("protocol schemas", () => {
@@ -18,6 +24,15 @@ describe("protocol schemas", () => {
     }).success).toBe(true);
   });
 
+  it("does not expose legacy project IDs in session schemas", () => {
+    expect(taskSchema.shape).not.toHaveProperty("projectId");
+    expect(sessionSearchInputSchema.parse({ projectId: null })).not.toHaveProperty("projectId");
+    expect(updateSessionInputSchema.parse({
+      sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      projectId: "018f88d1-1eb5-709a-90ef-4325747e294d",
+    })).not.toHaveProperty("projectId");
+  });
+
   it("requires correlated extension requests and rejects empty sources", () => {
     const requestId = "018f88d1-1eb5-709a-90ef-4325747e294c";
     expect(agentRequestSchema.safeParse({
@@ -26,6 +41,14 @@ describe("protocol schemas", () => {
       runtime: { cwd: "/workspace", agentDir: "/user/pi-agent" },
     }).success).toBe(true);
     expect(extensionSourceSchema.safeParse("  ").success).toBe(false);
+  });
+
+  it("allows only absolute HTTP and HTTPS external URLs", () => {
+    expect(externalUrlInputSchema.safeParse({ url: "https://example.com/docs?q=pi" }).success).toBe(true);
+    expect(externalUrlInputSchema.safeParse({ url: "http://localhost:3000" }).success).toBe(true);
+    expect(externalUrlInputSchema.safeParse({ url: "javascript:alert(1)" }).success).toBe(false);
+    expect(externalUrlInputSchema.safeParse({ url: "file:///tmp/secret" }).success).toBe(false);
+    expect(externalUrlInputSchema.safeParse({ url: "/relative/path" }).success).toBe(false);
   });
 
   it("accepts chat messages without requiring a title or plan", () => {
@@ -53,6 +76,42 @@ describe("protocol schemas", () => {
       requestId: "018f88d1-1eb5-709a-90ef-4325747e294c",
       approvalId: "018f88d1-1eb5-709a-90ef-4325747e294d",
       approved: false,
+    }).success).toBe(true);
+  });
+
+  it("correlates chat lifecycle events and validates attachment drafts", () => {
+    const requestId = "018f88d1-1eb5-709a-90ef-4325747e294c";
+    const sessionId = "018f88d1-1eb5-709a-90ef-4325747e294d";
+    expect(agentRequestSchema.safeParse({
+      type: "cancel",
+      requestId,
+      sessionId,
+    }).success).toBe(true);
+    expect(agentMessageSchema.safeParse({
+      type: "event",
+      requestId,
+      sessionId,
+      event: {
+        sequence: 2,
+        kind: "cancelled",
+        payload: {},
+        timestamp: new Date().toISOString(),
+      },
+    }).success).toBe(true);
+    expect(inspectAttachmentPathsSchema.safeParse(["/workspace/reference.pdf"]).success).toBe(true);
+    expect(sendChatInputSchema.safeParse({
+      workspaceId: sessionId,
+      taskId: null,
+      content: "Review this file",
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      thinkingLevel: "medium",
+      attachments: [{
+        name: "reference.pdf",
+        path: "/workspace/reference.pdf",
+        mimeType: "application/pdf",
+        size: 42,
+      }],
     }).success).toBe(true);
   });
 });

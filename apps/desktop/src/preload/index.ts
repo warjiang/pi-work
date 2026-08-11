@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 const piWork = {
   workspace: {
@@ -14,6 +14,9 @@ const piWork = {
     get: () => ipcRenderer.invoke("settings:get"),
     update: (input: unknown) => ipcRenderer.invoke("settings:update", input),
   },
+  system: {
+    openExternal: (url: string) => ipcRenderer.invoke("system:open-external", { url }),
+  },
   extension: {
     list: () => ipcRenderer.invoke("extension:list"),
     install: (source: string) => ipcRenderer.invoke("extension:install", source),
@@ -28,10 +31,34 @@ const piWork = {
     updateModel: (input: unknown) => ipcRenderer.invoke("conversation:update-model", input),
     remove: (input: unknown) => ipcRenderer.invoke("conversation:remove", input),
   },
+  session: {
+    list: (input: unknown = {}) => ipcRenderer.invoke("session:list", input),
+    get: (sessionId: string) => ipcRenderer.invoke("session:get", sessionId),
+    update: (input: unknown) => ipcRenderer.invoke("session:update", input),
+    remove: (sessionId: string) => ipcRenderer.invoke("session:remove", { sessionId }),
+    messages: (sessionId: string) => ipcRenderer.invoke("session:messages", sessionId),
+    activities: (sessionId: string) => ipcRenderer.invoke("session:activities", sessionId),
+    attachments: (sessionId: string) => ipcRenderer.invoke("session:attachments", sessionId),
+    stop: (sessionId: string) => ipcRenderer.invoke("session:stop", sessionId),
+  },
+  agent: {
+    onEvent: (listener: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown) => listener(value);
+      ipcRenderer.on("agent:event", handler);
+      return () => ipcRenderer.removeListener("agent:event", handler);
+    },
+  },
+  attachment: {
+    choose: () => ipcRenderer.invoke("attachment:choose"),
+    fromFiles: (files: File[]) => ipcRenderer.invoke("attachment:inspect", files.map((file) => webUtils.getPathForFile(file))),
+    open: (attachmentId: string) => ipcRenderer.invoke("attachment:open", attachmentId),
+  },
   task: {
     list: (workspaceId: string) => ipcRenderer.invoke("task:list", workspaceId),
     create: (input: unknown) => ipcRenderer.invoke("task:create", input),
-    plan: (taskId: string) => ipcRenderer.invoke("task:plan", taskId),
+    getPlan: (taskId: string) => ipcRenderer.invoke("task:plan", taskId),
+    generatePlan: (input: unknown) => ipcRenderer.invoke("task:generate-plan", input),
+    updateBrief: (input: unknown) => ipcRenderer.invoke("task:update-brief", input),
     approvePlan: (input: unknown) => ipcRenderer.invoke("task:approve-plan", input),
     abort: (input: unknown) => ipcRenderer.invoke("task:abort", input),
     complete: (input: unknown) => ipcRenderer.invoke("task:complete", input),
@@ -39,6 +66,7 @@ const piWork = {
   },
   chat: {
     list: (taskId: string) => ipcRenderer.invoke("chat:list", taskId),
+    toolApprovals: (taskId?: string) => ipcRenderer.invoke("chat:tool-approvals", taskId),
     send: (input: unknown) => ipcRenderer.invoke("chat:send", input),
     onToolApproval: (listener: (approval: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, approval: unknown) => listener(approval);
@@ -52,6 +80,35 @@ const piWork = {
     create: (input: unknown) => ipcRenderer.invoke("artifact:create", input),
     publish: (input: unknown) => ipcRenderer.invoke("artifact:publish", input),
   },
+  status: domainApi("status"),
+  label: domainApi("label"),
+  source: domainApi("source"),
+  skill: domainApi("skill"),
+  automation: domainApi("automation"),
+  browser: {
+    open: (url: string) => ipcRenderer.invoke("browser:open", { url }),
+    navigate: (url: string) => ipcRenderer.invoke("browser:navigate", { url }),
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.invoke("browser:bounds", bounds),
+    back: () => ipcRenderer.invoke("browser:back"),
+    forward: () => ipcRenderer.invoke("browser:forward"),
+    reload: () => ipcRenderer.invoke("browser:reload"),
+    openExternal: () => ipcRenderer.invoke("browser:external"),
+    close: () => ipcRenderer.invoke("browser:close"),
+    onState: (listener: (state: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: unknown) => listener(state);
+      ipcRenderer.on("browser:state", handler);
+      return () => ipcRenderer.removeListener("browser:state", handler);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("piWork", piWork);
+
+function domainApi(name: "status" | "label" | "source" | "skill" | "automation") {
+  return {
+    list: (workspaceId?: string | null) => ipcRenderer.invoke(`${name}:list`, workspaceId),
+    create: (input: unknown) => ipcRenderer.invoke(`${name}:create`, input),
+    update: (input: unknown) => ipcRenderer.invoke(`${name}:update`, input),
+    remove: (id: string) => ipcRenderer.invoke(`${name}:remove`, { id }),
+  };
+}

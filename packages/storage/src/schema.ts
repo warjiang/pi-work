@@ -18,6 +18,16 @@ export const tasks = sqliteTable("tasks", {
   providerId: text("provider_id"),
   modelId: text("model_id"),
   thinkingLevel: text("thinking_level").notNull(),
+  kind: text("kind").notNull(),
+  archived: text("archived").notNull(),
+  flagged: text("flagged").notNull(),
+  unread: text("unread").notNull(),
+  statusId: text("status_id"),
+  labelIds: text("label_ids").notNull(),
+  permissionMode: text("permission_mode").notNull(),
+  planMode: text("plan_mode").notNull(),
+  workingDirectory: text("working_directory"),
+  running: text("running").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -65,4 +75,35 @@ export const events = sqliteTable("events", {
 export const appSettings = sqliteTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
+});
+
+export const domainEntities = sqliteTable("domain_entities", {
+  id: text("id").primaryKey(),
+  domain: text("domain").notNull(),
+  workspaceId: text("workspace_id"),
+  value: text("value").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const activities = sqliteTable("activities", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  messageId: text("message_id"),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  detail: text("detail").notNull(),
+  metadata: text("metadata").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const attachments = sqliteTable("attachments", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  messageId: text("message_id"),
+  name: text("name").notNull(),
+  path: text("path").notNull(),
+  mimeType: text("mime_type").notNull(),
+  size: text("size").notNull(),
+  createdAt: text("created_at").notNull(),
 });
