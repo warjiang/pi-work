@@ -1,5 +1,6 @@
 appId: com.piwork.desktop
 productName: Pi Work
+executableName: pi-work
 directories:
   output: release
   buildResources: resources
