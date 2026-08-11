@@ -342,8 +342,13 @@ export const updateSessionInputSchema = z.object({
   workingDirectory: z.string().nullable().optional(),
 });
 
+export const promoteSessionInputSchema = z.object({
+  sessionId: z.uuid(),
+  workspaceId: z.uuid(),
+});
+
 export const createDomainEntityInputSchema = z.object({
-  workspaceId: z.uuid().nullable().optional(),
+  workspaceId: z.uuid(),
   value: z.record(z.string(), z.unknown()),
 });
 

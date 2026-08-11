@@ -62,6 +62,7 @@ declare global {
         activities(sessionId: string): Promise<Activity[]>;
         attachments(sessionId: string): Promise<Attachment[]>;
         stop(sessionId: string): Promise<void>;
+        promote(input: unknown): Promise<Session>;
       };
       agent: {
         onEvent(listener: (event: Extract<AgentMessage, { type: "event" }>) => void): () => void;
@@ -105,7 +106,7 @@ declare global {
 }
 
 type DomainApi<T> = {
-  list(workspaceId?: string | null): Promise<T[]>;
+  list(workspaceId: string): Promise<T[]>;
   create(input: unknown): Promise<T>;
   update(input: unknown): Promise<T>;
   remove(id: string): Promise<void>;

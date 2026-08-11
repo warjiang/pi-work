@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, WebContentsView } from "electron";
 import type { OpenDialogOptions, Rectangle, UtilityProcess } from "electron";
@@ -43,6 +43,7 @@ import {
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   planSchema,
+  promoteSessionInputSchema,
   publishArtifactInputSchema,
   resumeTaskInputSchema,
   sendChatInputSchema,
@@ -405,6 +406,33 @@ function assertManagedChatPath(rootPath: string): void {
   }
 }
 
+function requireFolderTask(taskId: string) {
+  const task = getStore().getTask(taskId);
+  if (task === null) throw new Error("Task not found.");
+  const workspace = getStore().getWorkspace(task.workspaceId);
+  if (workspace === null || workspace.kind !== "folder" || task.kind !== "task") {
+    throw new Error("This operation requires a work folder task.");
+  }
+  return { task, workspace };
+}
+
+function requireFolderWorkspace(workspaceId: string) {
+  const workspace = getStore().getWorkspace(workspaceId);
+  if (workspace === null || workspace.kind !== "folder") {
+    throw new Error("This operation requires a work folder.");
+  }
+  return workspace;
+}
+
+function pathWithin(rootPath: string, candidatePath: string): boolean {
+  const difference = relative(resolve(rootPath), resolve(candidatePath));
+  return difference !== "" && difference !== ".." && !difference.startsWith(`..${sep}`) && !isAbsolute(difference);
+}
+
+function stagingPath(workspaceRoot: string, taskId: string): string {
+  return join(workspaceRoot, ".pi-work", "runs", taskId, "staging");
+}
+
 function saveConversationModel(
   taskId: string,
   selection: { providerId: string; modelId: string; thinkingLevel: ThinkingLevel },
@@ -544,6 +572,56 @@ function registerIpc(): void {
     const { sessionId, ...value } = updateSessionInputSchema.parse(input);
     return getStore().updateSession(sessionId, withoutUndefined(value));
   });
+  ipcMain.handle("session:promote", async (_event, input: unknown) => {
+    const parsed = promoteSessionInputSchema.parse(input);
+    const session = getStore().getSession(parsed.sessionId);
+    if (session === null) throw new Error("Personal session not found.");
+    const sourceWorkspace = getStore().getWorkspace(session.workspaceId);
+    const targetWorkspace = requireFolderWorkspace(parsed.workspaceId);
+    if (sourceWorkspace === null || sourceWorkspace.kind !== "managed" || session.kind !== "chat") {
+      throw new Error("Only personal sessions can move to a work folder.");
+    }
+    if (session.running || activeAgentSessions.has(session.id)) {
+      throw new Error("Stop this personal session before moving it.");
+    }
+    if ([...pendingToolApprovals.values()].some(({ sessionId }) => sessionId === session.id)) {
+      throw new Error("Resolve pending tool approvals before moving this session.");
+    }
+    assertManagedChatPath(sourceWorkspace.rootPath);
+
+    const sourceStagingRoot = stagingPath(sourceWorkspace.rootPath, session.id);
+    const targetStagingRoot = stagingPath(targetWorkspace.rootPath, session.id);
+    const stagedArtifacts = getStore().listArtifacts(session.id).filter(({ publishedPath }) => publishedPath === null);
+    const stagedPaths: Record<string, string> = {};
+    for (const artifact of stagedArtifacts) {
+      if (!pathWithin(sourceStagingRoot, artifact.stagedPath)) {
+        throw new Error("A staged artifact is outside the private sandbox.");
+      }
+      stagedPaths[artifact.id] = join(targetStagingRoot, relative(sourceStagingRoot, artifact.stagedPath));
+    }
+
+    if (stagedArtifacts.length > 0) {
+      await mkdir(join(targetWorkspace.rootPath, ".pi-work", "runs"), { recursive: true });
+      await cp(sourceStagingRoot, targetStagingRoot, { recursive: true, force: false, errorOnExist: true });
+    }
+
+    let promoted;
+    try {
+      promoted = getStore().promoteManagedSession({
+        sessionId: session.id,
+        workspaceId: targetWorkspace.id,
+        stagedPaths,
+      });
+    } catch (cause) {
+      if (stagedArtifacts.length > 0) {
+        await rm(targetStagingRoot, { recursive: true, force: true });
+      }
+      throw cause;
+    }
+    clearPendingToolApprovals(session.id);
+    await rm(promoted.workspace.rootPath, { recursive: true, force: true });
+    return taskSchema.parse(promoted.session);
+  });
   ipcMain.handle("session:remove", async (_event, input: unknown) => {
     const parsed = removeConversationInputSchema.parse({ taskId: (input as { sessionId?: unknown })?.sessionId });
     const task = getStore().getTask(parsed.taskId);
@@ -616,17 +694,15 @@ function registerIpc(): void {
   });
   ipcMain.handle("task:update-brief", (_event, input: unknown) => {
     const { taskId, ...value } = updateTaskBriefInputSchema.parse(input);
+    requireFolderTask(taskId);
     return taskSchema.parse(getStore().updateTaskBrief(taskId, withoutUndefined(value)));
   });
   ipcMain.handle("task:generate-plan", async (_event, input: unknown) => {
     const { taskId } = generatePlanInputSchema.parse(input);
-    const task = getStore().getTask(taskId);
-    if (task === null) throw new Error("Task not found.");
+    const { task, workspace } = requireFolderTask(taskId);
     if (task.providerId === null || task.modelId === null) {
       throw new Error("Choose a model before generating a plan.");
     }
-    const workspace = getStore().getWorkspace(task.workspaceId);
-    if (workspace === null) throw new Error("Work folder not found.");
     const plan = await generatePlan(
       task,
       await providerCredential(task.providerId),
@@ -689,6 +765,12 @@ function registerIpc(): void {
         kind: "managed",
       });
     }
+    if (task !== null && ((task.kind === "chat" && workspace.kind !== "managed") || (task.kind === "task" && workspace.kind !== "folder"))) {
+      throw new Error("Session and work folder types do not match.");
+    }
+    if (task === null && workspace.kind !== "managed") {
+      throw new Error("Create a work folder task before sending it to Pi.");
+    }
 
     if (command?.[1] === "goal") {
       const goal = command[2]?.trim() ?? "";
@@ -699,6 +781,7 @@ function registerIpc(): void {
         workspaceId: workspace.id,
         title: taskTitle(goal),
         goal,
+        kind: "chat",
         providerId: parsed.providerId,
         modelId: parsed.modelId,
         thinkingLevel: parsed.thinkingLevel,
@@ -740,6 +823,7 @@ function registerIpc(): void {
       workspaceId: workspace.id,
       title: taskTitle(parsed.content),
       goal: parsed.content,
+      kind: "chat",
       providerId: parsed.providerId,
       modelId: parsed.modelId,
       thinkingLevel: parsed.thinkingLevel,
@@ -798,15 +882,18 @@ function registerIpc(): void {
     return taskSchema.parse(task);
   });
   ipcMain.handle("task:plan", (_event, taskId: unknown) => {
-    const plan = getStore().getPlan(taskSchema.shape.id.parse(taskId));
+    const { task } = requireFolderTask(taskSchema.shape.id.parse(taskId));
+    const plan = getStore().getPlan(task.id);
     return plan === null ? null : planSchema.parse(plan);
   });
   ipcMain.handle("task:approve-plan", (_event, input: unknown) => {
     const parsed = approvePlanInputSchema.parse(input);
+    requireFolderTask(parsed.taskId);
     return taskSchema.parse(getStore().approvePlan(parsed.taskId, parsed.approved));
   });
   ipcMain.handle("task:abort", async (_event, input: unknown) => {
     const parsed = abortTaskInputSchema.parse(input);
+    requireFolderTask(parsed.taskId);
     if (activeAgentSessions.has(parsed.taskId)) {
       const response = await sendAgentRequest({ type: "cancel", sessionId: parsed.taskId });
       if (response.type === "error") throw new Error(response.message);
@@ -815,10 +902,12 @@ function registerIpc(): void {
   });
   ipcMain.handle("task:complete", (_event, input: unknown) => {
     const parsed = completeTaskInputSchema.parse(input);
+    requireFolderTask(parsed.taskId);
     return taskSchema.parse(getStore().completeTask(parsed.taskId));
   });
   ipcMain.handle("task:resume", (_event, input: unknown) => {
     const parsed = resumeTaskInputSchema.parse(input);
+    requireFolderTask(parsed.taskId);
     return taskSchema.parse(getStore().resumeTask(parsed.taskId));
   });
   ipcMain.handle("artifact:list", (_event, taskId: unknown) => getStore().listArtifacts(taskSchema.shape.id.parse(taskId)).map((artifact) => artifactSchema.parse(artifact)));
@@ -828,10 +917,7 @@ function registerIpc(): void {
     if (task === null) {
       throw new Error("Task not found.");
     }
-    const workspace = getStore().listWorkspaces().find((candidate) => candidate.id === task.workspaceId);
-    if (workspace === undefined) {
-      throw new Error("Work folder not found.");
-    }
+    const { workspace } = requireFolderTask(task.id);
     const stagedPath = await stageArtifact(workspace, task, parsed);
     return artifactSchema.parse(getStore().createArtifact({ ...parsed, stagedPath }));
   });
@@ -841,14 +927,7 @@ function registerIpc(): void {
     if (artifact === null) {
       throw new Error("Artifact not found.");
     }
-    const task = getStore().getTask(artifact.taskId);
-    if (task === null) {
-      throw new Error("Task not found.");
-    }
-    const workspace = getStore().listWorkspaces().find((candidate) => candidate.id === task.workspaceId);
-    if (workspace === undefined) {
-      throw new Error("Work folder not found.");
-    }
+    const { task, workspace } = requireFolderTask(artifact.taskId);
     const publishedPath = await publishArtifact(workspace, task, artifact);
     return artifactSchema.parse(getStore().publishArtifact(artifact.id, publishedPath));
   });
@@ -885,27 +964,30 @@ function registerIpc(): void {
   ipcMain.handle("browser:close", () => closeBrowserView());
 
   const domain = {
-    status: { schema: statusDefinitionSchema, list: (workspaceId?: string | null) => {
-      if (workspaceId !== undefined && workspaceId !== null) ensureDefaultStatuses(workspaceId);
+    status: { schema: statusDefinitionSchema, list: (workspaceId: string) => {
+      ensureDefaultStatuses(workspaceId);
       return getStore().listStatuses(workspaceId);
     } },
-    label: { schema: labelSchema, list: (workspaceId?: string | null) => getStore().listLabels(workspaceId) },
-    source: { schema: sourceSchema, list: (workspaceId?: string | null) => getStore().listSources(workspaceId) },
-    skill: { schema: skillSchema, list: (workspaceId?: string | null) => getStore().listSkills(workspaceId) },
-    automation: { schema: automationSchema, list: (workspaceId?: string | null) => getStore().listAutomations(workspaceId) },
+    label: { schema: labelSchema, list: (workspaceId: string) => getStore().listLabels(workspaceId) },
+    source: { schema: sourceSchema, list: (workspaceId: string) => getStore().listSources(workspaceId) },
+    skill: { schema: skillSchema, list: (workspaceId: string) => getStore().listSkills(workspaceId) },
+    automation: { schema: automationSchema, list: (workspaceId: string) => getStore().listAutomations(workspaceId) },
   } as const;
   type DomainEntity = StatusDefinition | Label | Source | Skill | Automation;
   for (const [name, definition] of Object.entries(domain)) {
     const domainName = name as keyof typeof domain;
     const schema = definition.schema as { parse(value: unknown): DomainEntity };
-    ipcMain.handle(`${name}:list`, (_event, workspaceId: unknown) => (
-      definition.list(workspaceId === undefined ? undefined : workspaceId === null ? null : workspaceSchema.shape.id.parse(workspaceId))
-    ));
+    ipcMain.handle(`${name}:list`, (_event, workspaceId: unknown) => {
+      const id = workspaceSchema.shape.id.parse(workspaceId);
+      requireFolderWorkspace(id);
+      return definition.list(id);
+    });
     ipcMain.handle(`${name}:create`, (_event, input: unknown) => {
       const parsed = createDomainEntityInputSchema.parse(input);
+      requireFolderWorkspace(parsed.workspaceId);
       return getStore().createDomainEntity(domainName, schema, {
-        workspaceId: parsed.workspaceId ?? null,
         ...parsed.value,
+        workspaceId: parsed.workspaceId,
       });
     });
     ipcMain.handle(`${name}:update`, (_event, input: unknown) => {

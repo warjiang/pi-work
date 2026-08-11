@@ -8,11 +8,12 @@ export type AppView =
   | "sources"
   | "skills"
   | "automations"
+  | "folder-settings"
   | "browser"
   | "settings";
 
 export type InspectorTab = "task" | "plan" | "activity" | "output";
-export type WorkspaceScope = "all" | "personal" | string;
+export type WorkspaceScope = "personal" | string;
 
 type WorkspaceUiState = {
   view: AppView;
@@ -42,7 +43,7 @@ type WorkspaceUiState = {
 
 export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
   view: "inbox",
-  workspaceScope: "all",
+  workspaceScope: "personal",
   selectedTaskId: null,
   sidebarCollapsed: false,
   sidebarDrawerOpen: false,

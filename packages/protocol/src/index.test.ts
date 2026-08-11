@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   agentRequestSchema,
   agentMessageSchema,
+  createDomainEntityInputSchema,
   createArtifactInputSchema,
   externalUrlInputSchema,
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
+  promoteSessionInputSchema,
   sendChatInputSchema,
   sessionSearchInputSchema,
   taskSchema,
@@ -31,6 +33,29 @@ describe("protocol schemas", () => {
       sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
       projectId: "018f88d1-1eb5-709a-90ef-4325747e294d",
     })).not.toHaveProperty("projectId");
+    expect(updateSessionInputSchema.parse({
+      sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      workspaceId: "018f88d1-1eb5-709a-90ef-4325747e294d",
+      kind: "task",
+    })).not.toHaveProperty("workspaceId");
+    expect(updateSessionInputSchema.parse({
+      sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      workspaceId: "018f88d1-1eb5-709a-90ef-4325747e294d",
+      kind: "task",
+    })).not.toHaveProperty("kind");
+  });
+
+  it("requires a work folder for resources and validates session promotion", () => {
+    const sessionId = "018f88d1-1eb5-709a-90ef-4325747e294c";
+    const workspaceId = "018f88d1-1eb5-709a-90ef-4325747e294d";
+    expect(createDomainEntityInputSchema.safeParse({
+      value: { name: "Source" },
+    }).success).toBe(false);
+    expect(createDomainEntityInputSchema.safeParse({
+      workspaceId: null,
+      value: { name: "Source" },
+    }).success).toBe(false);
+    expect(promoteSessionInputSchema.parse({ sessionId, workspaceId })).toEqual({ sessionId, workspaceId });
   });
 
   it("requires correlated extension requests and rejects empty sources", () => {
