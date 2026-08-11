@@ -1250,10 +1250,7 @@ kbd {
   width: fit-content;
   max-width: min(620px, 88%);
   align-self: flex-end;
-}
-
-.message.user > span {
-  text-align: right;
+  justify-self: end;
 }
 
 .message.user > div {
@@ -1310,12 +1307,10 @@ kbd {
   line-height: 1.5;
 }
 
-.thinking-block.is-running,
 .tool-status.is-running {
   isolation: isolate;
 }
 
-.thinking-block.is-running::after,
 .tool-status.is-running::after {
   position: absolute;
   z-index: 0;
@@ -1328,15 +1323,9 @@ kbd {
   transform: translateX(-180%);
 }
 
-.thinking-block.is-running > summary,
-.thinking-block.is-running > .thinking-content,
 .tool-status.is-running > .tool-status-copy {
   position: relative;
   z-index: 1;
-}
-
-.thinking-block.is-running::after {
-  left: 0;
 }
 
 .tool-status.is-running::after {
@@ -1373,7 +1362,6 @@ kbd {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .thinking-block.is-running::after,
   .tool-status.is-running::after {
     animation: process-sheen 2.2s ease-in-out infinite;
   }

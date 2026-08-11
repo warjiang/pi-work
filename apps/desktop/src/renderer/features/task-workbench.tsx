@@ -652,10 +652,10 @@ export function TaskWorkbench(props: {
             ))}</div>
           ) : null}
           {pendingPrompt !== null ? (
-            <article className="message user pending"><span>{props.t("you")}</span><div>{pendingPrompt}</div></article>
+            <article className="message user pending"><div>{pendingPrompt}</div></article>
           ) : null}
           {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
-            <article className="message assistant"><span>{props.t("pi")}</span><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
+            <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
           ) : null}
           {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
           {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
@@ -896,7 +896,6 @@ function MessageList({ messages, activities, t }: { messages: ChatMessage[]; act
           <div className="message-turn" key={message.id}>
             {startsTurn && turn > 1 ? <div className="turn-indicator" aria-label={turnLabel(t, turn)}><span>{turnLabel(t, turn)}</span></div> : null}
             <article className={`message ${message.role}`}>
-              <span>{message.role === "user" ? t("you") : message.role === "assistant" ? t("pi") : t("system")}</span>
               {message.role === "assistant"
                 ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><MarkdownMessage content={message.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></>
                 : <div>{message.content}</div>}
@@ -925,7 +924,7 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
   return (
     <div className="live-process">
       {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
-        <details className={`thinking-block ${thought.complete ? "" : "is-running"}`} key={thought.contentIndex} open={!thought.complete}>
+        <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
           <summary>{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</summary>
           <div className="thinking-content">{thought.content}</div>
         </details>
