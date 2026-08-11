@@ -16,7 +16,53 @@ import type {
   ToolApproval,
   Workspace,
 } from "@pi-work/protocol";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./components/ui/alert-dialog.js";
+import { Alert, AlertDescription } from "./components/ui/alert.js";
+import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu.js";
+import { Empty, EmptyDescription } from "./components/ui/empty.js";
+import { Field, FieldGroup, FieldLabel } from "./components/ui/field.js";
+import { Input } from "./components/ui/input.js";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select.js";
+import { Spinner } from "./components/ui/spinner.js";
+import { Switch } from "./components/ui/switch.js";
+import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs.js";
+import { Textarea } from "./components/ui/textarea.js";
+import { Toggle } from "./components/ui/toggle.js";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group.js";
 import { translator } from "./i18n.js";
 import type { MessageKey } from "./i18n.js";
 import { useWorkspaceUi } from "./store.js";
@@ -192,7 +238,7 @@ export function App() {
         onView={ui.showView}
       />
       <main className="main-panel">
-        {error !== null ? <div className="inline-error">{error}<button aria-label="Close" onClick={() => setError(null)}><Icon name="close" /></button></div> : null}
+        {error !== null ? <Alert className="inline-error"><AlertDescription>{error}</AlertDescription><Button variant="ghost" size="icon" aria-label="Close" onClick={() => setError(null)}><Icon name="close" /></Button></Alert> : null}
         {ui.view === "inbox" ? (
           <Chat
             key={selectedSession?.id ?? `new:${ui.selectedWorkspaceId ?? "managed"}`}
@@ -205,9 +251,7 @@ export function App() {
             }}
             onError={setError}
             onUpdate={(value) => updateSession.mutate(value)}
-            onDelete={(id) => {
-              if (window.confirm(`${t("delete")} “${selectedSession?.title ?? ""}”?`)) removeSession.mutate(id);
-            }}
+            onDelete={(id) => removeSession.mutate(id)}
             t={t}
           />
         ) : null}
@@ -218,20 +262,23 @@ export function App() {
         {ui.view === "automations" ? <AutomationsPage workspaceId={ui.selectedWorkspaceId} t={t} /> : null}
         {ui.view === "settings" ? <SettingsPage settings={settings.data} onRefresh={() => queryClient.invalidateQueries({ queryKey: ["settings"] })} t={t} /> : null}
       </main>
-      {onboarding ? (
-        <div className="modal-backdrop">
-          <section className="dialog onboarding" role="dialog" aria-modal="true">
-            <span className="brand-mark">π</span>
-            <div><h2>Pi Work</h2><p>{language === "zh-CN" ? "连接模型提供商后开始，也可以先浏览本地工作区。" : "Connect a model provider to begin, or explore a local workspace first."}</p></div>
-            <div className="dialog-actions">
-              <Button variant="secondary" onClick={() => void window.piWork.settings.update({ onboardingSkipped: true }).then(() => queryClient.invalidateQueries({ queryKey: ["settings"] }))}>
-                {language === "zh-CN" ? "稍后设置" : "Set up later"}
-              </Button>
-              <Button onClick={() => ui.showSettings()}>{t("settings")}</Button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      <Dialog open={onboarding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3"><span className="brand-mark">π</span>Pi Work</DialogTitle>
+            <DialogDescription>{language === "zh-CN" ? "连接模型提供商后开始，也可以先浏览本地工作区。" : "Connect a model provider to begin, or explore a local workspace first."}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => void window.piWork.settings.update({ onboardingSkipped: true }).then(() => queryClient.invalidateQueries({ queryKey: ["settings"] }))}>
+              {language === "zh-CN" ? "稍后设置" : "Set up later"}
+            </Button>
+            <Button onClick={() => void window.piWork.settings.update({ onboardingSkipped: true }).then(async () => {
+              await queryClient.invalidateQueries({ queryKey: ["settings"] });
+              ui.showSettings();
+            })}>{t("settings")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -246,12 +293,12 @@ function TopBar(props: {
 }) {
   return (
     <header className="topbar">
-      <button className="icon-button" aria-label="Toggle sidebar" onClick={props.onToggleSidebar}><Icon name="panel" size={18} /></button>
-      <div className="history-controls"><button aria-label="Back" disabled><Icon name="back" size={18} /></button><button aria-label="Forward" disabled><Icon name="forward" size={18} /></button></div>
-      <button className="workspace-switcher"><img src={appIconUrl} alt="" /><span>{props.workspace?.name ?? "Pi Work"}</span><Icon name="chevron-down" size={14} /></button>
+      <Button variant="ghost" size="icon" className="icon-button" aria-label="Toggle sidebar" onClick={props.onToggleSidebar}><Icon name="panel" size={18} /></Button>
+      <div className="history-controls"><Button variant="ghost" size="icon" aria-label="Back" disabled><Icon name="back" size={18} /></Button><Button variant="ghost" size="icon" aria-label="Forward" disabled><Icon name="forward" size={18} /></Button></div>
+      <Button variant="ghost" className="workspace-switcher"><img src={appIconUrl} alt="" /><span>{props.workspace?.name ?? "Pi Work"}</span><Icon name="chevron-down" size={14} /></Button>
       <label className="global-search">
         <Icon name="search" />
-        <input ref={props.searchRef} value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder={props.t("search")} />
+        <Input className="global-search-input" ref={props.searchRef} value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder={props.t("search")} />
         <kbd>⌘K</kbd>
       </label>
     </header>
@@ -281,7 +328,7 @@ function Sidebar(props: {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand"><span className="brand-mark">π</span><strong>Pi Work</strong></div>
-      <button className="new-chat" onClick={props.onNew}><Icon name="square-pen" size={14} />{props.t("newChat")}<kbd>⌘N</kbd></button>
+      <Button variant="outline" className="new-chat" onClick={props.onNew}><Icon name="square-pen" size={14} />{props.t("newChat")}<kbd>⌘N</kbd></Button>
       <nav className="primary-nav">
         <NavButton active={props.view === "inbox" && props.sessionFilter === "all"} icon="inbox" label={props.t("inbox")} onClick={() => props.onSessionFilter("all")} />
         <NavButton active={props.view === "inbox" && props.sessionFilter === "flagged"} icon="flag" label={props.t("flagged")} badge={props.sessions.filter(({ flagged, archived }) => flagged && !archived).length} onClick={() => props.onSessionFilter("flagged")} />
@@ -291,11 +338,11 @@ function Sidebar(props: {
         <div className="sidebar-heading"><span>{props.t("allSessions")}</span><span>{recent.length}</span></div>
         <div className="session-list">
           {recent.map((session) => (
-            <button className={`session-row ${session.id === props.selectedSessionId && props.view === "inbox" ? "selected" : ""}`} key={session.id} onClick={() => props.onSelect(session)}>
+            <Button variant="ghost" className={`session-row ${session.id === props.selectedSessionId && props.view === "inbox" ? "selected" : ""}`} key={session.id} onClick={() => props.onSelect(session)}>
               <span className={`status-dot ${session.running ? "running" : ""}`} />
               <span><strong>{session.title}</strong><small>{session.permissionMode === "auto" ? "Auto" : session.permissionMode === "explore" ? "Explore" : "Ask"}</small></span>
               {session.flagged ? <Icon name="flag" size={13} /> : null}
-            </button>
+            </Button>
           ))}
           {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
         </div>
@@ -308,20 +355,20 @@ function Sidebar(props: {
         <NavButton active={props.view === "browser"} icon="browser" label={props.t("browser")} onClick={() => props.onView("browser")} />
       </nav>
       <div className="workspace-list">
-        <div className="sidebar-heading"><span>{props.t("workspaces")}</span><button aria-label={props.t("add")} onClick={props.onAddWorkspace}><Icon name="plus" size={14} /></button></div>
+        <div className="sidebar-heading"><span>{props.t("workspaces")}</span><Button variant="ghost" size="icon" aria-label={props.t("add")} onClick={props.onAddWorkspace}><Icon name="plus" size={14} /></Button></div>
         {props.workspaces.filter(({ kind }) => kind === "folder").map((workspace) => (
-          <button className={workspace.id === props.selectedWorkspaceId ? "workspace-row selected" : "workspace-row"} key={workspace.id} onClick={() => props.onSelectWorkspace(workspace.id)}>
+          <Button variant="ghost" className={workspace.id === props.selectedWorkspaceId ? "workspace-row selected" : "workspace-row"} key={workspace.id} onClick={() => props.onSelectWorkspace(workspace.id)}>
             <Icon name="workspace" /><span><strong>{workspace.name}</strong><small>{titleFromPath(workspace.rootPath)}</small></span>
-          </button>
+          </Button>
         ))}
       </div>
-      <button className={`settings-row ${props.view === "settings" ? "selected" : ""}`} onClick={() => props.onView("settings")}><Icon name="settings" />{props.t("settings")}</button>
+      <Button variant="ghost" className={`settings-row ${props.view === "settings" ? "selected" : ""}`} onClick={() => props.onView("settings")}><Icon name="settings" />{props.t("settings")}</Button>
     </aside>
   );
 }
 
 function NavButton(props: { active: boolean; icon: IconName; label: string; badge?: number; onClick(): void }) {
-  return <button className={props.active ? "nav-button selected" : "nav-button"} onClick={props.onClick}><Icon name={props.icon} size={14} /><strong>{props.label}</strong>{props.badge ? <small>{props.badge}</small> : null}</button>;
+  return <Button variant="ghost" className={props.active ? "nav-button selected" : "nav-button"} onClick={props.onClick}><Icon name={props.icon} size={14} /><strong>{props.label}</strong>{props.badge ? <Badge>{props.badge}</Badge> : null}</Button>;
 }
 
 function Chat(props: {
@@ -346,6 +393,9 @@ function Chat(props: {
   const [streamed, setStreamed] = useState("");
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTitle, setRenameTitle] = useState(props.session?.title ?? "");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const activeSessionId = useRef(props.session?.id ?? null);
   const messageScroller = useRef<HTMLDivElement>(null);
   const streamQueue = useRef("");
@@ -451,50 +501,52 @@ function Chat(props: {
         <div><span className="header-context">{props.workspace?.name ?? props.t("personal")}</span><h1>{props.session?.title ?? props.t("newChat")}</h1></div>
         {props.session ? (
           <div className="header-actions">
-            <button title={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => props.onUpdate({ sessionId: props.session!.id, flagged: !props.session!.flagged })}><Icon name="flag" /></button>
-            <details className="session-menu">
-              <summary aria-label={`${props.t("rename")}, ${props.t("archive")}, ${props.t("delete")}`}><Icon name="more" /></summary>
-              <div>
-                <button onClick={(event) => {
-                  event.currentTarget.closest("details")?.removeAttribute("open");
-                  const title = window.prompt(props.t("rename"), props.session?.title);
-                  if (title?.trim()) props.onUpdate({ sessionId: props.session!.id, title: title.trim() });
-                }}>{props.t("rename")}</button>
-                <button onClick={(event) => {
-                  event.currentTarget.closest("details")?.removeAttribute("open");
-                  props.onUpdate({ sessionId: props.session!.id, archived: !props.session!.archived });
-                }}>{props.session.archived ? props.t("restore") : props.t("archive")}</button>
-                <button className="danger-link" onClick={(event) => {
-                  event.currentTarget.closest("details")?.removeAttribute("open");
-                  props.onDelete(props.session!.id);
-                }}>{props.t("delete")}</button>
-              </div>
-            </details>
+            <Button variant="ghost" size="icon" title={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => props.onUpdate({ sessionId: props.session!.id, flagged: !props.session!.flagged })}><Icon name="flag" /></Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label={`${props.t("rename")}, ${props.t("archive")}, ${props.t("delete")}`}><Icon name="more" /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem onSelect={() => {
+                    setRenameTitle(props.session?.title ?? "");
+                    setRenameOpen(true);
+                  }}>{props.t("rename")}</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => props.onUpdate({ sessionId: props.session!.id, archived: !props.session!.archived })}>
+                    {props.session.archived ? props.t("restore") : props.t("archive")}
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem className="text-[var(--danger)]" onSelect={() => setDeleteOpen(true)}>{props.t("delete")}</DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         ) : null}
       </header>
       <div className="message-scroller" ref={messageScroller}>
         {(messages.data?.length ?? 0) === 0 && pendingPrompt === null && streamed === "" && !send.isPending ? (
-          <div className="welcome">
+          <Empty className="welcome">
             <span className="welcome-mark">π</span>
-            <h2>{props.t("emptyTitle")}</h2>
-            <p>{props.t("emptyDetail")}</p>
+            <CardTitle>{props.t("emptyTitle")}</CardTitle>
+            <EmptyDescription>{props.t("emptyDetail")}</EmptyDescription>
             <div className="suggestions">
-              <button onClick={() => setInput("Review this workspace and summarize its architecture.")}><Icon name="command" />{props.t("reviewWorkspace")}</button>
-              <button onClick={() => setInput("Create a practical implementation plan for my goal.")}><Icon name="plan" />{props.t("createPlan")}</button>
-              <button onClick={() => setInput("Find the highest-impact issue to fix next.")}><Icon name="search" />{props.t("findNext")}</button>
+              <Button variant="outline" onClick={() => setInput("Review this workspace and summarize its architecture.")}><Icon name="command" />{props.t("reviewWorkspace")}</Button>
+              <Button variant="outline" onClick={() => setInput("Create a practical implementation plan for my goal.")}><Icon name="plan" />{props.t("createPlan")}</Button>
+              <Button variant="outline" onClick={() => setInput("Find the highest-impact issue to fix next.")}><Icon name="search" />{props.t("findNext")}</Button>
             </div>
-          </div>
+          </Empty>
         ) : <MessageList messages={messages.data ?? []} />}
         {pendingPrompt !== null ? <article className="message user pending"><span>You</span><div>{pendingPrompt}</div></article> : null}
         {streamed ? <article className="message assistant streaming"><span>Pi</span><div>{streamed}</div></article> : null}
-        {(savedAttachments.data?.length ?? 0) > 0 ? <div className="attachment-strip">{savedAttachments.data?.map((attachment) => <button key={attachment.id} onClick={() => void window.piWork.attachment.open(attachment.id)}><Icon name="file" /><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small></button>)}</div> : null}
+        {(savedAttachments.data?.length ?? 0) > 0 ? <div className="attachment-strip">{savedAttachments.data?.map((attachment) => <Button variant="outline" key={attachment.id} onClick={() => void window.piWork.attachment.open(attachment.id)}><Icon name="file" /><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small></Button>)}</div> : null}
         {send.isPending ? <ActivityCard title={props.t("sending")} detail={props.session?.workingDirectory ?? props.workspace?.rootPath ?? ""} /> : null}
         {approvals.map((approval) => (
-          <article className="approval-card" key={approval.approvalId}>
-            <div><strong>{approval.tool}</strong><p>{JSON.stringify(approval.arguments)}</p></div>
-            <div><button onClick={() => resolve(approval.approvalId, false)}>{props.t("deny")}</button><button className="primary" onClick={() => resolve(approval.approvalId, true)}>{props.t("approve")}</button></div>
-          </article>
+          <Card className="approval-card" key={approval.approvalId}>
+            <CardHeader><CardTitle>{approval.tool}</CardTitle><CardDescription>{JSON.stringify(approval.arguments)}</CardDescription></CardHeader>
+            <CardContent><Button variant="outline" onClick={() => resolve(approval.approvalId, false)}>{props.t("deny")}</Button><Button onClick={() => resolve(approval.approvalId, true)}>{props.t("approve")}</Button></CardContent>
+          </Card>
         ))}
       </div>
       <form
@@ -511,8 +563,9 @@ function Chat(props: {
             .catch((cause: Error) => props.onError(cause.message));
         }}
       >
-        {attachments.length > 0 ? <div className="composer-attachments">{attachments.map((attachment) => <span key={attachment.path}><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((current) => current.filter(({ path }) => path !== attachment.path))}><Icon name="close" size={13} /></button></span>)}</div> : null}
-        <textarea
+        {attachments.length > 0 ? <div className="composer-attachments">{attachments.map((attachment) => <span key={attachment.path}><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small><Button variant="ghost" size="icon" type="button" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((current) => current.filter(({ path }) => path !== attachment.path))}><Icon name="close" size={13} /></Button></span>)}</div> : null}
+        <Textarea
+          className="composer-input"
           rows={1}
           value={input}
           placeholder={props.t("message")}
@@ -530,32 +583,60 @@ function Chat(props: {
         />
         <div className="composer-toolbar">
           <div>
-            <button className="toolbar-icon-button" type="button" title={props.t("attach")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected)))}><Icon name="paperclip" /></button>
-            <select aria-label="Permission mode" value={permissionMode} onChange={(event) => setPermissionMode(event.target.value as PermissionMode)}>
-              <option value="explore">{props.t("explore")}</option><option value="ask">{props.t("ask")}</option><option value="auto">{props.t("auto")}</option>
-            </select>
-            <button type="button" className={planMode ? "toggle active" : "toggle"} onClick={() => setPlanMode(!planMode)}><Icon name="plan" size={14} />{props.t("planMode")}</button>
+            <Button variant="ghost" size="icon" className="toolbar-icon-button" type="button" title={props.t("attach")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected)))}><Icon name="paperclip" /></Button>
+            <Select value={permissionMode} onValueChange={(value) => setPermissionMode(value as PermissionMode)}>
+              <SelectTrigger className="composer-select" aria-label="Permission mode"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value="explore">{props.t("explore")}</SelectItem>
+                <SelectItem value="ask">{props.t("ask")}</SelectItem>
+                <SelectItem value="auto">{props.t("auto")}</SelectItem>
+              </SelectGroup></SelectContent>
+            </Select>
+            <Toggle type="button" pressed={planMode} onPressedChange={setPlanMode}><Icon name="plan" size={14} />{props.t("planMode")}</Toggle>
           </div>
           <div>
-            <select aria-label="Model" value={`${providerId}/${modelId}`} onChange={(event) => {
-              const [provider, ...model] = event.target.value.split("/");
+            <Select value={`${providerId}/${modelId}`} onValueChange={(value) => {
+              const [provider, ...model] = value.split("/");
               setProviderId(provider ?? "");
               setModelId(model.join("/"));
             }}>
-              {availableModels.map((model) => <option key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.modelName}</option>)}
-            </select>
-            <select aria-label="Thinking" value={thinkingLevel} onChange={(event) => setThinkingLevel(event.target.value as ThinkingLevel)}>
-              {(selectedModel?.thinkingLevels ?? ["off"]).map((level) => <option key={level}>{level}</option>)}
-            </select>
+              <SelectTrigger className="model-select" aria-label="Model"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>{availableModels.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.modelName}</SelectItem>)}</SelectGroup></SelectContent>
+            </Select>
+            <Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as ThinkingLevel)}>
+              <SelectTrigger className="thinking-select" aria-label="Thinking"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>{(selectedModel?.thinkingLevels ?? ["off"]).map((level) => <SelectItem key={level} value={level}>{level}</SelectItem>)}</SelectGroup></SelectContent>
+            </Select>
             {send.isPending ? (
-              <button className="send-button stop-button" type="button" aria-label="Stop generating" onClick={() => {
+              <Button size="icon" className="send-button stop-button" type="button" aria-label="Stop generating" onClick={() => {
                 const sessionId = activeSessionId.current;
                 if (sessionId !== null) void window.piWork.session.stop(sessionId);
-              }}><Icon name="stop" size={14} /></button>
-            ) : <button className="send-button" aria-label="Send" disabled={input.trim() === ""}><Icon name="arrow-up" size={15} /></button>}
+              }}><Icon name="stop" size={14} /></Button>
+            ) : <Button size="icon" className="send-button" aria-label="Send" disabled={input.trim() === ""}><Icon name="arrow-up" size={15} /></Button>}
           </div>
         </div>
       </form>
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{props.t("rename")}</DialogTitle><DialogDescription>{props.session?.title}</DialogDescription></DialogHeader>
+          <Input autoFocus value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => {
+            if (event.key === "Enter" && renameTitle.trim()) {
+              props.onUpdate({ sessionId: props.session!.id, title: renameTitle.trim() });
+              setRenameOpen(false);
+            }
+          }} />
+          <DialogFooter><Button variant="outline" onClick={() => setRenameOpen(false)}>{props.t("cancel")}</Button><Button disabled={!renameTitle.trim()} onClick={() => {
+            props.onUpdate({ sessionId: props.session!.id, title: renameTitle.trim() });
+            setRenameOpen(false);
+          }}>{props.t("save")}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>{props.t("delete")}</AlertDialogTitle><AlertDialogDescription>“{props.session?.title}”</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => props.session && props.onDelete(props.session.id)}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 
@@ -601,7 +682,7 @@ function MessageList({ messages }: { messages: ChatMessage[] }) {
 }
 
 function ActivityCard({ title, detail }: { title: string; detail: string }) {
-  return <article className="activity-card"><span className="spinner" /><div><strong>{title}</strong><small>{detail}</small></div></article>;
+  return <Card className="activity-card"><Spinner /><CardHeader><CardTitle>{title}</CardTitle><CardDescription>{detail}</CardDescription></CardHeader></Card>;
 }
 
 function BrowserPage({ session, t }: { session: Session | null; t: (key: MessageKey) => string }) {
@@ -638,14 +719,14 @@ function BrowserPage({ session, t }: { session: Session | null; t: (key: Message
 
   return <section className="browser-page">
     <header className="browser-toolbar">
-      <button aria-label="Back" disabled={!state.canGoBack} onClick={() => void window.piWork.browser.back()}><Icon name="back" /></button>
-      <button aria-label="Forward" disabled={!state.canGoForward} onClick={() => void window.piWork.browser.forward()}><Icon name="forward" /></button>
-      <button aria-label={state.loading ? "Stop" : "Reload"} onClick={() => void window.piWork.browser.reload()}><Icon name={state.loading ? "close" : "refresh"} /></button>
-      <form onSubmit={(event) => { event.preventDefault(); void window.piWork.browser.navigate(address); }}><Icon name="search" /><input value={address} onChange={(event) => setAddress(event.target.value)} /></form>
-      <button aria-label="Open externally" onClick={() => void window.piWork.browser.openExternal()}><Icon name="external" /></button>
+      <Button variant="ghost" size="icon" aria-label="Back" disabled={!state.canGoBack} onClick={() => void window.piWork.browser.back()}><Icon name="back" /></Button>
+      <Button variant="ghost" size="icon" aria-label="Forward" disabled={!state.canGoForward} onClick={() => void window.piWork.browser.forward()}><Icon name="forward" /></Button>
+      <Button variant="ghost" size="icon" aria-label={state.loading ? "Stop" : "Reload"} onClick={() => void window.piWork.browser.reload()}><Icon name={state.loading ? "close" : "refresh"} /></Button>
+      <form onSubmit={(event) => { event.preventDefault(); void window.piWork.browser.navigate(address); }}><Icon name="search" /><Input value={address} onChange={(event) => setAddress(event.target.value)} /></form>
+      <Button variant="ghost" size="icon" aria-label="Open externally" onClick={() => void window.piWork.browser.openExternal()}><Icon name="external" /></Button>
     </header>
     <div className="browser-layout">
-      <aside className="browser-companion"><span className="header-context">{t("inbox")}</span><h2>{session?.title ?? t("newChat")}</h2><p>{session?.goal ?? t("emptyDetail")}</p><div className="browser-note">The browser is isolated from Pi Work and only permits HTTP(S) navigation.</div></aside>
+      <aside className="browser-companion"><span className="header-context">{t("inbox")}</span><h2>{session?.title ?? t("newChat")}</h2><p>{session?.goal ?? t("emptyDetail")}</p><Alert className="browser-note"><AlertDescription>The browser is isolated from Pi Work and only permits HTTP(S) navigation.</AlertDescription></Alert></aside>
       <div className="browser-host" ref={hostRef} aria-label={state.title || t("browser")} />
     </div>
   </section>;
@@ -659,6 +740,8 @@ function ProjectsPage(props: { sessions: Session[]; workspaceId: string | null; 
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"board" | "list">("board");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [projectName, setProjectName] = useState("");
   const projects = useQuery({ queryKey: ["projects", props.workspaceId], queryFn: () => window.piWork.project.list(props.workspaceId) });
   const visibleSessions = props.sessions.filter((session) => (
     (props.workspaceId === null || session.workspaceId === props.workspaceId)
@@ -666,12 +749,12 @@ function ProjectsPage(props: { sessions: Session[]; workspaceId: string | null; 
     && !session.archived
   ));
   const create = useMutation({
-    mutationFn: () => {
-      const name = window.prompt(`${props.t("add")} ${props.t("projects")}`);
-      if (!name?.trim()) throw new Error("cancelled");
-      return window.piWork.project.create({ workspaceId: props.workspaceId, value: { name: name.trim(), description: "", color: "#737373", archived: false } });
+    mutationFn: (name: string) => window.piWork.project.create({ workspaceId: props.workspaceId, value: { name, description: "", color: "#737373", archived: false } }),
+    onSuccess: async () => {
+      setProjectName("");
+      setCreateOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
   });
   const columns = [
     ["draft", "Backlog"],
@@ -688,20 +771,23 @@ function ProjectsPage(props: { sessions: Session[]; workspaceId: string | null; 
     await props.onRefresh();
   }
   return (
-    <Page title={props.t("projects")} action={<div className="segmented"><button className={mode === "board" ? "active" : ""} onClick={() => setMode("board")}>{props.t("board")}</button><button className={mode === "list" ? "active" : ""} onClick={() => setMode("list")}>{props.t("list")}</button><Button onClick={() => create.mutate()}><Icon name="plus" size={14} />{props.t("add")}</Button></div>}>
-      <div className="project-tabs"><button className={selectedProjectId === null ? "active" : ""} onClick={() => setSelectedProjectId(null)}>All</button>{(projects.data ?? []).map((project) => <button className={selectedProjectId === project.id ? "active" : ""} key={project.id} onClick={() => setSelectedProjectId(project.id)}>{project.name}</button>)}</div>
+    <Page title={props.t("projects")} action={<div className="segmented"><ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup><Button onClick={() => setCreateOpen(true)}><Icon name="plus" size={14} />{props.t("add")}</Button></div>}>
+      <Tabs value={selectedProjectId ?? "all"} onValueChange={(value) => setSelectedProjectId(value === "all" ? null : value)}>
+        <TabsList className="project-tabs"><TabsTrigger value="all">All</TabsTrigger>{(projects.data ?? []).map((project) => <TabsTrigger key={project.id} value={project.id}>{project.name}</TabsTrigger>)}</TabsList>
+      </Tabs>
       {mode === "board" ? (
         <div className="kanban">{columns.map(([status, label]) => {
           const columnSessions = visibleSessions.filter((session) => session.status === status);
           return <section className="kanban-column" key={status} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
             const sessionId = event.dataTransfer.getData("application/x-pi-work-session");
             if (sessionId !== "") void moveSession(sessionId, status);
-          }}><header><strong>{label}</strong><span>{columnSessions.length}</span></header>{columnSessions.map((session) => <button className="task-card" draggable key={session.id} onDragStart={(event) => {
+          }}><header><strong>{label}</strong><span>{columnSessions.length}</span></header>{columnSessions.map((session) => <Button className="task-card" draggable key={session.id} onDragStart={(event) => {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("application/x-pi-work-session", session.id);
-          }} onClick={() => props.onOpen(session)}><strong>{session.title}</strong><p>{session.goal}</p><footer><span>{session.modelId?.split("/").at(-1) ?? "Pi"}</span>{session.flagged ? <Icon name="flag" size={13} /> : <span />}</footer></button>)}</section>;
+          }} variant="outline" onClick={() => props.onOpen(session)}><strong>{session.title}</strong><p>{session.goal}</p><footer><span>{session.modelId?.split("/").at(-1) ?? "Pi"}</span>{session.flagged ? <Icon name="flag" size={13} /> : <span />}</footer></Button>)}</section>;
         })}</div>
-      ) : <div className="data-list">{visibleSessions.map((session) => <button key={session.id} onClick={() => props.onOpen(session)}><strong>{session.title}</strong><span>{session.status}</span><small>{session.updatedAt.slice(0, 10)}</small></button>)}</div>}
+      ) : <div className="data-list">{visibleSessions.map((session) => <Button variant="ghost" key={session.id} onClick={() => props.onOpen(session)}><strong>{session.title}</strong><span>{session.status}</span><small>{session.updatedAt.slice(0, 10)}</small></Button>)}</div>}
+      <NameDialog open={createOpen} onOpenChange={setCreateOpen} title={`${props.t("add")} ${props.t("projects")}`} value={projectName} onValueChange={setProjectName} onSubmit={() => projectName.trim() && create.mutate(projectName.trim())} t={props.t} />
     </Page>
   );
 }
@@ -756,17 +842,54 @@ function DomainPage<T extends { id: string; name: string; enabled: boolean }>(pr
   t: (key: MessageKey) => string;
 }) {
   const queryClient = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [deleteItem, setDeleteItem] = useState<T | null>(null);
   const query = useQuery({ queryKey: [props.queryKey], queryFn: props.list });
   const refresh = () => queryClient.invalidateQueries({ queryKey: [props.queryKey] });
-  const create = useMutation({ mutationFn: props.create, onSuccess: refresh });
+  const create = useMutation({ mutationFn: props.create, onSuccess: async () => {
+    setName("");
+    setCreateOpen(false);
+    await refresh();
+  } });
   const update = useMutation({ mutationFn: props.update, onSuccess: refresh });
   const remove = useMutation({ mutationFn: props.remove, onSuccess: refresh });
-  return <Page title={props.title} action={<Button onClick={() => { const name = window.prompt(`${props.t("add")} ${props.title}`); if (name?.trim()) create.mutate(name.trim()); }}><Icon name="plus" size={14} />{props.t("add")}</Button>}>
+  return <Page title={props.title} action={<Button onClick={() => setCreateOpen(true)}><Icon name="plus" size={14} />{props.t("add")}</Button>}>
     <div className="resource-grid">
-      {(query.data ?? []).map((item) => <article className="resource-card" key={item.id}><div className="resource-icon"><Icon name="workspace" /></div><div><h3>{item.name}</h3><p>{props.renderDetail(item)}</p></div><button className={`switch ${item.enabled ? "on" : ""}`} onClick={() => update.mutate(item)}><span /></button><button className="card-delete" aria-label="Delete" onClick={() => remove.mutate(item.id)}><Icon name="close" size={14} /></button></article>)}
-      {(query.data?.length ?? 0) === 0 ? <div className="empty-card">{props.t("noItems")}</div> : null}
+      {(query.data ?? []).map((item) => <Card className="resource-card" key={item.id}><div className="resource-icon"><Icon name="workspace" /></div><CardHeader className="resource-copy"><CardTitle>{item.name}</CardTitle><CardDescription>{props.renderDetail(item)}</CardDescription></CardHeader><Switch checked={item.enabled} aria-label={`${item.name}: ${props.t(item.enabled ? "enabled" : "disabled")}`} onCheckedChange={() => update.mutate(item)} /><Button variant="ghost" size="icon" className="card-delete" aria-label="Delete" onClick={() => setDeleteItem(item)}><Icon name="close" size={14} /></Button></Card>)}
+      {(query.data?.length ?? 0) === 0 ? <Empty className="empty-card"><EmptyDescription>{props.t("noItems")}</EmptyDescription></Empty> : null}
     </div>
+    <NameDialog open={createOpen} onOpenChange={setCreateOpen} title={`${props.t("add")} ${props.title}`} value={name} onValueChange={setName} onSubmit={() => name.trim() && create.mutate(name.trim())} t={props.t} />
+    <AlertDialog open={deleteItem !== null} onOpenChange={(open) => { if (!open) setDeleteItem(null); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>{props.t("delete")}</AlertDialogTitle><AlertDialogDescription>“{deleteItem?.name}”</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => {
+          if (deleteItem !== null) remove.mutate(deleteItem.id);
+          setDeleteItem(null);
+        }}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </Page>;
+}
+
+function NameDialog(props: {
+  open: boolean;
+  title: string;
+  value: string;
+  t: (key: MessageKey) => string;
+  onOpenChange(open: boolean): void;
+  onValueChange(value: string): void;
+  onSubmit(): void;
+}) {
+  return <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <DialogContent>
+      <DialogHeader><DialogTitle>{props.title}</DialogTitle><DialogDescription>{props.t("add")}</DialogDescription></DialogHeader>
+      <Input autoFocus value={props.value} onChange={(event) => props.onValueChange(event.target.value)} onKeyDown={(event) => {
+        if (event.key === "Enter" && props.value.trim()) props.onSubmit();
+      }} />
+      <DialogFooter><Button variant="outline" onClick={() => props.onOpenChange(false)}>{props.t("cancel")}</Button><Button disabled={!props.value.trim()} onClick={props.onSubmit}>{props.t("save")}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
 }
 
 function SettingsPage({ settings, onRefresh, t }: { settings: AppSettings | undefined; onRefresh(): Promise<unknown>; t: (key: MessageKey) => string }) {
@@ -784,9 +907,25 @@ function SettingsPage({ settings, onRefresh, t }: { settings: AppSettings | unde
   });
   return <Page title={t("settings")}>
     <div className="settings-grid">
-      <section className="settings-card"><h2>{t("appearance")}</h2><label>{t("theme")}<select value={settings?.theme ?? "system"} onChange={(event) => updateSettings({ theme: event.target.value as AppSettings["theme"] })}><option value="system">{t("system")}</option><option value="light">{t("light")}</option><option value="dark">{t("dark")}</option></select></label><label>{t("language")}<select value={settings?.language ?? "en"} onChange={(event) => updateSettings({ language: event.target.value as AppSettings["language"] })}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label></section>
-      <section className="settings-card"><h2>{t("providers")}</h2><div className="provider-entry"><select value={providerId} onChange={(event) => setProviderId(event.target.value)}>{providerOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="API key" /><Button disabled={!providerId || !apiKey} onClick={() => saveProvider.mutate()}>{t("save")}</Button></div><div className="chips">{(providers.data ?? []).map((provider) => <span key={provider.providerId}>{provider.providerId} ✓</span>)}</div></section>
-      <section className="settings-card"><h2>{t("keyboard")}</h2><div className="shortcut-list"><span>{t("search")} <kbd>⌘ K</kbd></span><span>{t("newChat")} <kbd>⌘ N</kbd></span><span>{t("sidebar")} <kbd>⌘ B</kbd></span></div></section>
+      <Card className="settings-card">
+        <CardHeader><CardTitle>{t("appearance")}</CardTitle></CardHeader>
+        <CardContent><FieldGroup>
+          <Field className="settings-field"><FieldLabel>{t("theme")}</FieldLabel><Select value={settings?.theme ?? "system"} onValueChange={(value) => updateSettings({ theme: value as AppSettings["theme"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="system">{t("system")}</SelectItem><SelectItem value="light">{t("light")}</SelectItem><SelectItem value="dark">{t("dark")}</SelectItem></SelectGroup></SelectContent></Select></Field>
+          <Field className="settings-field"><FieldLabel>{t("language")}</FieldLabel><Select value={settings?.language ?? "en"} onValueChange={(value) => updateSettings({ language: value as AppSettings["language"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="en">English</SelectItem><SelectItem value="zh-CN">简体中文</SelectItem></SelectGroup></SelectContent></Select></Field>
+        </FieldGroup></CardContent>
+      </Card>
+      <Card className="settings-card">
+        <CardHeader><CardTitle>{t("providers")}</CardTitle></CardHeader>
+        <CardContent className="provider-content"><FieldGroup className="provider-entry">
+          <Field><FieldLabel>{t("providers")}</FieldLabel><Select value={providerId} onValueChange={setProviderId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerOptions.map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+          <Field><FieldLabel>API key</FieldLabel><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="API key" /></Field>
+          <Button disabled={!providerId || !apiKey} onClick={() => saveProvider.mutate()}>{t("save")}</Button>
+        </FieldGroup><div className="chips">{(providers.data ?? []).map((provider) => <Badge key={provider.providerId}>{provider.providerId} ✓</Badge>)}</div></CardContent>
+      </Card>
+      <Card className="settings-card">
+        <CardHeader><CardTitle>{t("keyboard")}</CardTitle></CardHeader>
+        <CardContent><div className="shortcut-list"><span>{t("search")} <kbd>⌘ K</kbd></span><span>{t("newChat")} <kbd>⌘ N</kbd></span><span>{t("sidebar")} <kbd>⌘ B</kbd></span></div></CardContent>
+      </Card>
     </div>
   </Page>;
 }
