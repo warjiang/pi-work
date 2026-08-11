@@ -4,22 +4,37 @@ import { resolve } from "node:path";
 
 const releaseDirectory = resolve("release");
 const candidates = await readdir(releaseDirectory, { withFileTypes: true });
-const unpacked = candidates.find((candidate) => candidate.isDirectory() && candidate.name.includes("mac"));
+const unpackedCandidates = candidates.filter(
+  (candidate) => candidate.isDirectory() && candidate.name.includes("mac"),
+);
 
-if (unpacked === undefined) {
+if (unpackedCandidates.length === 0) {
   throw new Error("No macOS unpacked application was found in the release directory.");
 }
 
-const runtimeDirectory = resolve(
-  releaseDirectory,
-  unpacked.name,
-  "Pi Work.app",
-  "Contents",
-  "Resources",
-  "pi-runtime",
-);
+let runtimeDirectory: string | undefined;
+for (const unpacked of unpackedCandidates) {
+  const candidateRuntimeDirectory = resolve(
+    releaseDirectory,
+    unpacked.name,
+    "Pi Work.app",
+    "Contents",
+    "Resources",
+    "pi-runtime",
+  );
+  try {
+    await access(resolve(candidateRuntimeDirectory, "agent-service.js"));
+    runtimeDirectory = candidateRuntimeDirectory;
+    break;
+  } catch {
+    // Ignore stale unpacked outputs from a different target architecture.
+  }
+}
 
-await access(resolve(runtimeDirectory, "agent-service.js"));
+if (runtimeDirectory === undefined) {
+  throw new Error("No macOS unpacked application contains the Pi runtime.");
+}
+
 await access(resolve(runtimeDirectory, "chunks"));
 const sdkDirectory = resolve(runtimeDirectory, "node_modules", "@earendil-works", "pi-coding-agent");
 await access(resolve(sdkDirectory, "package.json"));
