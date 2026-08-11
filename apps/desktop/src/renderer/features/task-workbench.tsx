@@ -590,7 +590,7 @@ export function TaskWorkbench(props: {
   return (
     <section className={`task-workbench ${!personal && props.inspectorOpen ? "inspector-visible" : ""}`}>
       <div className="execution-pane">
-        <header className="task-context-header">
+        <header className={`task-context-header ${personal ? "task-context-header-personal" : ""}`}>
           <div className="task-context-title">
             <span>{personal ? props.t("privateSandbox") : (props.workspace?.name ?? props.t("workFolder"))}</span>
             <h1>{props.session.title}</h1>

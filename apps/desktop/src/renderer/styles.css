@@ -3693,6 +3693,38 @@ textarea,
   padding: 15px 24px 14px 28px;
 }
 
+.task-context-header-personal {
+  min-height: 62px;
+  align-items: center;
+  padding-block: 10px;
+}
+
+.task-context-header-personal .task-context-title {
+  min-width: 0;
+}
+
+.task-context-header-personal .task-context-title > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+}
+
+.task-context-header-personal .task-context-title h1 {
+  min-width: 0;
+  margin-top: 0;
+  font-size: 18px;
+  font-weight: 670;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.task-context-header-personal .task-header-actions {
+  align-self: center;
+}
+
 .task-context-title h1 {
   margin-top: 3px;
   font-family: var(--font-display);
