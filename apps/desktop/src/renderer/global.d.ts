@@ -73,6 +73,9 @@ declare global {
       attachment: {
         choose(): Promise<AttachmentDraft[]>;
         fromFiles(files: File[]): Promise<AttachmentDraft[]>;
+        fromClipboardImage(input: { mimeType: string; bytes: Uint8Array }): Promise<AttachmentDraft>;
+        previewDraft(input: AttachmentDraft): Promise<string>;
+        preview(attachmentId: string): Promise<string>;
         open(attachmentId: string): Promise<string>;
       };
       task: {

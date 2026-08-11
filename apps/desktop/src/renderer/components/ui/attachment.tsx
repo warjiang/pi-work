@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils.js";
 import { Button, type ButtonProps } from "./button.js";
 
 const attachmentVariants = cva(
-  "group/attachment relative flex max-w-full min-w-0 shrink-0 items-center rounded-lg border border-border bg-card text-card-foreground transition-colors",
+  "group/attachment relative flex max-w-full min-w-0 shrink-0 items-center rounded-[var(--radius-surface)] border border-border bg-card text-card-foreground transition-colors",
   {
     variants: {
       size: {
@@ -40,7 +40,7 @@ export function AttachmentMedia({ className, ...props }: ComponentProps<"div">) 
   return (
     <div
       data-slot="attachment-media"
-      className={cn("flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground", className)}
+      className={cn("flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-muted text-muted-foreground", className)}
       {...props}
     />
   );

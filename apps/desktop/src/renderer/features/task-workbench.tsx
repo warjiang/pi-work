@@ -5,6 +5,7 @@ import type {
   Activity,
   AppSettings,
   Artifact,
+  Attachment as StoredAttachment,
   AttachmentDraft,
   ChatMessage,
   Label,
@@ -61,6 +62,7 @@ import {
 import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
 import { Icon } from "../components/ui/icon.js";
 import { Input } from "../components/ui/input.js";
+import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog.js";
 import {
   Select,
   SelectContent,
@@ -94,44 +96,67 @@ function selectedModel(models: ModelOption[], providerId: string, modelId: strin
   return models.find((model) => model.providerId === providerId && model.modelId === modelId);
 }
 
-function attachmentPreviewUrl(path: string): string {
-  const normalized = path.replaceAll("\\", "/");
-  const encoded = normalized
-    .split("/")
-    .map((segment, index) => index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment))
-    .join("/");
-  return `file://${normalized.startsWith("/") ? "" : "/"}${encoded}`;
-}
-
 function attachmentDescription(attachment: AttachmentDraft): string {
   const subtype = attachment.mimeType.split("/").at(-1)?.split("+").at(0)?.toLocaleUpperCase() ?? "FILE";
   return `${subtype} · ${formatBytes(attachment.size)}`;
+}
+
+export function visibleAssistantContent(content: string): string {
+  return content
+    .replace(
+      /(^|\n)Attached files:\s*\n(?:[ \t]*[-*]\s+\/[^\n]*(?:\n|$))+/gi,
+      (_manifest, prefix: string) => (prefix === "\n" ? "\n" : ""),
+    )
+    .replace(/^\n+/, "");
 }
 
 function ComposerAttachment(props: {
   attachment: AttachmentDraft;
   removeLabel: string;
   onRemove(): void;
+  onPreview(): void;
 }) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const image = props.attachment.mimeType.startsWith("image/") && !thumbnailFailed;
+  const previewable = props.attachment.mimeType.startsWith("image/");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!previewable || typeof window.piWork.attachment.previewDraft !== "function") return;
+    let active = true;
+    void window.piWork.attachment.previewDraft(props.attachment)
+      .then((url) => {
+        if (active) setImageUrl(url);
+      })
+      .catch(() => {
+        if (active) setThumbnailFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [previewable, props.attachment]);
+  const content = <>
+    <AttachmentMedia>
+      {imageUrl !== null && !thumbnailFailed ? (
+        <img
+          src={imageUrl}
+          alt={props.attachment.name}
+          onError={() => setThumbnailFailed(true)}
+        />
+      ) : (
+        <Icon name="file" />
+      )}
+    </AttachmentMedia>
+    <AttachmentContent>
+      <AttachmentTitle>{props.attachment.name}</AttachmentTitle>
+      <AttachmentDescription>{attachmentDescription(props.attachment)}</AttachmentDescription>
+    </AttachmentContent>
+  </>;
   return (
     <Attachment size="sm" className="composer-attachment">
-      <AttachmentMedia>
-        {image ? (
-          <img
-            src={attachmentPreviewUrl(props.attachment.path)}
-            alt={props.attachment.name}
-            onError={() => setThumbnailFailed(true)}
-          />
-        ) : (
-          <Icon name="file" />
-        )}
-      </AttachmentMedia>
-      <AttachmentContent>
-        <AttachmentTitle>{props.attachment.name}</AttachmentTitle>
-        <AttachmentDescription>{attachmentDescription(props.attachment)}</AttachmentDescription>
-      </AttachmentContent>
+      {previewable ? (
+        <button type="button" className="composer-attachment-preview" aria-label={`Preview ${props.attachment.name}`} onClick={props.onPreview}>
+          {content}
+        </button>
+      ) : content}
       <AttachmentActions>
         <AttachmentAction type="button" aria-label={props.removeLabel} onClick={props.onRemove}>
           <Icon name="close" />
@@ -151,6 +176,7 @@ function ComposerPermissionMenu(props: {
   onPlanModeChange(enabled: boolean): void;
 }) {
   const permission = permissionLabel(props.permissionMode, props.t);
+  const permissionIcon = permissionModeIcon(props.permissionMode);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -158,22 +184,36 @@ function ComposerPermissionMenu(props: {
           variant="ghost"
           size="sm"
           type="button"
-          className="composer-permission-trigger"
+          className={`composer-permission-trigger is-${props.permissionMode}`}
           aria-label={`${props.t("confirmation")}: ${permission}`}
           disabled={props.disabled}
         >
-          <Icon name="lock" />
+          <Icon name={permissionIcon} />
           <span>{permission}</span>
-          <Icon name="chevron-down" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8} className="composer-permission-menu">
         <DropdownMenuGroup>
           <DropdownMenuLabel>{props.t("confirmation")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={props.permissionMode} onValueChange={(value) => props.onPermissionChange(value as PermissionMode)}>
-            <DropdownMenuRadioItem value="ask">{props.t("askEveryTime")}</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="explore">{props.t("exploreOnly")}</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="auto">{props.t("automatic")}</DropdownMenuRadioItem>
+            <PermissionModeOption
+              mode="ask"
+              icon="lock"
+              title={props.t("askEveryTime")}
+              detail={props.t("askEveryTimeDetail")}
+            />
+            <PermissionModeOption
+              mode="explore"
+              icon="eye"
+              title={props.t("exploreOnly")}
+              detail={props.t("exploreOnlyDetail")}
+            />
+            <PermissionModeOption
+              mode="auto"
+              icon="terminal"
+              title={props.t("automatic")}
+              detail={props.t("automaticDetail")}
+            />
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
         {props.showPlanMode ? (
@@ -198,6 +238,23 @@ function ComposerPermissionMenu(props: {
   );
 }
 
+function PermissionModeOption(props: {
+  mode: PermissionMode;
+  icon: "eye" | "lock" | "terminal";
+  title: string;
+  detail: string;
+}) {
+  return (
+    <DropdownMenuRadioItem value={props.mode} className={`composer-permission-option is-${props.mode}`}>
+      <span className="composer-permission-option-icon"><Icon name={props.icon} /></span>
+      <span className="composer-permission-option-copy">
+        <strong>{props.title}</strong>
+        <small>{props.detail}</small>
+      </span>
+    </DropdownMenuRadioItem>
+  );
+}
+
 function ComposerModelMenu(props: {
   models: ModelOption[];
   activeModel: ModelOption | undefined;
@@ -210,19 +267,23 @@ function ComposerModelMenu(props: {
   onThinkingChange(value: string): void;
 }) {
   const thinking = thinkingLevelLabel(props.thinkingLevel, props.t);
+  const activeModelLabel = props.activeModel
+    ? `${props.activeModel.providerName}/${props.activeModel.modelName}`
+    : props.t("noModel");
+  const activeModelSummary = activeModelLabel;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="secondary"
+          variant="ghost"
           size="sm"
           type="button"
           className="composer-model-trigger"
-          aria-label={`${props.t("model")}: ${props.activeModel?.modelName ?? props.t("noModel")}; ${props.t("thinking")}: ${thinking}`}
+          aria-label={`${props.t("model")}: ${activeModelSummary}; ${props.t("thinking")}: ${thinking}`}
           disabled={props.disabled}
         >
           <span className="composer-model-summary">
-            <span>{props.activeModel?.modelName ?? props.t("noModel")}</span>
+            <span title={activeModelSummary}>{activeModelSummary}</span>
             <span>{thinking}</span>
           </span>
           <Icon name="chevron-down" />
@@ -231,23 +292,24 @@ function ComposerModelMenu(props: {
       <DropdownMenuContent side="top" align="end" sideOffset={8} className="composer-execution-menu">
         <DropdownMenuGroup>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger className="composer-execution-subtrigger">
               <span>{props.t("model")}</span>
-              <span className="composer-menu-value" title={props.activeModel ? `${props.activeModel.providerName} · ${props.activeModel.modelName}` : undefined}>
-                {props.activeModel?.modelName ?? props.t("noModel")}
+              <span className="composer-menu-value" title={activeModelSummary}>
+                {activeModelSummary}
               </span>
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="composer-model-submenu">
+            <DropdownMenuSubContent className="composer-choice-submenu composer-model-submenu">
               <DropdownMenuGroup>
-                <DropdownMenuLabel>{props.t("model")}</DropdownMenuLabel>
+                <DropdownMenuLabel className="composer-choice-label">{props.t("model")}</DropdownMenuLabel>
                 <DropdownMenuRadioGroup value={props.activeModelKey} onValueChange={props.onModelChange}>
                   {props.models.map((model) => {
                     const key = `${model.providerId}/${model.modelId}`;
                     return (
-                      <DropdownMenuRadioItem key={key} value={key}>
+                      <DropdownMenuRadioItem key={key} value={key} className="composer-choice-option">
                         <span className="composer-model-option">
-                          <strong>{model.modelName}</strong>
-                          <small>{model.providerName}</small>
+                          <strong title={`${model.providerName}/${model.modelName}`}>
+                            {model.providerName}/{model.modelName}
+                          </strong>
                         </span>
                       </DropdownMenuRadioItem>
                     );
@@ -257,16 +319,16 @@ function ComposerModelMenu(props: {
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger disabled={props.activeModel === undefined}>
+            <DropdownMenuSubTrigger className="composer-execution-subtrigger" disabled={props.activeModel === undefined}>
               <span>{props.t("thinking")}</span>
               <span className="composer-menu-value">{thinking}</span>
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
+            <DropdownMenuSubContent className="composer-choice-submenu">
               <DropdownMenuGroup>
-                <DropdownMenuLabel>{props.t("thinking")}</DropdownMenuLabel>
+                <DropdownMenuLabel className="composer-choice-label">{props.t("thinking")}</DropdownMenuLabel>
                 <DropdownMenuRadioGroup value={props.thinkingLevel} onValueChange={props.onThinkingChange}>
                   {props.thinkingLevels.map((level) => (
-                    <DropdownMenuRadioItem key={level} value={level}>
+                    <DropdownMenuRadioItem key={level} value={level} className="composer-choice-option">
                       {thinkingLevelLabel(level, props.t)}
                     </DropdownMenuRadioItem>
                   ))}
@@ -386,6 +448,8 @@ export function TaskWorkbench(props: {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [promotionOpen, setPromotionOpen] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<Pick<AttachmentDraft, "name" | "mimeType"> | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [promotionWorkspaceId, setPromotionWorkspaceId] = useState(props.folders[0]?.id ?? "");
   const [publishingAll, setPublishingAll] = useState(false);
   const [providerId, setProviderId] = useState(props.session.providerId ?? props.settings?.providerId ?? "");
@@ -402,6 +466,7 @@ export function TaskWorkbench(props: {
   const messages = useQuery({
     queryKey: ["messages", sessionId],
     queryFn: () => window.piWork.session.messages(sessionId),
+    refetchInterval: props.session.running ? 1_000 : false,
   });
   const activities = useQuery({
     queryKey: ["activities", sessionId],
@@ -411,6 +476,7 @@ export function TaskWorkbench(props: {
   const savedAttachments = useQuery({
     queryKey: ["attachments", sessionId],
     queryFn: () => window.piWork.session.attachments(sessionId),
+    refetchInterval: props.session.running ? 1_000 : false,
   });
   const plan = useQuery({
     queryKey: ["plan", sessionId],
@@ -444,8 +510,15 @@ export function TaskWorkbench(props: {
     if (eventSessionId !== sessionId) return;
     if (event.kind === "text_delta" && typeof event.payload.delta === "string") enqueueStream(event.payload.delta);
     setLiveProcess((current) => reduceLiveProcess(current, event.kind, event.payload, props.t));
-    if (event.kind === "completed" || event.kind === "cancelled") void queryClient.invalidateQueries({ queryKey: ["activities", sessionId] });
-  }), [props.t, queryClient, sessionId]);
+    if (event.kind === "completed" || event.kind === "cancelled") {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["activities", sessionId] }),
+        props.onRefresh(),
+      ]);
+    }
+  }), [props.onRefresh, props.t, queryClient, sessionId]);
   useEffect(() => () => {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
@@ -475,6 +548,7 @@ export function TaskWorkbench(props: {
     await Promise.all([
       props.onRefresh(),
       queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
+      queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
       queryClient.invalidateQueries({ queryKey: ["activities", sessionId] }),
       queryClient.invalidateQueries({ queryKey: ["plan", sessionId] }),
       queryClient.invalidateQueries({ queryKey: ["artifacts", sessionId] }),
@@ -499,14 +573,15 @@ export function TaskWorkbench(props: {
       });
     },
     onSuccess: async () => {
-      await waitForStream();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
+        props.onRefresh(),
+      ]);
       setInput("");
       setAttachments([]);
       localStorage.removeItem(draftKey);
       setPendingPrompt(null);
-      clearStream();
-      setLiveProcess({ thoughts: [], tools: [], notice: null });
-      await refreshTaskData();
     },
     onError: (cause: Error) => {
       setPendingPrompt(null);
@@ -642,15 +717,24 @@ export function TaskWorkbench(props: {
               <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
             </div>
           ) : (
-            <MessageList messages={messages.data ?? []} activities={activities.data ?? []} t={props.t} />
+            <MessageList
+              messages={messages.data ?? []}
+              activities={activities.data ?? []}
+              attachments={savedAttachments.data ?? []}
+              t={props.t}
+              onPreview={(attachment) => {
+                if (typeof window.piWork.attachment.preview !== "function") {
+                  setError("Image preview is ready after restarting Pi Work.");
+                  return;
+                }
+                setPreviewAttachment(attachment);
+                setPreviewUrl(null);
+                void window.piWork.attachment.preview(attachment.id)
+                  .then(setPreviewUrl)
+                  .catch((cause: Error) => setError(cause.message));
+              }}
+            />
           )}
-          {savedAttachments.data?.length ? (
-            <div className="attachment-strip">{savedAttachments.data.map((attachment) => (
-              <Button variant="secondary" key={attachment.id} onClick={() => void window.piWork.attachment.open(attachment.id)}>
-                <Icon name="file" /><span>{attachment.name}<small>{formatBytes(attachment.size)}</small></span>
-              </Button>
-            ))}</div>
-          ) : null}
           {pendingPrompt !== null ? (
             <article className="message user pending"><div>{pendingPrompt}</div></article>
           ) : null}
@@ -679,11 +763,33 @@ export function TaskWorkbench(props: {
                   attachment={attachment}
                   removeLabel={`${props.t("removeAttachment")}: ${attachment.name}`}
                   onRemove={() => setAttachments((current) => current.filter(({ path }) => path !== attachment.path))}
+                  onPreview={() => {
+                    if (typeof window.piWork.attachment.previewDraft !== "function") {
+                      setError("Image preview is ready after restarting Pi Work.");
+                      return;
+                    }
+                    setPreviewAttachment(attachment);
+                    setPreviewUrl(null);
+                    void window.piWork.attachment.previewDraft(attachment)
+                      .then(setPreviewUrl)
+                      .catch((cause: Error) => setError(cause.message));
+                  }}
                 />
               ))}
             </AttachmentGroup>
           ) : null}
-          <Textarea ref={composerInput} className="composer-input" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => {
+          <Textarea ref={composerInput} className="composer-input" value={input} onChange={(event) => setInput(event.target.value)} onPaste={(event) => {
+            const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
+            if (image === undefined) return;
+            event.preventDefault();
+            void image.arrayBuffer()
+              .then((buffer) => window.piWork.attachment.fromClipboardImage({
+                mimeType: image.type,
+                bytes: new Uint8Array(buffer),
+              }))
+              .then((attachment) => setAttachments((current) => mergeAttachments(current, [attachment])))
+              .catch((cause: Error) => setError(cause.message));
+          }} onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
@@ -721,11 +827,6 @@ export function TaskWorkbench(props: {
               )}
             </div>
           </div>
-          {props.session.permissionMode === "auto" ? (
-            <Alert className="composer-risk-alert">
-              <AlertDescription>{props.t("automaticRisk")}</AlertDescription>
-            </Alert>
-          ) : null}
           </form>
         </div>
       </div>
@@ -792,9 +893,26 @@ export function TaskWorkbench(props: {
         }}
       /> : null}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>{props.t("delete")}</AlertDialogTitle><AlertDialogDescription>“{props.session.title}”</AlertDialogDescription></AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={props.onDelete}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter>
+        <AlertDialogContent className="w-[min(460px,calc(100%-40px))] gap-0 overflow-hidden p-0">
+          <div className="flex items-start gap-3 px-6 pb-4 pt-6">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-surface)] bg-[var(--danger-bg)] text-destructive">
+              <Icon name="trash" />
+            </div>
+            <AlertDialogHeader className="gap-1">
+              <AlertDialogTitle className="text-lg tracking-[-0.01em]">{props.t("deleteSession")}</AlertDialogTitle>
+              <AlertDialogDescription className="max-w-[360px] text-[13px] leading-5">
+                {props.t("deleteSessionDetail")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          </div>
+          <div className="mx-6 mb-5 rounded-[var(--radius-surface)] bg-[var(--panel-muted)] px-4 py-3">
+            <p className="text-[11px] font-medium text-muted-foreground">{props.t("session")}</p>
+            <p className="mt-0.5 truncate text-sm font-semibold text-foreground" title={props.session.title}>{props.session.title}</p>
+          </div>
+          <AlertDialogFooter className="border-t border-border/80 bg-[var(--panel-muted)] px-6 py-4">
+            <AlertDialogCancel className="h-9 px-3.5">{props.t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction className="h-9 px-3.5" onClick={props.onDelete}>{props.t("delete")}</AlertDialogAction>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={completeOpen} onOpenChange={setCompleteOpen}>
@@ -828,6 +946,19 @@ export function TaskWorkbench(props: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <Dialog open={previewAttachment !== null} onOpenChange={(open) => {
+        if (!open) {
+          setPreviewAttachment(null);
+          setPreviewUrl(null);
+        }
+      }}>
+        <DialogContent className="attachment-preview-dialog w-[min(900px,calc(100%-40px))] max-w-none p-2">
+          <DialogTitle className="sr-only">{previewAttachment?.name ?? "Attachment preview"}</DialogTitle>
+          {previewAttachment?.mimeType.startsWith("image/") && previewUrl !== null ? (
+            <img src={previewUrl} alt={previewAttachment.name} />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 
@@ -885,25 +1016,93 @@ export function TaskWorkbench(props: {
   }
 }
 
-function MessageList({ messages, activities, t }: { messages: ChatMessage[]; activities: Activity[]; t: T }) {
+function MessageList({ messages, activities, attachments, t, onPreview }: {
+  messages: ChatMessage[];
+  activities: Activity[];
+  attachments: StoredAttachment[];
+  t: T;
+  onPreview(attachment: StoredAttachment): void;
+}) {
   let turn = 0;
   return (
     <div className="messages">
       {messages.map((message) => {
         const startsTurn = message.role === "user";
+        const assistantContent = message.role === "assistant"
+          ? visibleAssistantContent(message.content)
+          : message.content;
         if (startsTurn) turn += 1;
         return (
           <div className="message-turn" key={message.id}>
             {startsTurn && turn > 1 ? <div className="turn-indicator" aria-label={turnLabel(t, turn)}><span>{turnLabel(t, turn)}</span></div> : null}
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><MarkdownMessage content={message.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></>
-                : <div>{message.content}</div>}
+                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} />{assistantContent !== "" ? <MarkdownMessage content={assistantContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
+                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} /><div className="message-user-content">{message.content}</div></>}
             </article>
           </div>
         );
       })}
     </div>
+  );
+}
+
+function MessageAttachments(props: {
+  attachments: StoredAttachment[];
+  onPreview(attachment: StoredAttachment): void;
+}) {
+  const { attachments, onPreview } = props;
+  if (attachments.length === 0) return null;
+  return (
+    <div className="message-attachments">
+      {attachments.map((attachment) => attachment.mimeType.startsWith("image/")
+        ? <MessageImageAttachment attachment={attachment} key={attachment.id} onPreview={() => onPreview(attachment)} />
+        : (
+          <Button variant="secondary" key={attachment.id} onClick={() => void window.piWork.attachment.open(attachment.id)}>
+            <Icon name="file" />
+            <span>{attachment.name}<small>{attachmentDescription(attachment)}</small></span>
+          </Button>
+        ))}
+    </div>
+  );
+}
+
+function MessageImageAttachment(props: {
+  attachment: StoredAttachment;
+  onPreview(): void;
+}) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window.piWork.attachment.preview !== "function") return;
+    let active = true;
+    void window.piWork.attachment.preview(props.attachment.id)
+      .then((url) => {
+        if (active) setImageUrl(url);
+      })
+      .catch(() => {
+        if (active) setThumbnailFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [props.attachment.id]);
+
+  return (
+    <button
+      type="button"
+      className="message-image-attachment"
+      onClick={props.onPreview}
+      aria-label={`Preview ${props.attachment.name}`}
+      title={props.attachment.name}
+    >
+      <span className="message-image-thumbnail">
+        {imageUrl !== null && !thumbnailFailed
+          ? <img src={imageUrl} alt="" onError={() => setThumbnailFailed(true)} />
+          : <Icon name="eye" />}
+      </span>
+    </button>
   );
 }
 
@@ -1245,6 +1444,12 @@ function permissionLabel(mode: PermissionMode, t: T): string {
   if (mode === "auto") return t("automatic");
   if (mode === "explore") return t("exploreOnly");
   return t("askEveryTime");
+}
+
+function permissionModeIcon(mode: PermissionMode): "eye" | "lock" | "terminal" {
+  if (mode === "auto") return "terminal";
+  if (mode === "explore") return "eye";
+  return "lock";
 }
 
 function lifecycleLabel(session: Pick<Session, "status" | "running">, t: T): string {

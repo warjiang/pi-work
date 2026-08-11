@@ -10,7 +10,7 @@ export function ToggleGroupItem({ className, ...props }: ComponentProps<typeof T
   return (
     <ToggleGroupPrimitive.Item
       className={cn(
-        "inline-flex h-8 items-center justify-center rounded-md px-2.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground",
+        "inline-flex h-8 items-center justify-center rounded-[var(--radius-control)] px-2.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground",
         className,
       )}
       {...props}

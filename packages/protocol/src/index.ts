@@ -116,6 +116,12 @@ export const attachmentDraftSchema = attachmentSchema.pick({
 });
 export type AttachmentDraft = z.infer<typeof attachmentDraftSchema>;
 export const inspectAttachmentPathsSchema = z.array(z.string().min(1)).max(20);
+export const agentImageAttachmentSchema = z.object({
+  name: z.string().min(1),
+  mimeType: z.string().regex(/^image\/(?:png|jpeg|gif|webp)$/),
+  data: z.string().min(1).max(28_000_000),
+});
+export type AgentImageAttachment = z.infer<typeof agentImageAttachmentSchema>;
 
 export const statusDefinitionSchema = z.object({
   id: z.uuid(),
@@ -495,6 +501,7 @@ export const agentRequestSchema = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     sessionId: z.uuid(),
     messages: z.array(chatMessageSchema.pick({ role: true, content: true })).min(1),
+    images: z.array(agentImageAttachmentSchema).max(20).default([]),
     provider: setProviderCredentialInputSchema.optional(),
     modelId: z.string().min(1),
     thinkingLevel: thinkingLevelSchema,

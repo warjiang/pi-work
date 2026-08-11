@@ -53,6 +53,9 @@ const piWork = {
   attachment: {
     choose: () => ipcRenderer.invoke("attachment:choose"),
     fromFiles: (files: File[]) => ipcRenderer.invoke("attachment:inspect", files.map((file) => webUtils.getPathForFile(file))),
+    fromClipboardImage: (input: { mimeType: string; bytes: Uint8Array }) => ipcRenderer.invoke("attachment:from-clipboard", input),
+    previewDraft: (input: unknown) => ipcRenderer.invoke("attachment:preview-draft", input),
+    preview: (attachmentId: string) => ipcRenderer.invoke("attachment:preview", attachmentId),
     open: (attachmentId: string) => ipcRenderer.invoke("attachment:open", attachmentId),
   },
   task: {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, WebContentsView } from "electron";
 import type { OpenDialogOptions, Rectangle, UtilityProcess } from "electron";
@@ -8,6 +8,7 @@ import type {
   AgentResponse,
   AgentMessage,
   AgentRuntime,
+  AgentImageAttachment,
   ChatMessage,
   ExtensionPackage,
   ModelCatalog,
@@ -81,6 +82,13 @@ const pendingAgentRequests = new Map<string, {
 }>();
 const activeAgentSessions = new Set<string>();
 const approvedAttachmentPaths = new Set<string>();
+const clipboardImageExtensions: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
+const maxClipboardImageSize = 20 * 1024 * 1024;
 const pendingToolApprovals = new Map<string, ToolApproval>();
 type RunActivity = {
   kind: "thinking" | "tool_result" | "file_change" | "approval" | "error" | "notice";
@@ -240,6 +248,85 @@ async function inspectAttachments(paths: string[]) {
     mimeType: mimeTypeForPath(path),
     size: (await stat(path)).size,
   })));
+}
+
+async function saveClipboardImage(input: unknown) {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Clipboard image is invalid.");
+  }
+  const { mimeType, bytes } = input as { mimeType?: unknown; bytes?: unknown };
+  if (typeof mimeType !== "string" || !(mimeType in clipboardImageExtensions)) {
+    throw new Error("Only PNG, JPEG, GIF, and WebP images can be pasted.");
+  }
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
+    throw new Error("Clipboard image is invalid.");
+  }
+  if (bytes.byteLength > maxClipboardImageSize) {
+    throw new Error("Pasted images must be smaller than 20 MB.");
+  }
+
+  const directory = join(app.getPath("userData"), "clipboard-attachments");
+  const name = `clipboard-${randomUUID()}${clipboardImageExtensions[mimeType]}`;
+  const path = join(directory, name);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path, bytes);
+  approvedAttachmentPaths.add(path);
+  return attachmentDraftSchema.parse({
+    name,
+    path,
+    mimeType,
+    size: bytes.byteLength,
+  });
+}
+
+async function previewAttachment(input: unknown): Promise<string> {
+  const attachment = attachmentDraftSchema.parse(input);
+  if (!approvedAttachmentPaths.has(attachment.path)) {
+    throw new Error("Choose or paste an attachment before previewing it.");
+  }
+  return imageDataUrl(attachment.path);
+}
+
+async function imageDataUrl(path: string): Promise<string> {
+  const mimeType = mimeTypeForPath(path);
+  if (!mimeType.startsWith("image/")) {
+    throw new Error("Only image attachments can be previewed.");
+  }
+  const { size } = await stat(path);
+  if (size > maxClipboardImageSize) {
+    throw new Error("Images larger than 20 MB cannot be previewed.");
+  }
+  const bytes = await readFile(path);
+  return `data:${mimeType};base64,${bytes.toString("base64")}`;
+}
+
+async function previewSavedAttachment(attachmentId: unknown): Promise<string> {
+  const attachment = getStore().getAttachment(attachmentSchema.shape.id.parse(attachmentId));
+  if (attachment === null) throw new Error("Attachment not found.");
+  return imageDataUrl(attachment.path);
+}
+
+async function agentImagesForAttachments(attachments: Array<{
+  name: string;
+  path: string;
+  mimeType: string;
+}>): Promise<AgentImageAttachment[]> {
+  return Promise.all(attachments
+    .filter((attachment) => attachment.mimeType === "image/png"
+      || attachment.mimeType === "image/jpeg"
+      || attachment.mimeType === "image/gif"
+      || attachment.mimeType === "image/webp")
+    .map(async (attachment) => {
+      const { size } = await stat(attachment.path);
+      if (size > maxClipboardImageSize) {
+        throw new Error(`Image attachment ${attachment.name} must be smaller than 20 MB.`);
+      }
+      return {
+        name: attachment.name,
+        mimeType: attachment.mimeType as AgentImageAttachment["mimeType"],
+        data: (await readFile(attachment.path)).toString("base64"),
+      };
+    }));
 }
 
 function getStore(): PiWorkStore {
@@ -446,11 +533,13 @@ async function generateChat(
   thinkingLevel: ThinkingLevel,
   runtime: AgentRuntime,
   permissionMode: PermissionMode,
+  images: AgentImageAttachment[],
 ): Promise<{ content: string; cancelled: boolean; requestId: string }> {
   const response = await sendAgentRequest({
     type: "chat",
     sessionId,
     messages: messages.map(({ role, content }) => ({ role, content })),
+    images,
     provider: provider ?? undefined,
     modelId,
     thinkingLevel,
@@ -464,6 +553,50 @@ async function generateChat(
     throw new AgentRequestError("Pi chat service returned an unexpected response.", response.requestId);
   }
   return { content: response.content, cancelled: response.cancelled, requestId: response.requestId };
+}
+
+async function runChatInBackground(input: {
+  taskId: string;
+  providerId: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+  runtime: AgentRuntime;
+  permissionMode: PermissionMode;
+  images: AgentImageAttachment[];
+}): Promise<void> {
+  try {
+    activeAgentSessions.add(input.taskId);
+    const response = await generateChat(
+      input.taskId,
+      getStore().listMessages(input.taskId),
+      await providerCredential(input.providerId),
+      input.modelId,
+      input.thinkingLevel,
+      input.runtime,
+      input.permissionMode,
+      input.images,
+    );
+    const assistant = response.content !== ""
+      ? getStore().addMessage({ taskId: input.taskId, role: "assistant", content: response.content })
+      : null;
+    flushRunActivities(response.requestId, input.taskId, assistant?.id ?? null);
+  } catch (error) {
+    if (error instanceof AgentRequestError) {
+      persistRunError(error.requestId, input.taskId, error);
+    }
+    getStore().addMessage({
+      taskId: input.taskId,
+      role: "system",
+      content: error instanceof Error ? error.message : "Pi could not reply.",
+    });
+  } finally {
+    try {
+      getStore().updateSession(input.taskId, { running: false });
+    } catch {
+      // The session can be removed while its agent request is still completing.
+    }
+    activeAgentSessions.delete(input.taskId);
+  }
 }
 
 function taskTitle(content: string): string {
@@ -754,6 +887,9 @@ function registerIpc(): void {
     paths.forEach((path) => approvedAttachmentPaths.add(path));
     return inspected;
   });
+  ipcMain.handle("attachment:from-clipboard", (_event, input: unknown) => saveClipboardImage(input));
+  ipcMain.handle("attachment:preview-draft", (_event, input: unknown) => previewAttachment(input));
+  ipcMain.handle("attachment:preview", (_event, attachmentId: unknown) => previewSavedAttachment(attachmentId));
   ipcMain.handle("attachment:open", async (_event, attachmentId: unknown) => {
     const attachment = getStore().getAttachment(attachmentSchema.shape.id.parse(attachmentId));
     if (attachment === null) throw new Error("Attachment not found.");
@@ -861,6 +997,7 @@ function registerIpc(): void {
       throw new Error("Choose or drop attachments before sending them.");
     }
     const inspectedAttachments = await inspectAttachments(parsed.attachments.map(({ path }) => path));
+    const images = await agentImagesForAttachments(inspectedAttachments);
     const command = parsed.content.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     if (command !== null && command[1] !== "goal" && command[1] !== "plan") {
       throw new Error(`Unknown command: /${command[1]}`);
@@ -983,42 +1120,15 @@ function registerIpc(): void {
       });
       approvedAttachmentPaths.delete(attachment.path);
     }
-    if (inspectedAttachments.length > 0) {
-      getStore().addMessage({
-        taskId: task.id,
-        role: "system",
-        content: `Attached files:\n${inspectedAttachments.map(({ path }) => `- ${path}`).join("\n")}`,
-      });
-    }
-    try {
-      activeAgentSessions.add(task.id);
-      const response = await generateChat(
-        task.id,
-        getStore().listMessages(task.id),
-        await providerCredential(parsed.providerId),
-        parsed.modelId,
-        parsed.thinkingLevel,
-        agentRuntime(workspace.rootPath),
-        parsed.permissionMode ?? task.permissionMode,
-      );
-      const assistant = response.content !== ""
-        ? getStore().addMessage({ taskId: task.id, role: "assistant", content: response.content })
-        : null;
-      flushRunActivities(response.requestId, task.id, assistant?.id ?? null);
-      task = getStore().updateSession(task.id, { running: false });
-    } catch (error) {
-      if (error instanceof AgentRequestError) {
-        persistRunError(error.requestId, task.id, error);
-      }
-      getStore().addMessage({
-        taskId: task.id,
-        role: "system",
-        content: error instanceof Error ? error.message : "Pi could not reply.",
-      });
-      task = getStore().updateSession(task.id, { running: false });
-    } finally {
-      activeAgentSessions.delete(task.id);
-    }
+    void runChatInBackground({
+      taskId: task.id,
+      providerId: parsed.providerId,
+      modelId: parsed.modelId,
+      thinkingLevel: parsed.thinkingLevel,
+      runtime: agentRuntime(workspace.rootPath),
+      permissionMode: parsed.permissionMode ?? task.permissionMode,
+      images,
+    });
     return taskSchema.parse(task);
   });
   ipcMain.handle("task:plan", (_event, taskId: unknown) => {
