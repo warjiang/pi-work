@@ -314,10 +314,9 @@ kbd { border: 1px solid var(--border); border-radius: 5px; color: var(--muted); 
 .browser-note { margin-top: 20px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: var(--panel-muted); padding: 10px; font-size: 9px; line-height: 1.5; }
 .browser-host { min-width: 0; min-height: 0; background: white; }
 .segmented { display: flex; gap: 4px; }
-.segmented > button:not(.button), .project-tabs button { border: 0; border-radius: 6px; color: var(--muted); background: transparent; padding: 6px 9px; font-size: 10px; }
-.segmented > button.active, .project-tabs button.active { color: var(--text); background: var(--hover); }
-.project-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
-.kanban { display: grid; grid-template-columns: repeat(4, minmax(210px, 1fr)); gap: 10px; min-width: 900px; }
+.segmented > button:not(.button) { border: 0; border-radius: 6px; color: var(--muted); background: transparent; padding: 6px 9px; font-size: 10px; }
+.segmented > button.active { color: var(--text); background: var(--hover); }
+.kanban { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 10px; min-width: 1100px; }
 .kanban-column { min-height: 420px; border-radius: 9px; background: var(--panel-muted); padding: 8px; }
 .kanban-column > header { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 10px; font-size: 10px; }
 .kanban-column > header span { color: var(--muted); }

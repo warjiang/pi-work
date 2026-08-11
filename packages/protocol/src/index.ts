@@ -55,7 +55,6 @@ export const taskSchema = z.object({
   unread: z.boolean().default(false),
   statusId: z.uuid().nullable().default(null),
   labelIds: z.array(z.uuid()).default([]),
-  projectId: z.uuid().nullable().default(null),
   permissionMode: permissionModeSchema.default("ask"),
   planMode: z.boolean().default(false),
   workingDirectory: z.string().nullable().default(null),
@@ -144,18 +143,6 @@ export const savedViewSchema = z.object({
   position: z.number().int().nonnegative(),
 });
 export type SavedView = z.infer<typeof savedViewSchema>;
-
-export const projectSchema = z.object({
-  id: z.uuid(),
-  workspaceId: z.uuid().nullable(),
-  name: z.string().trim().min(1).max(120),
-  description: z.string().max(4_000),
-  color: z.string().trim().min(1).max(32),
-  archived: z.boolean(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
-});
-export type Project = z.infer<typeof projectSchema>;
 
 export const subtaskSchema = z.object({
   id: z.uuid(),
@@ -319,7 +306,6 @@ export const sessionSearchInputSchema = z.object({
   archived: z.boolean().optional(),
   flagged: z.boolean().optional(),
   statusId: z.uuid().nullable().optional(),
-  projectId: z.uuid().nullable().optional(),
   labelId: z.uuid().optional(),
 });
 
@@ -332,7 +318,6 @@ export const updateSessionInputSchema = z.object({
   unread: z.boolean().optional(),
   statusId: z.uuid().nullable().optional(),
   labelIds: z.array(z.uuid()).optional(),
-  projectId: z.uuid().nullable().optional(),
   permissionMode: permissionModeSchema.optional(),
   planMode: z.boolean().optional(),
   workingDirectory: z.string().nullable().optional(),

@@ -120,11 +120,12 @@ describe("PiWorkStore", () => {
     store.close();
   });
 
-  it("migrates existing workspaces and tasks without losing data", async () => {
+  it("keeps legacy project data without reading or deleting it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-work-storage-"));
     const filename = join(directory, "legacy.db");
     const workspaceId = randomUUID();
     const taskId = randomUUID();
+    const projectId = randomUUID();
     const createdAt = new Date().toISOString();
     const sqlite = new Database(filename);
     sqlite.exec(`
@@ -138,9 +139,18 @@ describe("PiWorkStore", () => {
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT NOT NULL,
+        project_id TEXT,
         title TEXT NOT NULL,
         goal TEXT NOT NULL,
         status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE domain_entities (
+        id TEXT PRIMARY KEY NOT NULL,
+        domain TEXT NOT NULL,
+        workspace_id TEXT,
+        value TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -152,12 +162,21 @@ describe("PiWorkStore", () => {
       "/workspace/legacy/Pi Work",
       createdAt,
     );
-    sqlite.prepare("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    sqlite.prepare("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
       taskId,
       workspaceId,
+      projectId,
       "Existing task",
       "Keep this task",
       "draft",
+      createdAt,
+      createdAt,
+    );
+    sqlite.prepare("INSERT INTO domain_entities VALUES (?, ?, ?, ?, ?, ?)").run(
+      projectId,
+      "project",
+      workspaceId,
+      JSON.stringify({ name: "Legacy project" }),
       createdAt,
       createdAt,
     );
@@ -172,6 +191,13 @@ describe("PiWorkStore", () => {
       thinkingLevel: "off",
     }));
     store.close();
+
+    const migrated = new Database(filename);
+    const taskColumns = migrated.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    expect(taskColumns.map(({ name }) => name)).toContain("project_id");
+    expect(migrated.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId)).toEqual({ project_id: projectId });
+    expect(migrated.prepare("SELECT domain FROM domain_entities WHERE id = ?").get(projectId)).toEqual({ domain: "project" });
+    migrated.close();
     await rm(directory, { recursive: true, force: true });
   });
 
@@ -189,15 +215,15 @@ describe("PiWorkStore", () => {
       permissionMode: "explore",
     });
     store.addMessage({ taskId: session.id, role: "user", content: "Build a searchable kanban board" });
-    const updated = store.updateSession(session.id, { flagged: true, archived: true, permissionMode: "auto" });
+    const updated = store.updateSession(session.id, { status: "reviewing", flagged: true, archived: true, permissionMode: "auto" });
 
-    expect(updated).toEqual(expect.objectContaining({ flagged: true, archived: true, permissionMode: "auto" }));
+    expect(updated).toEqual(expect.objectContaining({ status: "reviewing", flagged: true, archived: true, permissionMode: "auto" }));
     expect(store.listSessions({ query: "kanban" }).map(({ id }) => id)).toEqual([session.id]);
     expect(store.listSessions({ archived: true }).map(({ id }) => id)).toEqual([session.id]);
     store.close();
   });
 
-  it("keeps search, nullable project filters, and global domains scoped", () => {
+  it("keeps session search scoped to a work folder", () => {
     const store = new PiWorkStore();
     const first = store.createWorkspace({
       name: "First",
@@ -213,29 +239,12 @@ describe("PiWorkStore", () => {
     const excluded = store.createTask({ workspaceId: second.id, title: "Second", goal: "Second" });
     store.addMessage({ taskId: matching.id, role: "user", content: "shared search phrase" });
     store.addMessage({ taskId: excluded.id, role: "user", content: "shared search phrase" });
-    const project = store.createProject({
-      workspaceId: first.id,
-      name: "Assigned",
-      description: "",
-      color: "#737373",
-      archived: false,
-    });
-    store.updateSession(excluded.id, { projectId: project.id });
-    store.createProject({
-      workspaceId: null,
-      name: "Global",
-      description: "",
-      color: "#737373",
-      archived: false,
-    });
 
     expect(store.listSessions({ workspaceId: first.id, query: "shared" }).map(({ id }) => id)).toEqual([matching.id]);
-    expect(store.listSessions({ projectId: null }).map(({ id }) => id)).toEqual([matching.id]);
-    expect(store.listProjects(null).map(({ name }) => name)).toEqual(["Global"]);
     store.close();
   });
 
-  it("stores projects, sources, skills, automations, activities, and attachments", () => {
+  it("stores sources, skills, automations, activities, and attachments", () => {
     const store = new PiWorkStore();
     const workspace = store.createWorkspace({
       name: "Product",
@@ -243,13 +252,6 @@ describe("PiWorkStore", () => {
       outputPath: "/workspace/product/Pi Work",
     });
     const session = store.createTask({ workspaceId: workspace.id, title: "Ship", goal: "Ship" });
-    expect(store.createProject({
-      workspaceId: workspace.id,
-      name: "Desktop",
-      description: "",
-      color: "#737373",
-      archived: false,
-    }).name).toBe("Desktop");
     expect(store.createSource({
       workspaceId: workspace.id,
       name: "Repository",
@@ -289,7 +291,6 @@ describe("PiWorkStore", () => {
       size: 42,
     });
 
-    expect(store.listProjects(workspace.id)).toHaveLength(1);
     expect(store.listSources(workspace.id)).toHaveLength(1);
     expect(store.listSkills(workspace.id)).toHaveLength(1);
     expect(store.listAutomations(workspace.id)).toHaveLength(1);

@@ -11,7 +11,6 @@ import type {
   ExtensionPackage,
   ModelCatalog,
   Plan,
-  Project,
   ProviderConfig,
   Session,
   Skill,
@@ -92,7 +91,6 @@ declare global {
         create(input: unknown): Promise<Artifact>;
         publish(input: unknown): Promise<Artifact>;
       };
-      project: DomainApi<Project>;
       source: DomainApi<Source>;
       skill: DomainApi<Skill>;
       automation: DomainApi<Automation>;

@@ -7,7 +7,10 @@ import {
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   sendChatInputSchema,
+  sessionSearchInputSchema,
+  taskSchema,
   taskStatusSchema,
+  updateSessionInputSchema,
 } from "./index.js";
 
 describe("protocol schemas", () => {
@@ -19,6 +22,15 @@ describe("protocol schemas", () => {
       relativePath: "decision-brief.md",
       content: "# Brief",
     }).success).toBe(true);
+  });
+
+  it("does not expose legacy project IDs in session schemas", () => {
+    expect(taskSchema.shape).not.toHaveProperty("projectId");
+    expect(sessionSearchInputSchema.parse({ projectId: null })).not.toHaveProperty("projectId");
+    expect(updateSessionInputSchema.parse({
+      sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      projectId: "018f88d1-1eb5-709a-90ef-4325747e294d",
+    })).not.toHaveProperty("projectId");
   });
 
   it("requires correlated extension requests and rejects empty sources", () => {

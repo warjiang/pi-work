@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 type WorkspaceUiState = {
-  view: "inbox" | "browser" | "projects" | "sources" | "skills" | "automations" | "settings";
+  view: "inbox" | "browser" | "board" | "sources" | "skills" | "automations" | "settings";
   mode: "managed" | "folder";
   selectedWorkspaceId: string | null;
   selectedTaskId: string | null;

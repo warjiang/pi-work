@@ -12,7 +12,6 @@ import type {
   ExtensionPackage,
   ModelCatalog,
   Plan,
-  Project,
   SetProviderCredentialInput,
   Skill,
   Source,
@@ -40,7 +39,6 @@ import {
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   planSchema,
-  projectSchema,
   publishArtifactInputSchema,
   resumeTaskInputSchema,
   sendChatInputSchema,
@@ -436,7 +434,7 @@ async function listModels(): Promise<ModelCatalog> {
 function registerIpc(): void {
   ipcMain.handle("workspace:choose", async () => {
     const result = await dialog.showOpenDialog({
-      title: "Choose a Pi Work workspace",
+      title: "Choose a work folder for Pi Work",
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled) {
@@ -613,11 +611,11 @@ function registerIpc(): void {
       ? (parsed.workspaceId === null ? null : getStore().getWorkspace(parsed.workspaceId))
       : getStore().getWorkspace(task.workspaceId);
     if (parsed.workspaceId !== null && workspace?.id !== parsed.workspaceId) {
-      throw new Error(task === null ? "Workspace not found." : "Task does not belong to this workspace.");
+      throw new Error(task === null ? "Work folder not found." : "Task does not belong to this work folder.");
     }
     if (workspace === null) {
       if (task !== null || parsed.workspaceId !== null) {
-        throw new Error("Workspace not found.");
+        throw new Error("Work folder not found.");
       }
       const conversationId = randomUUID();
       const rootPath = join(app.getPath("userData"), "chats", conversationId);
@@ -771,7 +769,7 @@ function registerIpc(): void {
     }
     const workspace = getStore().listWorkspaces().find((candidate) => candidate.id === task.workspaceId);
     if (workspace === undefined) {
-      throw new Error("Workspace not found.");
+      throw new Error("Work folder not found.");
     }
     const stagedPath = await stageArtifact(workspace, task, parsed);
     return artifactSchema.parse(getStore().createArtifact({ ...parsed, stagedPath }));
@@ -788,7 +786,7 @@ function registerIpc(): void {
     }
     const workspace = getStore().listWorkspaces().find((candidate) => candidate.id === task.workspaceId);
     if (workspace === undefined) {
-      throw new Error("Workspace not found.");
+      throw new Error("Work folder not found.");
     }
     const publishedPath = await publishArtifact(workspace, task, artifact);
     return artifactSchema.parse(getStore().publishArtifact(artifact.id, publishedPath));
@@ -826,12 +824,11 @@ function registerIpc(): void {
   ipcMain.handle("browser:close", () => closeBrowserView());
 
   const domain = {
-    project: { schema: projectSchema, list: (workspaceId?: string | null) => getStore().listProjects(workspaceId) },
     source: { schema: sourceSchema, list: (workspaceId?: string | null) => getStore().listSources(workspaceId) },
     skill: { schema: skillSchema, list: (workspaceId?: string | null) => getStore().listSkills(workspaceId) },
     automation: { schema: automationSchema, list: (workspaceId?: string | null) => getStore().listAutomations(workspaceId) },
   } as const;
-  type DomainEntity = Project | Source | Skill | Automation;
+  type DomainEntity = Source | Skill | Automation;
   for (const [name, definition] of Object.entries(domain)) {
     const domainName = name as keyof typeof domain;
     const schema = definition.schema as { parse(value: unknown): DomainEntity };

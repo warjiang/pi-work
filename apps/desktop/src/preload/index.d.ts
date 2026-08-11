@@ -10,7 +10,6 @@ import type {
   ExtensionPackage,
   ModelCatalog,
   Plan,
-  Project,
   Session,
   Skill,
   Source,
@@ -91,7 +90,6 @@ declare global {
         create(input: unknown): Promise<Artifact>;
         publish(input: unknown): Promise<Artifact>;
       };
-      project: DomainApi<Project>;
       source: DomainApi<Source>;
       skill: DomainApi<Skill>;
       automation: DomainApi<Automation>;

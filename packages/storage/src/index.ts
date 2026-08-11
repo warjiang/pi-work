@@ -14,7 +14,6 @@ import type {
   Conversation,
   Label,
   Plan,
-  Project,
   Run,
   SavedView,
   Session,
@@ -41,7 +40,6 @@ import {
   eventSchema,
   labelSchema,
   planSchema,
-  projectSchema,
   runSchema,
   savedViewSchema,
   skillSchema,
@@ -110,8 +108,8 @@ function parseAttachment(row: typeof attachments.$inferSelect): Attachment {
   });
 }
 
-type DomainName = "status" | "label" | "view" | "project" | "subtask" | "source" | "skill" | "automation" | "automationRun" | "browserTab";
-type DomainValue = StatusDefinition | Label | SavedView | Project | Subtask | Source | Skill | Automation | AutomationRun | BrowserTab;
+type DomainName = "status" | "label" | "view" | "subtask" | "source" | "skill" | "automation" | "automationRun" | "browserTab";
+type DomainValue = StatusDefinition | Label | SavedView | Subtask | Source | Skill | Automation | AutomationRun | BrowserTab;
 
 export class PiWorkStore {
   private readonly sqlite: Database.Database;
@@ -162,7 +160,6 @@ export class PiWorkStore {
     thinkingLevel?: ThinkingLevel;
     permissionMode?: Task["permissionMode"];
     planMode?: boolean;
-    projectId?: string | null;
     workingDirectory?: string | null;
     id?: string;
   }): Task {
@@ -180,7 +177,6 @@ export class PiWorkStore {
       unread: false,
       statusId: null,
       labelIds: [],
-      projectId: input.projectId ?? null,
       permissionMode: input.permissionMode ?? "ask",
       planMode: input.planMode ?? false,
       workingDirectory: input.workingDirectory ?? null,
@@ -236,7 +232,6 @@ export class PiWorkStore {
     archived?: boolean;
     flagged?: boolean;
     statusId?: string | null;
-    projectId?: string | null;
     labelId?: string;
   } = {}): Session[] {
     const filters = [];
@@ -244,7 +239,6 @@ export class PiWorkStore {
     if (input.archived !== undefined) filters.push(eq(tasks.archived, input.archived ? "1" : "0"));
     if (input.flagged !== undefined) filters.push(eq(tasks.flagged, input.flagged ? "1" : "0"));
     if (input.statusId !== undefined) filters.push(input.statusId === null ? isNull(tasks.statusId) : eq(tasks.statusId, input.statusId));
-    if (input.projectId !== undefined) filters.push(input.projectId === null ? isNull(tasks.projectId) : eq(tasks.projectId, input.projectId));
     const query = input.query?.trim();
     const rows = filters.length === 0
       ? this.db.select().from(tasks).orderBy(desc(tasks.updatedAt)).all()
@@ -269,7 +263,7 @@ export class PiWorkStore {
 
   updateSession(sessionId: string, input: Partial<Pick<
     Session,
-    "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "projectId" | "permissionMode" | "planMode" | "workingDirectory" | "running"
+    "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "permissionMode" | "planMode" | "workingDirectory" | "running"
   >>): Session {
     const current = this.requireTask(sessionId);
     const next = taskSchema.parse({ ...current, ...input, updatedAt: timestamp() });
@@ -313,7 +307,7 @@ export class PiWorkStore {
     const task = this.requireTask(taskId);
     const workspace = this.getWorkspace(task.workspaceId);
     if (workspace === null) {
-      throw new Error(`Unknown workspace: ${task.workspaceId}`);
+      throw new Error(`Unknown work folder: ${task.workspaceId}`);
     }
     const transaction = this.sqlite.transaction(() => {
       this.sqlite.prepare("DELETE FROM activities WHERE task_id = ?").run(taskId);
@@ -425,12 +419,6 @@ export class PiWorkStore {
     this.db.delete(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).run();
   }
 
-  createProject(value: Omit<Project, "id" | "createdAt" | "updatedAt">): Project {
-    return this.createDomainEntity("project", projectSchema, value);
-  }
-  listProjects(workspaceId?: string | null): Project[] {
-    return this.listDomainEntities("project", projectSchema, workspaceId);
-  }
   createSource(value: Omit<Source, "id" | "createdAt" | "updatedAt">): Source {
     return this.createDomainEntity("source", sourceSchema, value);
   }
@@ -725,7 +713,6 @@ export class PiWorkStore {
         unread TEXT NOT NULL DEFAULT '0',
         status_id TEXT,
         label_ids TEXT NOT NULL DEFAULT '[]',
-        project_id TEXT,
         permission_mode TEXT NOT NULL DEFAULT 'ask',
         plan_mode TEXT NOT NULL DEFAULT '0',
         working_directory TEXT,
@@ -812,7 +799,6 @@ export class PiWorkStore {
     this.addColumn("tasks", "unread", "TEXT NOT NULL DEFAULT '0'");
     this.addColumn("tasks", "status_id", "TEXT");
     this.addColumn("tasks", "label_ids", "TEXT NOT NULL DEFAULT '[]'");
-    this.addColumn("tasks", "project_id", "TEXT");
     this.addColumn("tasks", "permission_mode", "TEXT NOT NULL DEFAULT 'ask'");
     this.addColumn("tasks", "plan_mode", "TEXT NOT NULL DEFAULT '0'");
     this.addColumn("tasks", "working_directory", "TEXT");

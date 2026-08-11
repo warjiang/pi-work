@@ -1,10 +1,10 @@
 # Pi Work
 
-Pi Work is a local-first desktop workspace for turning approved local research into reviewable artifacts.
+Pi Work is a local-first desktop app for turning approved research in a work folder into reviewable artifacts.
 
 The first delivered vertical slice supports:
 
-1. Select an authorized workspace.
+1. Select an authorized work folder.
 2. Create a task and submit a structured plan.
 3. Approve that plan before any artifact write.
 4. Create a staged Markdown artifact.

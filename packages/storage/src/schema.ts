@@ -24,7 +24,6 @@ export const tasks = sqliteTable("tasks", {
   unread: text("unread").notNull(),
   statusId: text("status_id"),
   labelIds: text("label_ids").notNull(),
-  projectId: text("project_id"),
   permissionMode: text("permission_mode").notNull(),
   planMode: text("plan_mode").notNull(),
   workingDirectory: text("working_directory"),

@@ -77,7 +77,6 @@ const piWork = {
     create: (input: unknown) => ipcRenderer.invoke("artifact:create", input),
     publish: (input: unknown) => ipcRenderer.invoke("artifact:publish", input),
   },
-  project: domainApi("project"),
   source: domainApi("source"),
   skill: domainApi("skill"),
   automation: domainApi("automation"),
@@ -100,7 +99,7 @@ const piWork = {
 
 contextBridge.exposeInMainWorld("piWork", piWork);
 
-function domainApi(name: "project" | "source" | "skill" | "automation") {
+function domainApi(name: "source" | "skill" | "automation") {
   return {
     list: (workspaceId?: string | null) => ipcRenderer.invoke(`${name}:list`, workspaceId),
     create: (input: unknown) => ipcRenderer.invoke(`${name}:create`, input),

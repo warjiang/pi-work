@@ -8,7 +8,6 @@ import type {
   ChatMessage,
   ModelOption,
   PermissionMode,
-  Project,
   Session,
   Skill,
   Source,
@@ -63,10 +62,10 @@ import {
 } from "./components/ui/select.js";
 import { Spinner } from "./components/ui/spinner.js";
 import { Switch } from "./components/ui/switch.js";
-import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs.js";
 import { Textarea } from "./components/ui/textarea.js";
 import { Toggle } from "./components/ui/toggle.js";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group.js";
+import { boardColumns, sessionsForBoard, workspaceHasBoard } from "./board.js";
 import { translator } from "./i18n.js";
 import type { MessageKey } from "./i18n.js";
 import { useWorkspaceUi } from "./store.js";
@@ -191,6 +190,7 @@ export function App() {
         sessionFilter={ui.sessionFilter}
         selectedSessionId={ui.selectedTaskId}
         selectedWorkspaceId={ui.selectedWorkspaceId}
+        workspace={selectedWorkspace}
         workspaces={workspaces.data ?? []}
         view={ui.view}
         t={t}
@@ -219,7 +219,7 @@ export function App() {
             t={t}
           />
         ) : null}
-        {ui.view === "projects" ? <ProjectsPage sessions={sessions.data ?? []} workspaceId={ui.selectedWorkspaceId} t={t} onOpen={(session) => ui.selectConversation(session.workspaceId, session.id)} onRefresh={refresh} /> : null}
+        {ui.view === "board" && selectedWorkspace?.kind === "folder" ? <BoardPage sessions={sessions.data ?? []} workspaceId={selectedWorkspace.id} t={t} onOpen={(session) => ui.selectConversation(session.workspaceId, session.id)} onRefresh={refresh} /> : null}
         {ui.view === "browser" ? <BrowserPage session={selectedSession} t={t} /> : null}
         {ui.view === "sources" ? <SourcesPage workspaceId={ui.selectedWorkspaceId} t={t} /> : null}
         {ui.view === "skills" ? <SkillsPage workspaceId={ui.selectedWorkspaceId} t={t} /> : null}
@@ -230,7 +230,7 @@ export function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3"><PiMark />Pi Work</DialogTitle>
-            <DialogDescription>{language === "zh-CN" ? "连接模型提供商后开始，也可以先浏览本地工作区。" : "Connect a model provider to begin, or explore a local workspace first."}</DialogDescription>
+            <DialogDescription>{language === "zh-CN" ? "连接模型提供商后开始，也可以先浏览本地工作文件夹。" : "Connect a model provider to begin, or explore a local work folder first."}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => void window.piWork.settings.update({ onboardingSkipped: true }).then(() => queryClient.invalidateQueries({ queryKey: ["settings"] }))}>
@@ -272,6 +272,7 @@ function TopBar(props: {
 function Sidebar(props: {
   sessions: Session[];
   sessionFilter: "all" | "flagged" | "archived";
+  workspace: Workspace | null;
   workspaces: Workspace[];
   selectedSessionId: string | null;
   selectedWorkspaceId: string | null;
@@ -312,7 +313,7 @@ function Sidebar(props: {
         </div>
       </div>
       <nav className="secondary-nav">
-        <NavButton active={props.view === "projects"} icon="folder-kanban" label={props.t("projects")} onClick={() => props.onView("projects")} />
+        {workspaceHasBoard(props.workspace) ? <NavButton active={props.view === "board"} icon="folder-kanban" label={props.t("board")} onClick={() => props.onView("board")} /> : null}
         <NavButton active={props.view === "sources"} icon="source" label={props.t("sources")} onClick={() => props.onView("sources")} />
         <NavButton active={props.view === "skills"} icon="skills" label={props.t("skills")} onClick={() => props.onView("skills")} />
         <NavButton active={props.view === "automations"} icon="list-todo" label={props.t("automations")} onClick={() => props.onView("automations")} />
@@ -506,7 +507,7 @@ function Chat(props: {
             <CardTitle>{props.t("emptyTitle")}</CardTitle>
             <EmptyDescription>{props.t("emptyDetail")}</EmptyDescription>
             <div className="suggestions">
-              <Button variant="outline" onClick={() => setInput("Review this workspace and summarize its architecture.")}><Icon name="command" />{props.t("reviewWorkspace")}</Button>
+              <Button variant="outline" onClick={() => setInput("Review this work folder and summarize its architecture.")}><Icon name="command" />{props.t("reviewWorkspace")}</Button>
               <Button variant="outline" onClick={() => setInput("Create a practical implementation plan for my goal.")}><Icon name="plan" />{props.t("createPlan")}</Button>
               <Button variant="outline" onClick={() => setInput("Find the highest-impact issue to fix next.")}><Icon name="search" />{props.t("findNext")}</Button>
             </div>
@@ -739,58 +740,27 @@ function Page({ title, action, children }: { title: string; action?: ReactNode; 
   return <section className="page"><header className="content-header"><h1>{title}</h1>{action}</header><div className="page-body">{children}</div></section>;
 }
 
-function ProjectsPage(props: { sessions: Session[]; workspaceId: string | null; t: (key: MessageKey) => string; onOpen(session: Session): void; onRefresh(): Promise<void> }) {
-  const queryClient = useQueryClient();
+function BoardPage(props: { sessions: Session[]; workspaceId: string; t: (key: MessageKey) => string; onOpen(session: Session): void; onRefresh(): Promise<void> }) {
   const [mode, setMode] = useState<"board" | "list">("board");
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [projectName, setProjectName] = useState("");
-  const projects = useQuery({ queryKey: ["projects", props.workspaceId], queryFn: () => window.piWork.project.list(props.workspaceId) });
-  const visibleSessions = props.sessions.filter((session) => (
-    (props.workspaceId === null || session.workspaceId === props.workspaceId)
-    && (selectedProjectId === null || session.projectId === selectedProjectId)
-    && !session.archived
-  ));
-  const create = useMutation({
-    mutationFn: (name: string) => window.piWork.project.create({ workspaceId: props.workspaceId, value: { name, description: "", color: "#737373", archived: false } }),
-    onSuccess: async () => {
-      setProjectName("");
-      setCreateOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["projects"] });
-    },
-  });
-  const columns = [
-    ["draft", "Backlog"],
-    ["running", "In progress"],
-    ["reviewing", "Review"],
-    ["completed", "Done"],
-  ] as const;
+  const visibleSessions = sessionsForBoard(props.sessions, props.workspaceId);
   async function moveSession(sessionId: string, status: Session["status"]): Promise<void> {
-    await window.piWork.session.update({
-      sessionId,
-      status,
-      ...(selectedProjectId === null ? {} : { projectId: selectedProjectId }),
-    });
+    await window.piWork.session.update({ sessionId, status });
     await props.onRefresh();
   }
   return (
-    <Page title={props.t("projects")} action={<div className="segmented"><ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup><Button onClick={() => setCreateOpen(true)}><Icon name="plus" size={14} />{props.t("add")}</Button></div>}>
-      <Tabs value={selectedProjectId ?? "all"} onValueChange={(value) => setSelectedProjectId(value === "all" ? null : value)}>
-        <TabsList className="project-tabs"><TabsTrigger value="all">All</TabsTrigger>{(projects.data ?? []).map((project) => <TabsTrigger key={project.id} value={project.id}>{project.name}</TabsTrigger>)}</TabsList>
-      </Tabs>
+    <Page title={props.t("board")} action={<div className="segmented"><ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup></div>}>
       {mode === "board" ? (
-        <div className="kanban">{columns.map(([status, label]) => {
-          const columnSessions = visibleSessions.filter((session) => session.status === status);
-          return <section className="kanban-column" key={status} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+        <div className="kanban">{boardColumns.map((column) => {
+          const columnSessions = visibleSessions.filter((session) => column.statuses.includes(session.status));
+          return <section className="kanban-column" key={column.label} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
             const sessionId = event.dataTransfer.getData("application/x-pi-work-session");
-            if (sessionId !== "") void moveSession(sessionId, status);
-          }}><header><strong>{label}</strong><span>{columnSessions.length}</span></header>{columnSessions.map((session) => <Button className="task-card" draggable key={session.id} onDragStart={(event) => {
+            if (sessionId !== "") void moveSession(sessionId, column.targetStatus);
+          }}><header><strong>{props.t(column.label)}</strong><span>{columnSessions.length}</span></header>{columnSessions.map((session) => <Button className="task-card" draggable key={session.id} onDragStart={(event) => {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("application/x-pi-work-session", session.id);
           }} variant="outline" onClick={() => props.onOpen(session)}><strong>{session.title}</strong><p>{session.goal}</p><footer><span>{session.modelId?.split("/").at(-1) ?? "Pi"}</span>{session.flagged ? <Icon name="flag" size={14} /> : <span />}</footer></Button>)}</section>;
         })}</div>
       ) : <div className="data-list">{visibleSessions.map((session) => <Button variant="ghost" key={session.id} onClick={() => props.onOpen(session)}><strong>{session.title}</strong><span>{session.status}</span><small>{session.updatedAt.slice(0, 10)}</small></Button>)}</div>}
-      <NameDialog open={createOpen} onOpenChange={setCreateOpen} title={`${props.t("add")} ${props.t("projects")}`} value={projectName} onValueChange={setProjectName} onSubmit={() => projectName.trim() && create.mutate(projectName.trim())} t={props.t} />
     </Page>
   );
 }
