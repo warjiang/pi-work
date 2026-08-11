@@ -295,6 +295,12 @@ export const createTaskInputSchema = z.object({
   workingDirectory: z.string().min(1).nullable().default(null),
 });
 
+export const createPersonalSessionInputSchema = z.object({
+  providerId: z.string().trim().min(1).max(80),
+  modelId: z.string().trim().min(1).max(160),
+  thinkingLevel: thinkingLevelSchema,
+});
+
 export const updateTaskBriefInputSchema = z.object({
   taskId: z.uuid(),
   title: z.string().trim().min(1).max(160).optional(),
@@ -567,7 +573,7 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     sessionId: z.uuid(),
     event: z.object({
       sequence: z.number().int().nonnegative(),
-      kind: z.enum(["text_delta", "thinking", "tool_call", "tool_result", "file_change", "approval", "error", "completed", "cancelled"]),
+      kind: z.enum(["text_delta", "thinking", "tool_call", "tool_update", "tool_result", "file_change", "runtime", "approval", "error", "completed", "cancelled"]),
       payload: z.record(z.string(), z.unknown()),
       timestamp: z.string().datetime(),
     }),

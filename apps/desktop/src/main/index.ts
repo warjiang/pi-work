@@ -31,6 +31,7 @@ import {
   approvePlanInputSchema,
   artifactSchema,
   createArtifactInputSchema,
+  createPersonalSessionInputSchema,
   createTaskInputSchema,
   createWorkspaceInputSchema,
   automationSchema,
@@ -81,6 +82,138 @@ const pendingAgentRequests = new Map<string, {
 const activeAgentSessions = new Set<string>();
 const approvedAttachmentPaths = new Set<string>();
 const pendingToolApprovals = new Map<string, ToolApproval>();
+type RunActivity = {
+  kind: "thinking" | "tool_result" | "file_change" | "approval" | "error" | "notice";
+  title: string;
+  detail: string;
+  metadata: Record<string, unknown>;
+};
+class AgentRequestError extends Error {
+  constructor(message: string, readonly requestId: string) {
+    super(message);
+  }
+}
+const runActivities = new Map<string, {
+  thinking: Map<number, string>;
+  tools: Map<string, Record<string, unknown>>;
+  activities: RunActivity[];
+}>();
+
+function collectorFor(requestId: string) {
+  let collector = runActivities.get(requestId);
+  if (collector === undefined) {
+    collector = { thinking: new Map(), tools: new Map(), activities: [] };
+    runActivities.set(requestId, collector);
+  }
+  return collector;
+}
+
+function collectRunEvent(response: Extract<AgentMessage, { type: "event" }>): void {
+  const { event } = response;
+  const collector = collectorFor(response.requestId);
+  const metadata = { requestId: response.requestId, sequence: event.sequence, ...event.payload };
+  if (event.kind === "thinking") {
+    const index = typeof event.payload.contentIndex === "number" ? event.payload.contentIndex : 0;
+    if (event.payload.phase === "start") collector.thinking.set(index, "");
+    if (event.payload.phase === "delta" && typeof event.payload.delta === "string") {
+      collector.thinking.set(index, `${collector.thinking.get(index) ?? ""}${event.payload.delta}`);
+    }
+    if (event.payload.phase === "end") {
+      const content = typeof event.payload.content === "string"
+        ? event.payload.content
+        : collector.thinking.get(index) ?? "";
+      collector.thinking.delete(index);
+      if (content.trim()) collector.activities.push({
+        kind: "thinking",
+        title: "Thinking",
+        detail: content,
+        metadata: {
+          requestId: response.requestId,
+          sequence: event.sequence,
+          contentIndex: index,
+          phase: "end",
+        },
+      });
+    }
+    return;
+  }
+  if (event.kind === "tool_call") {
+    const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : randomUUID();
+    collector.tools.set(toolCallId, event.payload);
+    return;
+  }
+  if (event.kind === "tool_update") {
+    const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+    if (toolCallId) collector.tools.set(toolCallId, { ...collector.tools.get(toolCallId), ...event.payload });
+    return;
+  }
+  if (event.kind === "tool_result") {
+    const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+    const tool = collector.tools.get(toolCallId) ?? {};
+    collector.tools.delete(toolCallId);
+    collector.activities.push({
+      kind: "tool_result",
+      title: typeof event.payload.toolName === "string" ? event.payload.toolName : "Tool",
+      detail: summarizeValue(event.payload.result, event.payload.isError === true),
+      metadata: { ...tool, ...metadata },
+    });
+    return;
+  }
+  if (event.kind === "file_change") {
+    collector.activities.push({
+      kind: "file_change",
+      title: "File change",
+      detail: typeof event.payload.toolName === "string" ? event.payload.toolName : "",
+      metadata,
+    });
+    return;
+  }
+  if (event.kind === "approval") {
+    collector.activities.push({ kind: "approval", title: "Approval", detail: "", metadata });
+    return;
+  }
+  if (event.kind === "runtime" && ["compacted", "retry_complete"].includes(String(event.payload.state))) {
+    collector.activities.push({
+      kind: "notice",
+      title: String(event.payload.state) === "compacted" ? "Context compacted" : "Retry completed",
+      detail: event.payload.errorMessage === undefined ? "" : String(event.payload.errorMessage),
+      metadata,
+    });
+  }
+}
+
+function flushRunActivities(requestId: string, sessionId: string, messageId: string | null): void {
+  const collector = runActivities.get(requestId);
+  runActivities.delete(requestId);
+  if (collector === undefined) return;
+  for (const activity of collector.activities) {
+    if (activity.kind === "thinking" && messageId === null) continue;
+    try {
+      getStore().addActivity({ sessionId, messageId, ...activity });
+    } catch {
+      // A deleted session should not take down the agent event channel.
+    }
+  }
+}
+
+function persistRunError(requestId: string, sessionId: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : "Pi could not reply.";
+  const collector = collectorFor(requestId);
+  collector.activities.push({
+    kind: "error",
+    title: "Run failed",
+    detail,
+    metadata: { requestId },
+  });
+  flushRunActivities(requestId, sessionId, null);
+}
+
+function summarizeValue(value: unknown, isError: boolean): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return isError ? "Tool failed." : "Completed.";
+  return compact.length > 240 ? `${compact.slice(0, 237)}…` : compact;
+}
 
 function clearPendingToolApprovals(sessionId: string): void {
   for (const [approvalId, approval] of pendingToolApprovals) {
@@ -227,35 +360,7 @@ function getAgentProcess(): UtilityProcess {
       if (response.event.kind === "completed" || response.event.kind === "cancelled") {
         clearPendingToolApprovals(response.sessionId);
       }
-      if (response.event.kind !== "text_delta" && response.event.kind !== "completed" && response.event.kind !== "cancelled") {
-        const kind = response.event.kind === "thinking"
-          ? "thinking"
-          : response.event.kind === "tool_call"
-            ? "tool_call"
-            : response.event.kind === "tool_result"
-              ? "tool_result"
-              : response.event.kind === "file_change"
-                ? "file_change"
-                : response.event.kind === "approval"
-                  ? "approval"
-                  : "error";
-        try {
-          getStore().addActivity({
-            sessionId: response.sessionId,
-            messageId: null,
-            kind,
-            title: response.event.kind.replaceAll("_", " "),
-            detail: JSON.stringify(response.event.payload),
-            metadata: {
-              requestId: response.requestId,
-              sequence: response.event.sequence,
-              ...response.event.payload,
-            },
-          });
-        } catch {
-          // A deleted session should not take down the agent event channel.
-        }
-      }
+      collectRunEvent(response);
       mainWindow?.webContents.send("agent:event", response);
       return;
     }
@@ -302,7 +407,7 @@ async function sendAgentRequest(
   return new Promise<AgentResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingAgentRequests.delete(requestId);
-      reject(new Error("Pi agent service timed out."));
+      reject(new AgentRequestError("Pi agent service timed out.", requestId));
     }, timeoutMs);
     pendingAgentRequests.set(requestId, { resolve, reject, timer });
     getAgentProcess().postMessage({ ...request, requestId });
@@ -341,7 +446,7 @@ async function generateChat(
   thinkingLevel: ThinkingLevel,
   runtime: AgentRuntime,
   permissionMode: PermissionMode,
-): Promise<{ content: string; cancelled: boolean }> {
+): Promise<{ content: string; cancelled: boolean; requestId: string }> {
   const response = await sendAgentRequest({
     type: "chat",
     sessionId,
@@ -353,12 +458,12 @@ async function generateChat(
     permissionMode,
   }, 15 * 60_000);
   if (response.type === "error") {
-    throw new Error(response.message);
+    throw new AgentRequestError(response.message, response.requestId);
   }
   if (response.type !== "chat") {
-    throw new Error("Pi chat service returned an unexpected response.");
+    throw new AgentRequestError("Pi chat service returned an unexpected response.", response.requestId);
   }
-  return { content: response.content, cancelled: response.cancelled };
+  return { content: response.content, cancelled: response.cancelled, requestId: response.requestId };
 }
 
 function taskTitle(content: string): string {
@@ -692,6 +797,31 @@ function registerIpc(): void {
     const parsed = createTaskInputSchema.parse(input);
     return taskSchema.parse(getStore().createTask(parsed));
   });
+  ipcMain.handle("session:create", async (_event, input: unknown) => {
+    const parsed = createPersonalSessionInputSchema.parse(input);
+    const conversationId = randomUUID();
+    const rootPath = join(app.getPath("userData"), "chats", conversationId);
+    await mkdir(rootPath, { recursive: true });
+    const workspace = getStore().createWorkspace({
+      id: conversationId,
+      name: "New session",
+      rootPath,
+      outputPath: join(rootPath, "Pi Work"),
+      kind: "managed",
+    });
+    return taskSchema.parse(getStore().createTask({
+      workspaceId: workspace.id,
+      title: "New session",
+      goal: "New session",
+      kind: "chat",
+      providerId: parsed.providerId,
+      modelId: parsed.modelId,
+      thinkingLevel: parsed.thinkingLevel,
+      permissionMode: "explore",
+      planMode: false,
+      workingDirectory: workspace.rootPath,
+    }));
+  });
   ipcMain.handle("task:update-brief", (_event, input: unknown) => {
     const { taskId, ...value } = updateTaskBriefInputSchema.parse(input);
     requireFolderTask(taskId);
@@ -786,6 +916,9 @@ function registerIpc(): void {
         modelId: parsed.modelId,
         thinkingLevel: parsed.thinkingLevel,
       });
+      if (task.title === "New session" && task.goal === "New session") {
+        task = getStore().updateSession(task.id, { title: taskTitle(goal) });
+      }
       task = saveConversationModel(task.id, parsed);
       getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
       task = getStore().updateTaskGoal(task.id, goal);
@@ -831,6 +964,9 @@ function registerIpc(): void {
       ...(parsed.permissionMode === undefined ? {} : { permissionMode: parsed.permissionMode }),
       ...(parsed.planMode === undefined ? {} : { planMode: parsed.planMode }),
     });
+    if (task.title === "New session" && task.goal === "New session") {
+      task = getStore().updateSession(task.id, { title: taskTitle(parsed.content) });
+    }
     task = saveConversationModel(task.id, parsed);
     task = getStore().updateSession(task.id, {
       permissionMode: parsed.permissionMode ?? task.permissionMode,
@@ -865,11 +1001,15 @@ function registerIpc(): void {
         agentRuntime(workspace.rootPath),
         parsed.permissionMode ?? task.permissionMode,
       );
-      if (response.content !== "") {
-        getStore().addMessage({ taskId: task.id, role: "assistant", content: response.content });
-      }
+      const assistant = response.content !== ""
+        ? getStore().addMessage({ taskId: task.id, role: "assistant", content: response.content })
+        : null;
+      flushRunActivities(response.requestId, task.id, assistant?.id ?? null);
       task = getStore().updateSession(task.id, { running: false });
     } catch (error) {
+      if (error instanceof AgentRequestError) {
+        persistRunError(error.requestId, task.id, error);
+      }
       getStore().addMessage({
         taskId: task.id,
         role: "system",

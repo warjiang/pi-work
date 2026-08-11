@@ -10,6 +10,9 @@ import {
   OnboardingDialog,
   Sidebar,
   TopBar,
+  createNewSessionInput,
+  resolveDefaultModel,
+  resolveDefaultThinkingLevel,
 } from "./features/app-shell.js";
 import { BrowserPage } from "./features/browser-page.js";
 import { SettingsPage } from "./features/settings-page.js";
@@ -133,7 +136,7 @@ export function App() {
       }
       if (command && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
-        ui.setNewTaskOpen(true);
+        createNewItem();
       }
       if (command && event.key.toLocaleLowerCase() === "b") {
         event.preventDefault();
@@ -227,6 +230,34 @@ export function App() {
     },
     onError: (cause: Error) => setAppError(cause.message),
   });
+  const createPersonalSession = useMutation({
+    mutationFn: () => {
+      const model = resolveDefaultModel(
+        providers.data ?? [],
+        models.data,
+        settings.data,
+      );
+      if (model === undefined) throw new Error(t("configureModel"));
+      return window.piWork.session.create(createNewSessionInput(
+        model,
+        resolveDefaultThinkingLevel(model, settings.data),
+      ));
+    },
+    onSuccess: async (session) => {
+      await refresh();
+      ui.setWorkspaceScope("personal");
+      ui.openTask(session.id);
+    },
+    onError: (cause: Error) => setAppError(cause.message),
+  });
+
+  function createNewItem() {
+    if (ui.workspaceScope === "personal") {
+      if (!createPersonalSession.isPending) createPersonalSession.mutate();
+      return;
+    }
+    ui.setNewTaskOpen(true);
+  }
 
   const baseLoading = settings.isLoading
     || workspaces.isLoading
@@ -276,7 +307,7 @@ export function App() {
         onManageWorkspaces={() => showView("settings")}
         onToggleSidebar={toggleSidebar}
         onOpenSearch={() => ui.setCommandOpen(true)}
-        onNewTask={() => ui.setNewTaskOpen(true)}
+        onNewTask={createNewItem}
       />
       <Sidebar
         view={ui.view}
@@ -331,7 +362,7 @@ export function App() {
           <SessionEmptyState
             personal={ui.workspaceScope === "personal"}
             t={t}
-            onNewTask={() => ui.setNewTaskOpen(true)}
+            onNewTask={createNewItem}
           />
         ) : null}
         {ui.view === "attention" || ui.view === "completed" ? (
@@ -391,22 +422,24 @@ export function App() {
         onOpenTask={openSession}
         onOpenContext={openContext}
       />
-      <NewTaskDialog
-        open={ui.newTaskOpen}
-        scope={ui.workspaceScope}
-        workspaces={workspaces.data ?? []}
-        providers={providers.data ?? []}
-        models={models.data}
-        settings={appSettings}
-        t={t}
-        onOpenChange={ui.setNewTaskOpen}
-        onCreated={(session) => {
-          void refresh().then(() => {
-            ui.setWorkspaceScope(session.kind === "chat" ? "personal" : session.workspaceId);
-            ui.openTask(session.id);
-          });
-        }}
-      />
+      {ui.workspaceScope !== "personal" ? (
+        <NewTaskDialog
+          open={ui.newTaskOpen}
+          scope={ui.workspaceScope}
+          workspaces={workspaces.data ?? []}
+          providers={providers.data ?? []}
+          models={models.data}
+          settings={appSettings}
+          t={t}
+          onOpenChange={ui.setNewTaskOpen}
+          onCreated={(session) => {
+            void refresh().then(() => {
+              ui.setWorkspaceScope(session.workspaceId);
+              ui.openTask(session.id);
+            });
+          }}
+        />
+      ) : null}
       <OnboardingDialog
         open={onboardingOpen}
         settings={appSettings}

@@ -48,7 +48,7 @@ export type ToolApprovalRequester = (
 ) => Promise<boolean>;
 
 export type AgentStreamListener = (
-  kind: "text_delta" | "thinking" | "tool_call" | "tool_result" | "file_change",
+  kind: "text_delta" | "thinking" | "tool_call" | "tool_update" | "tool_result" | "file_change" | "runtime",
   payload: Record<string, unknown>,
 ) => void;
 
@@ -229,11 +229,9 @@ export class PiAdapter {
     });
     this.cancelledSessions.delete(sessionId);
     this.activeSessions.set(sessionId, session);
+    const thinking = new Map<number, string>();
     const unsubscribe = session.subscribe((event) => {
-      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        textDeltas.push(event.assistantMessageEvent.delta);
-        onEvent?.("text_delta", { delta: event.assistantMessageEvent.delta });
-      }
+      consumeSessionEvent(event, textDeltas, thinking, onEvent);
     });
 
     try {
@@ -391,7 +389,6 @@ function approvalTool(
     execute: async (toolCallId, params, signal, onUpdate, context) => {
       const values = params as unknown as Record<string, unknown>;
       const name = tool.name as "edit" | "write" | "bash";
-      onEvent?.("tool_call", { tool: name, arguments: values });
       if (name !== "bash") {
         await assertAuthorizedFilePath(cwd, String(values.path ?? ""));
       }
@@ -399,13 +396,117 @@ function approvalTool(
         throw new Error(`User denied ${name} tool execution.`);
       }
       const result = await execute(toolCallId, params, signal, onUpdate, context);
-      onEvent?.(name === "edit" || name === "write" ? "file_change" : "tool_result", {
-        tool: name,
-        arguments: values,
-      });
+      if (name === "edit" || name === "write") {
+        onEvent?.("file_change", { toolCallId, toolName: name, arguments: values });
+      }
       return result;
     },
   };
+}
+
+export function consumeSessionEvent(
+  event: any,
+  textDeltas: string[],
+  thinking: Map<number, string>,
+  onEvent?: AgentStreamListener,
+): void {
+  switch (event.type) {
+    case "message_start":
+      onEvent?.("runtime", { state: "message_start" });
+      return;
+    case "message_end":
+      onEvent?.("runtime", { state: "message_end" });
+      return;
+    case "message_update": {
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta") {
+        textDeltas.push(update.delta);
+        onEvent?.("text_delta", { delta: update.delta, contentIndex: update.contentIndex });
+        return;
+      }
+      if (update.type === "thinking_start") {
+        const contentIndex = Number(update.contentIndex ?? 0);
+        thinking.set(contentIndex, "");
+        onEvent?.("thinking", { phase: "start", contentIndex });
+        return;
+      }
+      if (update.type === "thinking_delta") {
+        const contentIndex = Number(update.contentIndex ?? 0);
+        const content = `${thinking.get(contentIndex) ?? ""}${update.delta ?? ""}`;
+        thinking.set(contentIndex, content);
+        onEvent?.("thinking", { phase: "delta", contentIndex, delta: update.delta ?? "" });
+        return;
+      }
+      if (update.type === "thinking_end") {
+        const contentIndex = Number(update.contentIndex ?? 0);
+        const content = thinking.get(contentIndex) ?? "";
+        thinking.delete(contentIndex);
+        onEvent?.("thinking", { phase: "end", contentIndex, content });
+      }
+      return;
+    }
+    case "tool_execution_start":
+      onEvent?.("tool_call", {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        arguments: asRecord(event.args),
+      });
+      return;
+    case "tool_execution_update":
+      onEvent?.("tool_update", {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        arguments: asRecord(event.args),
+        output: event.partialResult,
+      });
+      return;
+    case "tool_execution_end":
+      onEvent?.("tool_result", {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        result: event.result,
+        isError: event.isError,
+      });
+      return;
+    case "queue_update":
+      onEvent?.("runtime", {
+        state: event.steering.length + event.followUp.length > 0 ? "queued" : "queue_clear",
+        steering: event.steering.length,
+        followUp: event.followUp.length,
+      });
+      return;
+    case "compaction_start":
+      onEvent?.("runtime", { state: "compacting", reason: event.reason });
+      return;
+    case "compaction_end":
+      onEvent?.("runtime", {
+        state: "compacted",
+        reason: event.reason,
+        aborted: event.aborted,
+        willRetry: event.willRetry,
+        errorMessage: event.errorMessage,
+      });
+      return;
+    case "auto_retry_start":
+      onEvent?.("runtime", { state: "retrying", attempt: event.attempt, maxAttempts: event.maxAttempts, errorMessage: event.errorMessage });
+      return;
+    case "auto_retry_end":
+      onEvent?.("runtime", { state: "retry_complete", success: event.success, attempt: event.attempt, errorMessage: event.finalError });
+      return;
+    case "summarization_retry_scheduled":
+    case "summarization_retry_attempt_start":
+    case "summarization_retry_finished":
+      onEvent?.("runtime", { state: "summarization_retry", phase: event.type, attempt: event.attempt });
+      return;
+    default:
+      return;
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function boundaryTool(

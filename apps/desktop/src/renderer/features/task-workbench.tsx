@@ -19,6 +19,7 @@ import type {
   Workspace,
 } from "@pi-work/protocol";
 import { MarkdownMessage } from "../components/markdown-message.js";
+import { PiMark } from "../components/pi-mark.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -75,6 +76,9 @@ import type { MessageKey } from "../i18n.js";
 import type { InspectorTab } from "../store.js";
 
 type T = (key: MessageKey) => string;
+type LiveThought = { contentIndex: number; content: string; complete: boolean };
+type LiveTool = { toolCallId: string; toolName: string; detail: string; complete: boolean; failed: boolean };
+type LiveProcess = { thoughts: LiveThought[]; tools: LiveTool[]; notice: string | null };
 
 function formatBytes(size: number): string {
   if (size < 1_024) return `${size} B`;
@@ -313,6 +317,28 @@ export function TaskListPage(props: {
 }
 
 export function SessionEmptyState(props: { personal: boolean; t: T; onNewTask(): void }) {
+  if (props.personal) {
+    return (
+      <section className="session-empty-state session-empty-state-personal" aria-label="Pi Work">
+        <div className="session-empty-personal-layout">
+          <header className="session-empty-brand-lockup">
+            <PiMark size="hero" />
+            <span>Pi Work</span>
+          </header>
+          <div className="session-empty-brand-copy">
+            <p className="session-empty-kicker">{props.t("personalWorkspace")}</p>
+            <h1>{props.t("personalEmptyTitle")}</h1>
+            <p>{props.t("personalEmptyDetail")}</p>
+          </div>
+          <p className="session-empty-shortcut">
+            <kbd>⌘ N</kbd>
+            <span>{props.t("personalEmptyShortcut")}</span>
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="session-empty-state">
       <div className="session-empty-state-content">
@@ -321,7 +347,7 @@ export function SessionEmptyState(props: { personal: boolean; t: T; onNewTask():
         <p>{props.t("selectSessionDetail")}</p>
         <Button onClick={props.onNewTask}>
           <Icon name="plus" size={14} />
-          {props.personal ? props.t("newSession") : props.t("newTask")}
+          {props.t("newTask")}
         </Button>
       </div>
     </section>
@@ -354,6 +380,7 @@ export function TaskWorkbench(props: {
   const [input, setInput] = useState(() => localStorage.getItem(draftKey) ?? "");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [streamed, setStreamed] = useState("");
+  const [liveProcess, setLiveProcess] = useState<LiveProcess>({ thoughts: [], tools: [], notice: null });
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -414,8 +441,9 @@ export function TaskWorkbench(props: {
   useEffect(() => window.piWork.agent.onEvent(({ sessionId: eventSessionId, event }) => {
     if (eventSessionId !== sessionId) return;
     if (event.kind === "text_delta" && typeof event.payload.delta === "string") enqueueStream(event.payload.delta);
-    if (event.kind !== "text_delta") void queryClient.invalidateQueries({ queryKey: ["activities", sessionId] });
-  }), [queryClient, sessionId]);
+    setLiveProcess((current) => reduceLiveProcess(current, event.kind, event.payload, props.t));
+    if (event.kind === "completed" || event.kind === "cancelled") void queryClient.invalidateQueries({ queryKey: ["activities", sessionId] });
+  }), [props.t, queryClient, sessionId]);
   useEffect(() => () => {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
     streamWaiters.current.splice(0).forEach((resolve) => resolve());
@@ -423,7 +451,7 @@ export function TaskWorkbench(props: {
   useEffect(() => {
     const scroller = messageScroller.current;
     if (scroller !== null) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-  }, [approvals.length, messages.data?.length, pendingPrompt, streamed]);
+  }, [approvals.length, liveProcess.notice, liveProcess.thoughts.length, liveProcess.tools.length, messages.data?.length, pendingPrompt, streamed]);
   useEffect(() => {
     if (personal) return;
     if (props.session.status === "awaiting_plan_approval") props.onInspectorOpen("plan");
@@ -449,6 +477,7 @@ export function TaskWorkbench(props: {
   const send = useMutation({
     mutationFn: (content: string) => {
       clearStream();
+      setLiveProcess({ thoughts: [], tools: [], notice: null });
       if (providerId === "" || modelId === "") throw new Error(props.t("configureModel"));
       return window.piWork.chat.send({
         workspaceId: props.workspace?.id ?? null,
@@ -469,11 +498,13 @@ export function TaskWorkbench(props: {
       localStorage.removeItem(draftKey);
       setPendingPrompt(null);
       clearStream();
+      setLiveProcess({ thoughts: [], tools: [], notice: null });
       await refreshTaskData();
     },
     onError: (cause: Error) => {
       setPendingPrompt(null);
       clearStream();
+      setLiveProcess({ thoughts: [], tools: [], notice: null });
       setError(cause.message);
     },
   });
@@ -599,7 +630,7 @@ export function TaskWorkbench(props: {
               <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
             </div>
           ) : (
-            <MessageList messages={messages.data ?? []} t={props.t} />
+            <MessageList messages={messages.data ?? []} activities={activities.data ?? []} t={props.t} />
           )}
           {savedAttachments.data?.length ? (
             <div className="attachment-strip">{savedAttachments.data.map((attachment) => (
@@ -611,8 +642,8 @@ export function TaskWorkbench(props: {
           {pendingPrompt !== null ? (
             <article className="message user pending"><span>{props.t("you")}</span><div>{pendingPrompt}</div></article>
           ) : null}
-          {streamed !== "" ? (
-            <article className="message assistant"><span>{props.t("pi")}</span><MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /></article>
+          {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
+            <article className="message assistant"><span>{props.t("pi")}</span><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
           ) : null}
           {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
           {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
@@ -825,19 +856,107 @@ export function TaskWorkbench(props: {
   }
 }
 
-function MessageList({ messages, t }: { messages: ChatMessage[]; t: T }) {
+function MessageList({ messages, activities, t }: { messages: ChatMessage[]; activities: Activity[]; t: T }) {
   return (
     <div className="messages">
       {messages.map((message) => (
         <article className={`message ${message.role}`} key={message.id}>
           <span>{message.role === "user" ? t("you") : message.role === "assistant" ? t("pi") : t("system")}</span>
           {message.role === "assistant"
-            ? <MarkdownMessage content={message.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} />
+            ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><MarkdownMessage content={message.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></>
             : <div>{message.content}</div>}
         </article>
       ))}
     </div>
   );
+}
+
+function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T }) {
+  if (activities.length === 0) return null;
+  return <details className="thinking-block"><summary>{t("thoughtProcess")}</summary>{activities.map((activity) => <div className="thinking-content" key={activity.id}>{activity.detail}</div>)}</details>;
+}
+
+function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
+  return (
+    <div className="live-process">
+      {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
+        <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
+          <summary>{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</summary>
+          <div className="thinking-content">{thought.content}</div>
+        </details>
+      ))}
+      {process.tools.map((tool) => <div className="tool-status" key={tool.toolCallId}>{tool.complete ? `${tool.failed ? t("toolFailed") : t("toolCompleted")}: ${tool.toolName}` : `${t("toolRunning")}: ${tool.toolName}`}{tool.detail ? ` — ${tool.detail}` : ""}</div>)}
+      {process.notice ? <div className="process-notice">{process.notice}</div> : null}
+    </div>
+  );
+}
+
+export function reduceLiveProcess(current: LiveProcess, kind: string, payload: Record<string, unknown>, t: T): LiveProcess {
+  if (kind === "thinking") {
+    const contentIndex = typeof payload.contentIndex === "number" ? payload.contentIndex : 0;
+    const thought = current.thoughts.find((item) => item.contentIndex === contentIndex);
+    if (payload.phase === "start") return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { contentIndex, content: "", complete: false }] };
+    if (payload.phase === "delta" && typeof payload.delta === "string") {
+      const next = thought ?? { contentIndex, content: "", complete: false };
+      return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { ...next, content: `${next.content}${payload.delta}` }] };
+    }
+    if (payload.phase === "end") {
+      const next = thought ?? { contentIndex, content: "", complete: false };
+      const content = typeof payload.content === "string" ? payload.content : next.content;
+      return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { ...next, content, complete: true }] };
+    }
+  }
+  if (kind === "tool_call" && typeof payload.toolCallId === "string") return {
+    ...current,
+    tools: [...current.tools.filter((tool) => tool.toolCallId !== payload.toolCallId), {
+      toolCallId: payload.toolCallId,
+      toolName: String(payload.toolName ?? "tool"),
+      detail: "",
+      complete: false,
+      failed: false,
+    }],
+  };
+  if ((kind === "tool_update" || kind === "tool_result") && typeof payload.toolCallId === "string") {
+    const existing = current.tools.find((tool) => tool.toolCallId === payload.toolCallId);
+    const tool = existing ?? {
+      toolCallId: payload.toolCallId,
+      toolName: String(payload.toolName ?? "tool"),
+      detail: "",
+      complete: false,
+      failed: false,
+    };
+    const detail = summarizeProcessValue(kind === "tool_result" ? payload.result : payload.output);
+    return {
+      ...current,
+      tools: [...current.tools.filter((item) => item.toolCallId !== payload.toolCallId), {
+        ...tool,
+        toolName: String(payload.toolName ?? tool.toolName),
+        detail: detail || tool.detail,
+        complete: kind === "tool_result",
+        failed: kind === "tool_result" && payload.isError === true,
+      }],
+    };
+  }
+  if (kind === "runtime") {
+    if (payload.state === "queue_clear" || payload.state === "retry_complete") return { ...current, notice: null };
+    const notice = payload.state === "queued"
+      ? t("queued")
+      : payload.state === "retrying" || payload.state === "summarization_retry"
+        ? t("retrying")
+        : payload.state === "compacting"
+          ? t("compacting")
+          : payload.state === "compacted"
+            ? t("contextCompacted")
+            : null;
+    return notice === null ? current : { ...current, notice };
+  }
+  return current;
+}
+
+function summarizeProcessValue(value: unknown): string {
+  const source = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const compact = source.replace(/\s+/g, " ").trim();
+  return compact.length > 120 ? `${compact.slice(0, 117)}…` : compact;
 }
 
 function TaskInspector(props: {
@@ -988,12 +1107,25 @@ function TaskSectionError({ t, onRetry }: { t: T; onRetry(): void }) {
 }
 
 function ActivityTimelineItem({ activity, t }: { activity: Activity; t: T }) {
+  const thinking = activity.kind === "thinking";
+  const detail = thinking ? summarizeActivity(activity.detail) : activity.detail;
+  const metadata = thinking ? omitThoughtMetadata(activity.metadata) : activity.metadata;
   return (
     <article className={`timeline-item timeline-${activity.kind}`}>
       <span className="timeline-marker"><Icon name={activity.kind === "error" ? "alert" : activity.kind === "file_change" ? "file" : activity.kind === "tool_call" ? "terminal" : "status"} size={14} /></span>
-      <div><time>{new Date(activity.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><strong>{activityTitle(activity.kind, t)}</strong>{activity.detail ? <p>{activity.detail}</p> : null}{Object.keys(activity.metadata).length ? <details><summary>{t("technicalDetails")}</summary><pre>{JSON.stringify(activity.metadata, null, 2)}</pre></details> : null}</div>
+      <div><time>{new Date(activity.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><strong>{activityTitle(activity.kind, t)}</strong>{detail ? <p>{detail}</p> : null}{Object.keys(metadata).length ? <details><summary>{t("technicalDetails")}</summary><pre>{JSON.stringify(metadata, null, 2)}</pre></details> : null}</div>
     </article>
   );
+}
+
+function summarizeActivity(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > 140 ? `${compact.slice(0, 137)}…` : compact;
+}
+
+function omitThoughtMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const { content: _content, delta: _delta, ...safeMetadata } = metadata;
+  return safeMetadata;
 }
 
 function ToolApprovalCard(props: { approval: ToolApproval; compact?: boolean; t: T; onResolve(approved: boolean): void }) {

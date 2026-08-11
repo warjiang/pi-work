@@ -33,6 +33,7 @@ const piWork = {
   },
   session: {
     list: (input: unknown = {}) => ipcRenderer.invoke("session:list", input),
+    create: (input: unknown) => ipcRenderer.invoke("session:create", input),
     get: (sessionId: string) => ipcRenderer.invoke("session:get", sessionId),
     update: (input: unknown) => ipcRenderer.invoke("session:update", input),
     remove: (sessionId: string) => ipcRenderer.invoke("session:remove", { sessionId }),
