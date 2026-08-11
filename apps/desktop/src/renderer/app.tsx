@@ -17,12 +17,12 @@ import { TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
 import {
   AutomationsPage,
   BoardPage,
-  PageHeader,
+  FolderSettingsPage,
   SkillsPage,
   SourcesPage,
 } from "./features/workspace-pages.js";
 import { translator } from "./i18n.js";
-import type { AppView } from "./store.js";
+import type { AppView, WorkspaceScope } from "./store.js";
 import { useWorkspaceUi } from "./store.js";
 
 export function App() {
@@ -48,58 +48,60 @@ export function App() {
     : (workspaceById.get(selectedSession.workspaceId) ?? null);
   const scopedSessions = useMemo(() => {
     const values = sessions.data ?? [];
-    if (ui.workspaceScope === "all") return values;
     if (ui.workspaceScope === "personal") {
-      return values.filter((session) => workspaceById.get(session.workspaceId)?.kind === "managed");
+      return values.filter((session) => (
+        session.kind === "chat" && workspaceById.get(session.workspaceId)?.kind === "managed"
+      ));
     }
-    return values.filter(({ workspaceId }) => workspaceId === ui.workspaceScope);
+    return values.filter((session) => session.workspaceId === ui.workspaceScope && session.kind === "task");
   }, [sessions.data, ui.workspaceScope, workspaceById]);
-  const scopeWorkspace = ui.workspaceScope === "all" || ui.workspaceScope === "personal"
+  const scopeWorkspace = ui.workspaceScope === "personal"
     ? null
     : (workspaceById.get(ui.workspaceScope) ?? null);
   const folderWorkspaces = (workspaces.data ?? []).filter(({ kind }) => kind === "folder");
-  const boardWorkspace = scopeWorkspace?.kind === "folder"
-    ? scopeWorkspace
-    : selectedWorkspace?.kind === "folder"
-      ? selectedWorkspace
-      : (folderWorkspaces[0] ?? null);
-  const workflowWorkspaceId = selectedWorkspace?.kind === "folder"
-    ? selectedWorkspace.id
-    : scopeWorkspace?.kind === "folder"
-      ? scopeWorkspace.id
-      : null;
+  const boardWorkspace = scopeWorkspace?.kind === "folder" ? scopeWorkspace : null;
+  const workflowWorkspaceId = scopeWorkspace?.kind === "folder" ? scopeWorkspace.id : null;
   const statuses = useQuery({
     queryKey: ["statuses", workflowWorkspaceId],
-    queryFn: () => window.piWork.status.list(workflowWorkspaceId),
+    queryFn: () => window.piWork.status.list(workflowWorkspaceId!),
     enabled: workflowWorkspaceId !== null,
   });
   const labels = useQuery({
     queryKey: ["labels", workflowWorkspaceId],
-    queryFn: () => window.piWork.label.list(workflowWorkspaceId),
+    queryFn: () => window.piWork.label.list(workflowWorkspaceId!),
     enabled: workflowWorkspaceId !== null,
   });
+  const folderSessions = scopedSessions.filter((session) => (
+    session.kind === "task" && workspaceById.get(session.workspaceId)?.kind === "folder"
+  ));
   const artifactQueries = useQueries({
-    queries: scopedSessions.map((session) => ({
+    queries: folderSessions.map((session) => ({
       queryKey: ["artifacts", session.id],
       queryFn: () => window.piWork.artifact.list(session.id),
       staleTime: 2_000,
     })),
   });
+  const unpublishedBySessionId = useMemo(() => new Map(
+    folderSessions.map((session, index) => [
+      session.id,
+      (artifactQueries[index]?.data ?? []).some(({ publishedPath }) => publishedPath === null),
+    ]),
+  ), [artifactQueries, folderSessions]);
   const attentionIds = useMemo(() => {
     const ids = new Set<string>();
-    scopedSessions.forEach((session, index) => {
+    scopedSessions.forEach((session) => {
       if (
         session.status === "awaiting_plan_approval"
         || session.status === "awaiting_action_approval"
         || session.status === "failed"
         || (toolApprovals.data ?? []).some(({ sessionId }) => sessionId === session.id)
-        || (artifactQueries[index]?.data ?? []).some(({ publishedPath }) => publishedPath === null)
+        || unpublishedBySessionId.get(session.id) === true
       ) {
         ids.add(session.id);
       }
     });
     return ids;
-  }, [artifactQueries, scopedSessions, toolApprovals.data]);
+  }, [scopedSessions, toolApprovals.data, unpublishedBySessionId]);
 
   useEffect(() => {
     const value = settings.data;
@@ -194,9 +196,26 @@ export function App() {
 
   function showView(view: AppView) {
     ui.selectTask(null);
-    if (view === "board" && scopeWorkspace?.kind !== "folder" && folderWorkspaces[0]) {
-      ui.setWorkspaceScope(folderWorkspaces[0].id);
+    if (
+      (view === "board" || view === "sources" || view === "skills" || view === "automations" || view === "folder-settings")
+      && scopeWorkspace?.kind !== "folder"
+    ) {
+      return;
     }
+    ui.showView(view);
+  }
+
+  function openSession(sessionId: string) {
+    const session = (sessions.data ?? []).find((candidate) => candidate.id === sessionId);
+    if (session === undefined) return;
+    const workspace = workspaceById.get(session.workspaceId);
+    if (workspace === undefined) return;
+    ui.setWorkspaceScope(workspace.kind === "managed" ? "personal" : workspace.id);
+    ui.openTask(session.id);
+  }
+
+  function openContext(scope: WorkspaceScope, view: AppView) {
+    ui.setWorkspaceScope(scope);
     ui.showView(view);
   }
 
@@ -264,11 +283,12 @@ export function App() {
         sessions={scopedSessions}
         selectedTaskId={ui.selectedTaskId}
         attentionIds={attentionIds}
+        isFolder={scopeWorkspace?.kind === "folder"}
         collapsed={ui.sidebarCollapsed}
         drawerOpen={ui.sidebarDrawerOpen}
         t={t}
         onView={showView}
-        onOpenTask={ui.openTask}
+        onOpenTask={openSession}
         onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
       />
       <main className="app-main" id="main-content">
@@ -298,35 +318,45 @@ export function App() {
             onInspectorTab={ui.setInspectorTab}
             onRefresh={refresh}
             onDelete={() => removeSession.mutate(selectedSession.id)}
+            folders={folderWorkspaces}
+            onPromoted={(session) => {
+              void refresh().then(() => {
+                ui.setWorkspaceScope(session.workspaceId);
+                ui.openTask(session.id);
+              });
+            }}
           />
         ) : null}
         {(ui.view === "inbox" && selectedSession === null) || ui.view === "attention" || ui.view === "completed" ? (
           <TaskListPage
-            title={t(ui.view === "attention" ? "attention" : ui.view === "completed" ? "completed" : "inbox")}
+            title={t(ui.view === "attention"
+              ? "attention"
+              : ui.view === "completed"
+                ? "completed"
+                : ui.workspaceScope === "personal"
+                  ? "personalSessions"
+                  : "folderTasks")}
             sessions={pageSessions}
             workspaces={workspaces.data ?? []}
             t={t}
-            onOpenTask={ui.openTask}
+            onOpenTask={openSession}
           />
         ) : null}
-        {ui.view === "board" ? (
-          boardWorkspace === null ? (
-            <EmptyBoard t={t} onAddWorkspace={() => void addWorkspace()} />
-          ) : (
+        {ui.view === "board" && boardWorkspace !== null ? (
             <BoardPage
               sessions={sessions.data ?? []}
               statuses={statuses.data ?? []}
               labels={labels.data ?? []}
               workspace={boardWorkspace}
               t={t}
-              onOpenTask={ui.openTask}
+              onOpenTask={openSession}
               onRefresh={refresh}
             />
-          )
         ) : null}
-        {ui.view === "sources" ? <SourcesPage workspaceId={resourceWorkspaceId} t={t} /> : null}
-        {ui.view === "skills" ? <SkillsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
-        {ui.view === "automations" ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
+        {ui.view === "sources" && resourceWorkspaceId !== null ? <SourcesPage workspaceId={resourceWorkspaceId} t={t} /> : null}
+        {ui.view === "skills" && resourceWorkspaceId !== null ? <SkillsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
+        {ui.view === "automations" && resourceWorkspaceId !== null ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
+        {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
         {ui.view === "browser" ? <BrowserPage t={t} /> : null}
         {ui.view === "settings" ? (
           <SettingsPage
@@ -349,25 +379,27 @@ export function App() {
       </main>
       <CommandPalette
         open={ui.commandOpen}
-        scope={ui.workspaceScope}
-        baseSessions={scopedSessions}
+        workspaces={workspaces.data ?? []}
+        baseSessions={sessions.data ?? []}
         t={t}
         onOpenChange={ui.setCommandOpen}
-        onOpenTask={ui.openTask}
-        onOpenView={showView}
+        onOpenTask={openSession}
+        onOpenContext={openContext}
       />
       <NewTaskDialog
         open={ui.newTaskOpen}
+        scope={ui.workspaceScope}
         workspaces={workspaces.data ?? []}
         providers={providers.data ?? []}
         models={models.data}
         settings={appSettings}
         t={t}
         onOpenChange={ui.setNewTaskOpen}
-        onAddWorkspace={addWorkspace}
         onCreated={(session) => {
-          void refresh();
-          ui.openTask(session.id);
+          void refresh().then(() => {
+            ui.setWorkspaceScope(session.kind === "chat" ? "personal" : session.workspaceId);
+            ui.openTask(session.id);
+          });
         }}
       />
       <OnboardingDialog
@@ -409,20 +441,6 @@ function AppFailure(props: {
       <p>{props.detail}</p>
       <Button onClick={props.onRetry}>{props.t("tryAgain")}</Button>
     </div>
-  );
-}
-
-function EmptyBoard(props: { t: ReturnType<typeof translator>; onAddWorkspace(): void }) {
-  return (
-    <section className="page empty-board-page">
-      <PageHeader eyebrow={props.t("work")} title={props.t("board")} detail={props.t("boardDetail")} />
-      <div className="task-list-empty">
-        <div className="empty-symbol"><Icon name="folder-kanban" /></div>
-        <h2>{props.t("chooseFolder")}</h2>
-        <p>{props.t("folderAccessDetail")}</p>
-        <Button onClick={props.onAddWorkspace}><Icon name="folder-plus" />{props.t("addWorkFolder")}</Button>
-      </div>
-    </section>
   );
 }
 

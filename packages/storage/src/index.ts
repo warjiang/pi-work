@@ -110,6 +110,11 @@ function parseAttachment(row: typeof attachments.$inferSelect): Attachment {
 
 type DomainName = "status" | "label" | "view" | "subtask" | "source" | "skill" | "automation" | "automationRun" | "browserTab";
 type DomainValue = StatusDefinition | Label | SavedView | Subtask | Source | Skill | Automation | AutomationRun | BrowserTab;
+type FolderDomainName = "status" | "label" | "source" | "skill" | "automation";
+
+function isFolderDomain(domain: DomainName): domain is FolderDomainName {
+  return domain === "status" || domain === "label" || domain === "source" || domain === "skill" || domain === "automation";
+}
 
 export class PiWorkStore {
   private readonly sqlite: Database.Database;
@@ -164,6 +169,9 @@ export class PiWorkStore {
     workingDirectory?: string | null;
     id?: string;
   }): Task {
+    const workspace = this.requireWorkspace(input.workspaceId);
+    const kind = input.kind ?? "task";
+    this.assertSessionWorkspaceKind(workspace, kind);
     const createdAt = timestamp();
     const task = taskSchema.parse({
       id: input.id ?? randomUUID(),
@@ -172,7 +180,7 @@ export class PiWorkStore {
       providerId: input.providerId ?? null,
       modelId: input.modelId ?? null,
       thinkingLevel: input.thinkingLevel ?? "off",
-      kind: input.kind ?? "chat",
+      kind,
       archived: false,
       flagged: false,
       unread: false,
@@ -274,6 +282,9 @@ export class PiWorkStore {
     "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "permissionMode" | "planMode" | "workingDirectory" | "running"
   >>): Session {
     const current = this.requireTask(sessionId);
+    const workspace = this.requireWorkspace(current.workspaceId);
+    this.assertSessionWorkspaceKind(workspace, current.kind);
+    this.validateSessionResources(workspace, input);
     const next = taskSchema.parse({ ...current, ...input, updatedAt: timestamp() });
     this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
     this.appendEvent(sessionId, "session.updated", input);
@@ -359,6 +370,7 @@ export class PiWorkStore {
   }
 
   listTasks(workspaceId: string): Task[] {
+    this.requireFolderWorkspace(workspaceId);
     return this.db
       .select()
       .from(tasks)
@@ -380,6 +392,11 @@ export class PiWorkStore {
       updatedAt: now,
       ...(value as Record<string, unknown>),
     });
+    if (isFolderDomain(domain)) {
+      const workspaceId = this.workspaceIdOf(entity);
+      this.requireFolderWorkspace(workspaceId);
+      if (domain === "automation") this.validateAutomationReferences(entity as Automation, workspaceId);
+    }
     this.db.insert(domainEntities).values({
       id: entity.id,
       domain,
@@ -396,6 +413,12 @@ export class PiWorkStore {
     schema: { parse(value: unknown): T },
     workspaceId?: string | null,
   ): T[] {
+    if (isFolderDomain(domain)) {
+      if (workspaceId === undefined || workspaceId === null) {
+        throw new Error(`${domain} resources require a work folder.`);
+      }
+      this.requireFolderWorkspace(workspaceId);
+    }
     const rows = workspaceId === undefined
       ? this.db.select().from(domainEntities).where(eq(domainEntities.domain, domain)).orderBy(asc(domainEntities.createdAt)).all()
       : this.db.select().from(domainEntities).where(and(
@@ -415,6 +438,14 @@ export class PiWorkStore {
     if (row === undefined) throw new Error(`Unknown ${domain}: ${id}`);
     const current = schema.parse(JSON.parse(row.value));
     const next = schema.parse({ ...current, ...input, id, ...("updatedAt" in current ? { updatedAt: timestamp() } : {}) });
+    if (isFolderDomain(domain)) {
+      const workspaceId = this.workspaceIdOf(current);
+      this.requireFolderWorkspace(workspaceId);
+      if (this.workspaceIdOf(next) !== workspaceId) {
+        throw new Error(`${domain} resources cannot move between work folders.`);
+      }
+      if (domain === "automation") this.validateAutomationReferences(next as Automation, workspaceId);
+    }
     this.db.update(domainEntities).set({
       value: JSON.stringify(next),
       workspaceId: "workspaceId" in next ? (next.workspaceId ?? null) : null,
@@ -424,20 +455,25 @@ export class PiWorkStore {
   }
 
   removeDomainEntity(domain: DomainName, id: string): void {
+    if (isFolderDomain(domain)) this.requireFolderDomainEntity(domain, id);
     this.db.delete(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).run();
   }
 
   removeStatus(id: string): void {
+    const status = this.requireFolderDomainEntity("status", id);
+    const workspaceId = this.workspaceIdOf(status);
     const transaction = this.sqlite.transaction(() => {
-      this.sqlite.prepare("UPDATE tasks SET status_id = NULL WHERE status_id = ?").run(id);
+      this.sqlite.prepare("UPDATE tasks SET status_id = NULL WHERE workspace_id = ? AND status_id = ?").run(workspaceId, id);
       this.sqlite.prepare("DELETE FROM domain_entities WHERE id = ? AND domain = 'status'").run(id);
     });
     transaction();
   }
 
   removeLabel(id: string): void {
+    const label = this.requireFolderDomainEntity("label", id);
+    const workspaceId = this.workspaceIdOf(label);
     const transaction = this.sqlite.transaction(() => {
-      const rows = this.sqlite.prepare("SELECT id, label_ids FROM tasks").all() as Array<{ id: string; label_ids: string }>;
+      const rows = this.sqlite.prepare("SELECT id, label_ids FROM tasks WHERE workspace_id = ?").all(workspaceId) as Array<{ id: string; label_ids: string }>;
       const update = this.sqlite.prepare("UPDATE tasks SET label_ids = ?, updated_at = ? WHERE id = ?");
       for (const row of rows) {
         const current = JSON.parse(row.label_ids) as string[];
@@ -452,31 +488,31 @@ export class PiWorkStore {
   createSource(value: Omit<Source, "id" | "createdAt" | "updatedAt">): Source {
     return this.createDomainEntity("source", sourceSchema, value);
   }
-  listSources(workspaceId?: string | null): Source[] {
+  listSources(workspaceId: string): Source[] {
     return this.listDomainEntities("source", sourceSchema, workspaceId);
   }
   createSkill(value: Omit<Skill, "id" | "createdAt" | "updatedAt">): Skill {
     return this.createDomainEntity("skill", skillSchema, value);
   }
-  listSkills(workspaceId?: string | null): Skill[] {
+  listSkills(workspaceId: string): Skill[] {
     return this.listDomainEntities("skill", skillSchema, workspaceId);
   }
   createAutomation(value: Omit<Automation, "id" | "createdAt" | "updatedAt">): Automation {
     return this.createDomainEntity("automation", automationSchema, value);
   }
-  listAutomations(workspaceId?: string | null): Automation[] {
+  listAutomations(workspaceId: string): Automation[] {
     return this.listDomainEntities("automation", automationSchema, workspaceId);
   }
   createStatus(value: StatusDefinition): StatusDefinition {
     return this.createDomainEntity("status", statusDefinitionSchema, value);
   }
-  listStatuses(workspaceId?: string | null): StatusDefinition[] {
+  listStatuses(workspaceId: string): StatusDefinition[] {
     return this.listDomainEntities("status", statusDefinitionSchema, workspaceId);
   }
   createLabel(value: Label): Label {
     return this.createDomainEntity("label", labelSchema, value);
   }
-  listLabels(workspaceId?: string | null): Label[] {
+  listLabels(workspaceId: string): Label[] {
     return this.listDomainEntities("label", labelSchema, workspaceId);
   }
   createSubtask(value: Subtask): Subtask {
@@ -628,6 +664,66 @@ export class PiWorkStore {
     return published;
   }
 
+  promoteManagedSession(input: {
+    sessionId: string;
+    workspaceId: string;
+    stagedPaths: Record<string, string>;
+  }): { session: Session; workspace: Workspace } {
+    const session = this.requireTask(input.sessionId);
+    const sourceWorkspace = this.requireWorkspace(session.workspaceId);
+    const targetWorkspace = this.requireFolderWorkspace(input.workspaceId);
+    if (session.kind !== "chat" || sourceWorkspace.kind !== "managed") {
+      throw new Error("Only personal sessions can move to a work folder.");
+    }
+    if (session.running) {
+      throw new Error("Stop this personal session before moving it.");
+    }
+    const stagedArtifacts = this.listArtifacts(session.id).filter(({ publishedPath }) => publishedPath === null);
+    for (const artifact of stagedArtifacts) {
+      if (input.stagedPaths[artifact.id] === undefined) {
+        throw new Error(`Missing staged artifact path: ${artifact.id}`);
+      }
+    }
+
+    const promoted = taskSchema.parse({
+      ...session,
+      workspaceId: targetWorkspace.id,
+      kind: "task",
+      status: "draft",
+      archived: false,
+      flagged: false,
+      unread: false,
+      statusId: null,
+      labelIds: [],
+      planMode: true,
+      workingDirectory: targetWorkspace.rootPath,
+      running: false,
+      updatedAt: timestamp(),
+    });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.update(tasks).set(taskValues(promoted)).where(eq(tasks.id, session.id)).run();
+      for (const artifact of stagedArtifacts) {
+        this.db.update(artifacts).set({ stagedPath: input.stagedPaths[artifact.id] }).where(eq(artifacts.id, artifact.id)).run();
+      }
+      const run = this.getLatestRun(session.id);
+      if (run !== null) {
+        this.db.update(runs).set({
+          status: "draft",
+          updatedAt: promoted.updatedAt,
+          completedAt: null,
+        }).where(eq(runs.id, run.id)).run();
+      }
+      this.sqlite.prepare("DELETE FROM workspaces WHERE id = ?").run(sourceWorkspace.id);
+      this.appendEvent(session.id, "session.updated", {
+        kind: "task",
+        workspaceId: targetWorkspace.id,
+        promotedFrom: "personal",
+      });
+    });
+    transaction();
+    return { session: promoted, workspace: sourceWorkspace };
+  }
+
   cancelTask(taskId: string): Task {
     const task = this.updateTaskStatus(taskId, "cancelled");
     this.appendEvent(taskId, "task.cancelled", {});
@@ -664,6 +760,91 @@ export class PiWorkStore {
       throw new Error(`Unknown task: ${taskId}`);
     }
     return task;
+  }
+
+  private requireWorkspace(workspaceId: string): Workspace {
+    const workspace = this.getWorkspace(workspaceId);
+    if (workspace === null) throw new Error(`Unknown work folder: ${workspaceId}`);
+    return workspace;
+  }
+
+  private requireFolderWorkspace(workspaceId: string): Workspace {
+    const workspace = this.requireWorkspace(workspaceId);
+    if (workspace.kind !== "folder") throw new Error("This operation requires a work folder.");
+    return workspace;
+  }
+
+  private assertSessionWorkspaceKind(workspace: Workspace, kind: Session["kind"]): void {
+    if (kind === "chat" && workspace.kind !== "managed") {
+      throw new Error("Personal sessions can only use private sandboxes.");
+    }
+    if (kind === "task" && workspace.kind !== "folder") {
+      throw new Error("Tasks can only use work folders.");
+    }
+  }
+
+  private workspaceIdOf(entity: DomainValue): string {
+    if (!("workspaceId" in entity) || entity.workspaceId === null) {
+      throw new Error("Resources must belong to a work folder.");
+    }
+    return entity.workspaceId;
+  }
+
+  private requireFolderDomainEntity<T extends DomainValue>(domain: FolderDomainName, id: string): T {
+    const row = this.db.select().from(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).get();
+    if (row === undefined) throw new Error(`Unknown ${domain}: ${id}`);
+    const schemas = {
+      status: statusDefinitionSchema,
+      label: labelSchema,
+      source: sourceSchema,
+      skill: skillSchema,
+      automation: automationSchema,
+    };
+    const entity = schemas[domain].parse(JSON.parse(row.value)) as T;
+    this.requireFolderWorkspace(this.workspaceIdOf(entity));
+    return entity;
+  }
+
+  private validateSessionResources(workspace: Workspace, input: Partial<Pick<Session, "statusId" | "labelIds">>): void {
+    if (input.statusId === undefined && input.labelIds === undefined) return;
+    if (workspace.kind !== "folder") {
+      if (input.statusId !== undefined && input.statusId !== null) {
+        throw new Error("Personal sessions cannot use work stages.");
+      }
+      if (input.labelIds !== undefined && input.labelIds.length > 0) {
+        throw new Error("Personal sessions cannot use work labels.");
+      }
+      return;
+    }
+    if (input.statusId !== undefined && input.statusId !== null) {
+      const status = this.requireFolderDomainEntity<StatusDefinition>("status", input.statusId);
+      if (this.workspaceIdOf(status) !== workspace.id) {
+        throw new Error("Work stage belongs to a different work folder.");
+      }
+    }
+    for (const labelId of input.labelIds ?? []) {
+      const label = this.requireFolderDomainEntity<Label>("label", labelId);
+      if (this.workspaceIdOf(label) !== workspace.id) {
+        throw new Error("Work label belongs to a different work folder.");
+      }
+    }
+  }
+
+  private validateAutomationReferences(automation: Automation, workspaceId: string): void {
+    if (automation.trigger.type === "status_changed" && automation.trigger.statusId !== null) {
+      const status = this.requireFolderDomainEntity<StatusDefinition>("status", automation.trigger.statusId);
+      if (this.workspaceIdOf(status) !== workspaceId) throw new Error("Automation stage belongs to a different work folder.");
+    }
+    if (automation.trigger.type === "label_changed") {
+      const label = this.requireFolderDomainEntity<Label>("label", automation.trigger.labelId);
+      if (this.workspaceIdOf(label) !== workspaceId) throw new Error("Automation label belongs to a different work folder.");
+    }
+    if (automation.action.type === "send_prompt" && automation.action.sessionId !== null) {
+      const session = this.requireTask(automation.action.sessionId);
+      if (session.workspaceId !== workspaceId || session.kind !== "task") {
+        throw new Error("Automation task belongs to a different work folder.");
+      }
+    }
   }
 
   private updateTaskStatus(taskId: string, status: TaskStatus): Task {

@@ -59,6 +59,22 @@ export function PageHeader(props: { eyebrow?: string; title: string; detail?: st
   );
 }
 
+export function FolderSettingsPage({ workspace, t }: { workspace: Workspace; t: T }) {
+  return (
+    <section className="page">
+      <PageHeader eyebrow={workspace.name} title={t("folderSettings")} detail={t("folderSettingsDetail")} />
+      <div className="page-body">
+        <section className="settings-section">
+          <div className="folder-settings-list">
+            <div><Icon name="workspace" /><span><strong>{t("folderRoot")}</strong><code>{workspace.rootPath}</code></span></div>
+            <div><Icon name="file-output" /><span><strong>{t("artifactRoot")}</strong><code>{workspace.outputPath}</code></span></div>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 export function BoardPage(props: {
   sessions: Session[];
   statuses: StatusDefinition[];
@@ -208,7 +224,7 @@ function WorkflowRow(props: { value: StatusDefinition | Label; t: T; onSave(name
   return <div className="workflow-row"><span className="color-preview" style={{ background: props.value.color }} /><Input value={name} onChange={(event) => setName(event.target.value)} onBlur={() => void props.onSave(name)} /><Button variant="ghost" size="icon" aria-label={props.t("delete")} onClick={props.onDelete}><Icon name="trash" /></Button></div>;
 }
 
-export function SourcesPage({ workspaceId, t }: { workspaceId: string | null; t: T }) {
+export function SourcesPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["sources", workspaceId], queryFn: () => window.piWork.source.list(workspaceId) });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -254,7 +270,7 @@ function SourceEditor({ source, t, onSaved, onDeleted }: { source: Source; t: T;
   </ResourceEditor>;
 }
 
-export function SkillsPage({ workspaceId, t }: { workspaceId: string | null; t: T }) {
+export function SkillsPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -293,23 +309,23 @@ function SkillEditor({ skill, t, onSaved, onDeleted }: { skill: Skill; t: T; onS
   </ResourceEditor>;
 }
 
-export function AutomationsPage({ workspaceId, t }: { workspaceId: string | null; t: T }) {
+export function AutomationsPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = useQuery({ queryKey: ["automations", workspaceId], queryFn: () => window.piWork.automation.list(workspaceId) });
   const statuses = useQuery({
     queryKey: ["statuses", workspaceId],
-    queryFn: () => workspaceId === null ? Promise.resolve([]) : window.piWork.status.list(workspaceId),
+    queryFn: () => window.piWork.status.list(workspaceId),
   });
   const labels = useQuery({
     queryKey: ["labels", workspaceId],
-    queryFn: () => workspaceId === null ? Promise.resolve([]) : window.piWork.label.list(workspaceId),
+    queryFn: () => window.piWork.label.list(workspaceId),
   });
   const sessions = useQuery({
     queryKey: ["automation-sessions", workspaceId],
     queryFn: async () => {
       const values = await window.piWork.session.list();
-      return workspaceId === null ? values : values.filter((session) => session.workspaceId === workspaceId);
+      return values.filter((session) => session.workspaceId === workspaceId && session.kind === "task");
     },
   });
   const selected = query.data?.find(({ id }) => id === selectedId) ?? null;

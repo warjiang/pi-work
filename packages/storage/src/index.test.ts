@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
+import { labelSchema, statusDefinitionSchema } from "@pi-work/protocol";
 import { PiWorkStore } from "./index.js";
 
 describe("PiWorkStore", () => {
@@ -88,6 +89,7 @@ describe("PiWorkStore", () => {
       providerId: "anthropic",
       modelId: "claude-sonnet-4-5",
       thinkingLevel: "high",
+      kind: "chat",
     });
 
     expect(store.listManagedConversations()[0]?.task.id).toBe(task.id);
@@ -103,6 +105,241 @@ describe("PiWorkStore", () => {
     expect(store.updateAppSettings({ onboardingSkipped: true }).onboardingSkipped).toBe(true);
     expect(store.removeConversation(task.id).workspace.kind).toBe("managed");
     expect(store.getWorkspace(workspace.id)).toBeNull();
+    store.close();
+  });
+
+  it("enforces the personal-session and work-folder-task matrix", () => {
+    const store = new PiWorkStore();
+    const folder = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const managed = store.createWorkspace({
+      name: "Personal",
+      rootPath: "/tmp/pi-work-personal",
+      outputPath: "/tmp/pi-work-personal/Pi Work",
+      kind: "managed",
+    });
+
+    expect(() => store.createTask({ workspaceId: folder.id, title: "Chat", goal: "Chat", kind: "chat" })).toThrow("private sandboxes");
+    expect(() => store.createTask({ workspaceId: managed.id, title: "Task", goal: "Task", kind: "task" })).toThrow("work folders");
+    expect(store.createTask({ workspaceId: folder.id, title: "Task", goal: "Task", kind: "task" }).kind).toBe("task");
+    expect(store.createTask({ workspaceId: managed.id, title: "Chat", goal: "Chat", kind: "chat" }).kind).toBe("chat");
+    store.close();
+  });
+
+  it("keeps workflow resources within their work folder and ignores legacy global resources", () => {
+    const store = new PiWorkStore();
+    const first = store.createWorkspace({
+      name: "First",
+      rootPath: "/workspace/first",
+      outputPath: "/workspace/first/Pi Work",
+    });
+    const second = store.createWorkspace({
+      name: "Second",
+      rootPath: "/workspace/second",
+      outputPath: "/workspace/second/Pi Work",
+    });
+    const managed = store.createWorkspace({
+      name: "Personal",
+      rootPath: "/tmp/pi-work-personal",
+      outputPath: "/tmp/pi-work-personal/Pi Work",
+      kind: "managed",
+    });
+    const firstTask = store.createTask({ workspaceId: first.id, title: "First", goal: "First" });
+    const secondTask = store.createTask({ workspaceId: second.id, title: "Second", goal: "Second" });
+    const status = store.createDomainEntity("status", statusDefinitionSchema, {
+      workspaceId: first.id,
+      name: "Review",
+      color: "#786",
+      position: 0,
+    });
+    const label = store.createDomainEntity("label", labelSchema, {
+      workspaceId: first.id,
+      parentId: null,
+      name: "Important",
+      color: "#786",
+    });
+    const legacyId = randomUUID();
+    const now = new Date().toISOString();
+    const sqlite = (store as unknown as { sqlite: Database.Database }).sqlite;
+    sqlite.prepare("INSERT INTO domain_entities (id, domain, workspace_id, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+      legacyId,
+      "source",
+      null,
+      JSON.stringify({
+        id: legacyId,
+        workspaceId: null,
+        name: "Legacy source",
+        type: "local",
+        enabled: false,
+        config: {},
+        createdAt: now,
+        updatedAt: now,
+      }),
+      now,
+      now,
+    );
+
+    expect(() => store.createSource({ workspaceId: managed.id, name: "Private", type: "local", enabled: false, config: {} })).toThrow("work folder");
+    expect(() => store.listSources(managed.id)).toThrow("work folder");
+    expect(store.listSources(first.id)).toEqual([]);
+    expect(() => store.updateSession(secondTask.id, { statusId: status.id })).toThrow("different work folder");
+    expect(() => store.updateSession(secondTask.id, { labelIds: [label.id] })).toThrow("different work folder");
+    expect(store.updateSession(firstTask.id, { statusId: status.id, labelIds: [label.id] })).toMatchObject({
+      statusId: status.id,
+      labelIds: [label.id],
+    });
+    store.close();
+  });
+
+  it("promotes a personal session into a folder task without losing its history", () => {
+    const store = new PiWorkStore();
+    const folder = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const personal = store.createWorkspace({
+      name: "Personal",
+      rootPath: "/tmp/pi-work-personal",
+      outputPath: "/tmp/pi-work-personal/Pi Work",
+      kind: "managed",
+    });
+    const session = store.createTask({
+      workspaceId: personal.id,
+      title: "Research options",
+      goal: "Compare the available approaches.",
+      kind: "chat",
+      workingDirectory: personal.rootPath,
+    });
+    store.addMessage({ taskId: session.id, role: "user", content: "Compare the available approaches." });
+    store.addMessage({ taskId: session.id, role: "assistant", content: "I found three viable options." });
+    store.addActivity({
+      sessionId: session.id,
+      messageId: null,
+      kind: "notice",
+      title: "Research complete",
+      detail: "The comparison is ready.",
+      metadata: {},
+    });
+    const attachment = store.addAttachment({
+      sessionId: session.id,
+      messageId: null,
+      name: "notes.pdf",
+      path: "/tmp/pi-work-personal/notes.pdf",
+      mimeType: "application/pdf",
+      size: 42,
+    });
+    store.savePlan({
+      taskId: session.id,
+      summary: "Write up the options.",
+      steps: [{ id: randomUUID(), title: "Compare", detail: "Compare the candidates." }],
+      sources: [],
+    });
+    store.approvePlan(session.id, true);
+    const staged = store.createArtifact({
+      taskId: session.id,
+      relativePath: "comparison.md",
+      mimeType: "text/markdown",
+      stagedPath: "/tmp/pi-work-personal/.pi-work/runs/session/staging/comparison.md",
+      content: "# Comparison",
+    });
+    const published = store.createArtifact({
+      taskId: session.id,
+      relativePath: "published.md",
+      mimeType: "text/markdown",
+      stagedPath: "/tmp/pi-work-personal/.pi-work/runs/session/staging/published.md",
+      content: "# Published",
+    });
+    store.publishArtifact(published.id, "/tmp/pi-work-personal/published.md");
+    store.updateSession(session.id, {
+      archived: true,
+      flagged: true,
+      unread: true,
+      planMode: false,
+      workingDirectory: personal.rootPath,
+    });
+
+    const targetStagedPath = "/workspace/product/.pi-work/runs/session/staging/comparison.md";
+    const result = store.promoteManagedSession({
+      sessionId: session.id,
+      workspaceId: folder.id,
+      stagedPaths: { [staged.id]: targetStagedPath },
+    });
+
+    expect(result.session).toEqual(expect.objectContaining({
+      id: session.id,
+      workspaceId: folder.id,
+      kind: "task",
+      status: "draft",
+      archived: false,
+      flagged: false,
+      unread: false,
+      statusId: null,
+      labelIds: [],
+      planMode: true,
+      workingDirectory: folder.rootPath,
+      running: false,
+    }));
+    expect(store.getWorkspace(personal.id)).toBeNull();
+    expect(store.listMessages(session.id)).toHaveLength(2);
+    expect(store.getPlan(session.id)).toEqual(expect.objectContaining({ summary: "Write up the options." }));
+    expect(store.listActivities(session.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Research complete" }),
+    ]));
+    expect(store.getAttachment(attachment.id)?.path).toBe("/tmp/pi-work-personal/notes.pdf");
+    expect(store.getArtifact(staged.id)?.stagedPath).toBe(targetStagedPath);
+    expect(store.getArtifact(published.id)?.publishedPath).toBe("/tmp/pi-work-personal/published.md");
+    expect(store.getLatestRun(session.id)).toEqual(expect.objectContaining({ status: "draft", completedAt: null }));
+    store.close();
+  });
+
+  it("rejects invalid personal-session promotions without changing data", () => {
+    const store = new PiWorkStore();
+    const folder = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const managed = store.createWorkspace({
+      name: "Personal",
+      rootPath: "/tmp/pi-work-personal",
+      outputPath: "/tmp/pi-work-personal/Pi Work",
+      kind: "managed",
+    });
+    const personal = store.createTask({ workspaceId: managed.id, title: "Research", goal: "Research", kind: "chat" });
+    const folderTask = store.createTask({ workspaceId: folder.id, title: "Implement", goal: "Implement" });
+    const running = store.updateSession(personal.id, { running: true });
+
+    expect(() => store.promoteManagedSession({
+      sessionId: personal.id,
+      workspaceId: folder.id,
+      stagedPaths: {},
+    })).toThrow("Stop this personal session");
+    expect(store.getTask(personal.id)).toEqual(running);
+
+    expect(() => store.promoteManagedSession({
+      sessionId: folderTask.id,
+      workspaceId: folder.id,
+      stagedPaths: {},
+    })).toThrow("Only personal sessions");
+    expect(store.getTask(folderTask.id)).toEqual(folderTask);
+
+    expect(() => store.promoteManagedSession({
+      sessionId: personal.id,
+      workspaceId: managed.id,
+      stagedPaths: {},
+    })).toThrow("requires a work folder");
+    expect(store.getTask(personal.id)).toEqual(running);
+
+    expect(() => store.promoteManagedSession({
+      sessionId: personal.id,
+      workspaceId: randomUUID(),
+      stagedPaths: {},
+    })).toThrow("Unknown work folder");
+    expect(store.getWorkspace(managed.id)?.kind).toBe("managed");
     store.close();
   });
 

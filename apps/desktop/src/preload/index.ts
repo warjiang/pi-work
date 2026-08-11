@@ -40,6 +40,7 @@ const piWork = {
     activities: (sessionId: string) => ipcRenderer.invoke("session:activities", sessionId),
     attachments: (sessionId: string) => ipcRenderer.invoke("session:attachments", sessionId),
     stop: (sessionId: string) => ipcRenderer.invoke("session:stop", sessionId),
+    promote: (input: unknown) => ipcRenderer.invoke("session:promote", input),
   },
   agent: {
     onEvent: (listener: (event: unknown) => void) => {
@@ -106,7 +107,7 @@ contextBridge.exposeInMainWorld("piWork", piWork);
 
 function domainApi(name: "status" | "label" | "source" | "skill" | "automation") {
   return {
-    list: (workspaceId?: string | null) => ipcRenderer.invoke(`${name}:list`, workspaceId),
+    list: (workspaceId: string) => ipcRenderer.invoke(`${name}:list`, workspaceId),
     create: (input: unknown) => ipcRenderer.invoke(`${name}:create`, input),
     update: (input: unknown) => ipcRenderer.invoke(`${name}:update`, input),
     remove: (id: string) => ipcRenderer.invoke(`${name}:remove`, { id }),

@@ -140,6 +140,7 @@ function ComposerAttachment(props: {
 function ComposerPermissionMenu(props: {
   permissionMode: PermissionMode;
   planMode: boolean;
+  showPlanMode: boolean;
   disabled: boolean;
   t: T;
   onPermissionChange(mode: PermissionMode): void;
@@ -171,19 +172,23 @@ function ComposerPermissionMenu(props: {
             <DropdownMenuRadioItem value="auto">{props.t("automatic")}</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuCheckboxItem
-            checked={props.planMode}
-            onCheckedChange={(checked) => props.onPlanModeChange(checked === true)}
-            className="composer-plan-option"
-          >
-            <span>
-              <strong>{props.t("planFirst")}</strong>
-              <small>{props.t("generatePlanNext")}</small>
-            </span>
-          </DropdownMenuCheckboxItem>
-        </DropdownMenuGroup>
+        {props.showPlanMode ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuCheckboxItem
+                checked={props.planMode}
+                onCheckedChange={(checked) => props.onPlanModeChange(checked === true)}
+                className="composer-plan-option"
+              >
+                <span>
+                  <strong>{props.t("planFirst")}</strong>
+                  <small>{props.t("generatePlanNext")}</small>
+                </span>
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuGroup>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -323,9 +328,12 @@ export function TaskWorkbench(props: {
   onInspectorTab(tab: InspectorTab): void;
   onRefresh(): Promise<void>;
   onDelete(): void;
+  folders: Workspace[];
+  onPromoted(session: Session): void;
 }) {
   const queryClient = useQueryClient();
   const sessionId = props.session.id;
+  const personal = props.workspace?.kind === "managed" && props.session.kind === "chat";
   const draftKey = `pi-work:draft:${sessionId}`;
   const [input, setInput] = useState(() => localStorage.getItem(draftKey) ?? "");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
@@ -334,6 +342,8 @@ export function TaskWorkbench(props: {
   const [error, setError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [promotionOpen, setPromotionOpen] = useState(false);
+  const [promotionWorkspaceId, setPromotionWorkspaceId] = useState(props.folders[0]?.id ?? "");
   const [publishingAll, setPublishingAll] = useState(false);
   const [providerId, setProviderId] = useState(props.session.providerId ?? props.settings?.providerId ?? "");
   const [modelId, setModelId] = useState(props.session.modelId ?? props.settings?.modelId ?? "");
@@ -360,10 +370,12 @@ export function TaskWorkbench(props: {
   const plan = useQuery({
     queryKey: ["plan", sessionId],
     queryFn: () => window.piWork.task.getPlan(sessionId),
+    enabled: !personal,
   });
   const artifacts = useQuery({
     queryKey: ["artifacts", sessionId],
     queryFn: () => window.piWork.artifact.list(sessionId),
+    enabled: !personal,
   });
   const unpublished = (artifacts.data ?? []).filter(({ publishedPath }) => publishedPath === null);
   const configuredProviders = useQuery({ queryKey: ["providers"], queryFn: () => window.piWork.provider.list() });
@@ -379,10 +391,10 @@ export function TaskWorkbench(props: {
   }, [draftKey, input]);
   useEffect(() => window.piWork.chat.onToolApproval((approval) => {
     if (approval.sessionId !== sessionId) return;
-    props.onInspectorOpen("activity");
+    if (!personal) props.onInspectorOpen("activity");
     void queryClient.invalidateQueries({ queryKey: ["tool-approvals"] });
     void queryClient.invalidateQueries({ queryKey: ["activities", sessionId] });
-  }), [props.onInspectorOpen, queryClient, sessionId]);
+  }), [personal, props.onInspectorOpen, queryClient, sessionId]);
   useEffect(() => window.piWork.agent.onEvent(({ sessionId: eventSessionId, event }) => {
     if (eventSessionId !== sessionId) return;
     if (event.kind === "text_delta" && typeof event.payload.delta === "string") enqueueStream(event.payload.delta);
@@ -397,10 +409,16 @@ export function TaskWorkbench(props: {
     if (scroller !== null) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
   }, [approvals.length, messages.data?.length, pendingPrompt, streamed]);
   useEffect(() => {
+    if (personal) return;
     if (props.session.status === "awaiting_plan_approval") props.onInspectorOpen("plan");
     else if (approvals.length > 0 || props.session.status === "awaiting_action_approval") props.onInspectorOpen("activity");
     else if (unpublished.length > 0) props.onInspectorOpen("output");
-  }, [approvals.length, props.session.status, unpublished.length]);
+  }, [approvals.length, personal, props.onInspectorOpen, props.session.status, unpublished.length]);
+  useEffect(() => {
+    if (!props.folders.some(({ id }) => id === promotionWorkspaceId)) {
+      setPromotionWorkspaceId(props.folders[0]?.id ?? "");
+    }
+  }, [promotionWorkspaceId, props.folders]);
 
   const refreshTaskData = async () => {
     await Promise.all([
@@ -424,7 +442,7 @@ export function TaskWorkbench(props: {
         modelId,
         thinkingLevel,
         permissionMode: props.session.permissionMode,
-        planMode: props.session.planMode,
+        planMode: personal ? false : props.session.planMode,
         attachments,
       });
     },
@@ -476,6 +494,17 @@ export function TaskWorkbench(props: {
     onSuccess: refreshTaskData,
     onError: (cause: Error) => setError(cause.message),
   });
+  const promote = useMutation({
+    mutationFn: () => {
+      if (promotionWorkspaceId === "") throw new Error(props.t("chooseFolder"));
+      return window.piWork.session.promote({ sessionId, workspaceId: promotionWorkspaceId });
+    },
+    onSuccess: (session) => {
+      setPromotionOpen(false);
+      props.onPromoted(session);
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -503,32 +532,39 @@ export function TaskWorkbench(props: {
 
   const recommendation = recommendedAction(props.session, unpublished.length, approvals.length, props.t);
   const retryContent = input.trim() || [...(messages.data ?? [])].reverse().find(({ role }) => role === "user")?.content.trim() || "";
+  const canPromote = personal && !props.session.running && approvals.length === 0 && props.folders.length > 0;
   return (
-    <section className={`task-workbench ${props.inspectorOpen ? "inspector-visible" : ""}`}>
+    <section className={`task-workbench ${!personal && props.inspectorOpen ? "inspector-visible" : ""}`}>
       <div className="execution-pane">
         <header className="task-context-header">
           <div className="task-context-title">
-            <span>{props.workspace?.name ?? props.t("personal")}</span>
+            <span>{personal ? props.t("privateSandbox") : (props.workspace?.name ?? props.t("workFolder"))}</span>
             <h1>{props.session.title}</h1>
           </div>
-          <div className="task-context-meta">
-            <span className={`lifecycle-badge lifecycle-${props.session.status}`}>{lifecycleLabel(props.session, props.t)}</span>
-            <span className="folder-path"><Icon name="workspace" size={14} />{props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("personal")}</span>
-          </div>
-          <div className="recommended-action">
-            <span>{props.t("nextStep")}</span>
-            <Button variant="ghost" onClick={() => {
-              if (recommendation.tab) props.onInspectorOpen(recommendation.tab);
-              else if (props.session.status === "failed" && retryContent !== "") runPrompt(retryContent);
-              else composerInput.current?.focus();
-            }}>{recommendation.label}<Icon name="forward" size={14} /></Button>
-          </div>
+          {!personal ? (
+            <>
+              <div className="task-context-meta">
+                <span className={`lifecycle-badge lifecycle-${props.session.status}`}>{lifecycleLabel(props.session, props.t)}</span>
+                <span className="folder-path"><Icon name="workspace" size={14} />{props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}</span>
+              </div>
+              <div className="recommended-action">
+                <span>{props.t("nextStep")}</span>
+                <Button variant="ghost" onClick={() => {
+                  if (recommendation.tab) props.onInspectorOpen(recommendation.tab);
+                  else if (props.session.status === "failed" && retryContent !== "") runPrompt(retryContent);
+                  else composerInput.current?.focus();
+                }}>{recommendation.label}<Icon name="forward" size={14} /></Button>
+              </div>
+            </>
+          ) : null}
           <div className="task-header-actions">
-            <Button variant="ghost" size="icon" aria-label={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => updateSession.mutate({ flagged: !props.session.flagged })}><Icon name="flag" /></Button>
-            <Button variant="ghost" size="icon" aria-label={props.inspectorOpen ? props.t("closeInspector") : props.t("openInspector")} onClick={props.onInspectorToggle}><Icon name="panel-right" /></Button>
+            {!personal ? <Button variant="ghost" size="icon" aria-label={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => updateSession.mutate({ flagged: !props.session.flagged })}><Icon name="flag" /></Button> : null}
+            {!personal ? <Button variant="ghost" size="icon" aria-label={props.inspectorOpen ? props.t("closeInspector") : props.t("openInspector")} onClick={props.onInspectorToggle}><Icon name="panel-right" /></Button> : null}
             <DropdownMenu>
               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={props.t("advanced")}><Icon name="more" /></Button></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {personal ? <DropdownMenuItem disabled={!canPromote} onSelect={() => setPromotionOpen(true)}><Icon name="workspace" />{props.t("moveToWorkFolder")}</DropdownMenuItem> : null}
+                {personal ? <DropdownMenuSeparator /> : null}
                 <DropdownMenuItem onSelect={() => updateSession.mutate({ archived: !props.session.archived })}><Icon name={props.session.archived ? "archive-restore" : "archive"} />{props.session.archived ? props.t("restore") : props.t("archive")}</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => setDeleteOpen(true)}><Icon name="trash" />{props.t("delete")}</DropdownMenuItem>
@@ -542,9 +578,9 @@ export function TaskWorkbench(props: {
             <TaskSectionError t={props.t} onRetry={() => void messages.refetch()} />
           ) : (messages.data?.length ?? 0) === 0 && pendingPrompt === null ? (
             <div className="conversation-empty">
-              <span>{props.session.kind === "task" ? props.t("taskDescription") : props.t("quickQuestion")}</span>
+              <span>{personal ? props.t("privateSandbox") : props.t("taskDescription")}</span>
               <h2>{props.session.goal}</h2>
-              <p>{recommendation.label}</p>
+              <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
             </div>
           ) : (
             <MessageList messages={messages.data ?? []} t={props.t} />
@@ -593,6 +629,7 @@ export function TaskWorkbench(props: {
               <ComposerPermissionMenu
                 permissionMode={props.session.permissionMode}
                 planMode={props.session.planMode}
+                showPlanMode={!personal}
                 disabled={updateSession.isPending || props.session.running}
                 t={props.t}
                 onPermissionChange={(permissionMode) => updateSession.mutate({ permissionMode })}
@@ -625,7 +662,7 @@ export function TaskWorkbench(props: {
           ) : null}
         </form>
       </div>
-      <TaskInspector
+      {!personal ? <TaskInspector
         session={props.session}
         workspace={props.workspace}
         statuses={props.statuses}
@@ -686,7 +723,7 @@ export function TaskWorkbench(props: {
           if (unpublished.length > 0) setCompleteOpen(true);
           else complete.mutate();
         }}
-      />
+      /> : null}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{props.t("delete")}</AlertDialogTitle><AlertDialogDescription>“{props.session.title}”</AlertDialogDescription></AlertDialogHeader>
@@ -697,6 +734,31 @@ export function TaskWorkbench(props: {
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{props.t("completeWithUnpublished")}</AlertDialogTitle><AlertDialogDescription>{props.t("unpublishedWarning")}</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => complete.mutate()}>{props.t("completeTask")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={promotionOpen} onOpenChange={setPromotionOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{props.t("moveToWorkFolder")}</AlertDialogTitle>
+            <AlertDialogDescription>{props.t("moveToWorkFolderDetail")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <Field>
+            <FieldLabel>{props.t("selectWorkFolder")}</FieldLabel>
+            <Select value={promotionWorkspaceId} onValueChange={setPromotionWorkspaceId}>
+              <SelectTrigger><SelectValue placeholder={props.t("chooseFolder")} /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {props.folders.map((folder) => <SelectItem key={folder.id} value={folder.id}>{folder.name}</SelectItem>)}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={promote.isPending || promotionWorkspaceId === ""} onClick={() => promote.mutate()}>
+              {promote.isPending ? props.t("movingSession") : props.t("moveSession")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </section>

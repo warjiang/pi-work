@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import type {
   AppSettings,
   ModelCatalog,
@@ -46,7 +46,6 @@ import {
 } from "../components/ui/select.js";
 import { Switch } from "../components/ui/switch.js";
 import { Textarea } from "../components/ui/textarea.js";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.js";
 import { thinkingLevelLabel } from "../i18n.js";
 import type { MessageKey } from "../i18n.js";
 import type { AppView, WorkspaceScope } from "../store.js";
@@ -65,11 +64,8 @@ export function TopBar(props: {
   onNewTask(): void;
 }) {
   const folder = props.workspaces.find(({ id }) => id === props.workspaceScope);
-  const scopeLabel = props.workspaceScope === "all"
-    ? props.t("allWorkspaces")
-    : props.workspaceScope === "personal"
-      ? props.t("personal")
-      : (folder?.name ?? props.t("allWorkspaces"));
+  const personal = props.workspaceScope === "personal";
+  const scopeLabel = personal ? props.t("personal") : (folder?.name ?? props.t("personal"));
   return (
     <header className="topbar">
       <Button variant="ghost" size="icon" className="topbar-menu" aria-label={props.t("toggleSidebar")} onClick={props.onToggleSidebar}>
@@ -85,7 +81,6 @@ export function TopBar(props: {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="workspace-menu">
           <DropdownMenuGroup>
-            <DropdownMenuItem onSelect={() => props.onWorkspaceScope("all")}><Icon name="inbox" />{props.t("allWorkspaces")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => props.onWorkspaceScope("personal")}><Icon name="lock" />{props.t("personal")}</DropdownMenuItem>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
@@ -108,7 +103,7 @@ export function TopBar(props: {
         <span>{props.t("globalSearch")}</span>
         <kbd>⌘K</kbd>
       </Button>
-      <Button className="topbar-new-task" onClick={props.onNewTask}><Icon name="plus" size={14} />{props.t("newTask")}</Button>
+      <Button className="topbar-new-task" onClick={props.onNewTask}><Icon name="plus" size={14} />{personal ? props.t("newSession") : props.t("newTask")}</Button>
     </header>
   );
 }
@@ -118,6 +113,7 @@ export function Sidebar(props: {
   sessions: Session[];
   selectedTaskId: string | null;
   attentionIds: Set<string>;
+  isFolder: boolean;
   collapsed: boolean;
   drawerOpen: boolean;
   t: T;
@@ -137,7 +133,7 @@ export function Sidebar(props: {
           <SidebarNavButton active={props.view === "inbox"} icon="inbox" label={props.t("inbox")} onClick={() => props.onView("inbox")} />
           <SidebarNavButton active={props.view === "attention"} icon="alert" label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
           <SidebarNavButton active={props.view === "completed"} icon="check-circle" label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
-          <SidebarNavButton active={props.view === "board"} icon="folder-kanban" label={props.t("board")} onClick={() => props.onView("board")} />
+          {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon="folder-kanban" label={props.t("board")} onClick={() => props.onView("board")} /> : null}
         </SidebarSection>
         <SidebarSection className="recent-section" title={props.t("recentTasks")} count={recent.length}>
           <div className="recent-task-list">
@@ -159,11 +155,14 @@ export function Sidebar(props: {
             {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
           </div>
         </SidebarSection>
-        <SidebarSection title={props.t("library")}>
-          <SidebarNavButton active={props.view === "sources"} icon="source" label={props.t("sources")} onClick={() => props.onView("sources")} />
-          <SidebarNavButton active={props.view === "skills"} icon="skills" label={props.t("skills")} onClick={() => props.onView("skills")} />
-          <SidebarNavButton active={props.view === "automations"} icon="list-todo" label={props.t("automations")} onClick={() => props.onView("automations")} />
-        </SidebarSection>
+        {props.isFolder ? (
+          <SidebarSection title={props.t("library")}>
+            <SidebarNavButton active={props.view === "sources"} icon="source" label={props.t("sources")} onClick={() => props.onView("sources")} />
+            <SidebarNavButton active={props.view === "skills"} icon="skills" label={props.t("skills")} onClick={() => props.onView("skills")} />
+            <SidebarNavButton active={props.view === "automations"} icon="list-todo" label={props.t("automations")} onClick={() => props.onView("automations")} />
+            <SidebarNavButton active={props.view === "folder-settings"} icon="settings" label={props.t("folderSettings")} onClick={() => props.onView("folder-settings")} />
+          </SidebarSection>
+        ) : null}
         <SidebarSection title={props.t("tools")}>
           <SidebarNavButton active={props.view === "browser"} icon="browser" label={props.t("browser")} onClick={() => props.onView("browser")} />
           <SidebarNavButton active={props.view === "settings"} icon="settings" label={props.t("settings")} onClick={() => props.onView("settings")} />
@@ -203,64 +202,69 @@ type SearchItem = {
 
 export function CommandPalette(props: {
   open: boolean;
-  scope: WorkspaceScope;
+  workspaces: Workspace[];
   baseSessions: Session[];
   t: T;
   onOpenChange(open: boolean): void;
   onOpenTask(taskId: string): void;
-  onOpenView(view: AppView): void;
+  onOpenContext(scope: WorkspaceScope, view: AppView): void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const folders = props.workspaces.filter(({ kind }) => kind === "folder");
   const search = useQuery({
-    queryKey: ["command-search", query, props.scope],
-    queryFn: () => window.piWork.session.list({
-      query,
-      ...(props.scope === "all" ? {} : props.scope === "personal" ? {} : { workspaceId: props.scope }),
-    }),
+    queryKey: ["command-search", query],
+    queryFn: () => window.piWork.session.list({ query }),
     enabled: props.open && query.trim().length > 0,
   });
-  const sources = useQuery({
-    queryKey: ["command-sources"],
-    queryFn: () => window.piWork.source.list(),
-    enabled: props.open && query.trim().length > 0,
+  const sourceQueries = useQueries({
+    queries: folders.map((workspace) => ({
+      queryKey: ["command-sources", workspace.id],
+      queryFn: () => window.piWork.source.list(workspace.id),
+      enabled: props.open && query.trim().length > 0,
+    })),
   });
-  const skills = useQuery({
-    queryKey: ["command-skills"],
-    queryFn: () => window.piWork.skill.list(),
-    enabled: props.open && query.trim().length > 0,
+  const skillQueries = useQueries({
+    queries: folders.map((workspace) => ({
+      queryKey: ["command-skills", workspace.id],
+      queryFn: () => window.piWork.skill.list(workspace.id),
+      enabled: props.open && query.trim().length > 0,
+    })),
   });
   const normalized = query.trim().toLocaleLowerCase();
-  const scopedSessionIds = new Set(props.baseSessions.map(({ id }) => id));
   const sessions = query.trim() === ""
     ? props.baseSessions.slice(0, 8)
-    : (search.data ?? []).filter(({ id }) => props.scope === "all" || scopedSessionIds.has(id));
+    : (search.data ?? []);
   const items = useMemo<SearchItem[]>(() => {
     const result: SearchItem[] = [];
     sessions.forEach((session) => {
       const direct = `${session.title} ${session.goal}`.toLocaleLowerCase().includes(normalized);
+      const workspace = props.workspaces.find(({ id }) => id === session.workspaceId);
+      const context = workspace?.kind === "managed" ? props.t("personal") : (workspace?.name ?? props.t("workFolder"));
       result.push({
         id: session.id,
         group: normalized !== "" && !direct ? "messages" : "tasks",
         title: session.title,
-        detail: session.goal,
+        detail: session.goal ? `${context} · ${session.goal}` : context,
         icon: session.kind === "task" ? "plan" : "inbox",
         action: () => props.onOpenTask(session.id),
       });
     });
-    const addResource = (resource: Source | Skill, kind: "sources" | "skills") => {
+    const addResource = (resource: Source | Skill, workspace: Workspace, kind: "sources" | "skills") => {
       if (normalized === "" || !`${resource.name} ${"description" in resource ? resource.description : resource.type}`.toLocaleLowerCase().includes(normalized)) return;
       result.push({
-        id: `${kind}:${resource.id}`,
+        id: `${kind}:${workspace.id}:${resource.id}`,
         group: "resources",
         title: resource.name,
-        detail: kind === "sources" ? props.t("sources") : props.t("skills"),
+        detail: `${workspace.name} · ${kind === "sources" ? props.t("sources") : props.t("skills")}`,
         icon: kind === "sources" ? "source" : "skills",
-        action: () => props.onOpenView(kind),
+        action: () => props.onOpenContext(workspace.id, kind),
       });
     };
-    (sources.data ?? []).forEach((source) => addResource(source, "sources"));
-    (skills.data ?? []).forEach((skill) => addResource(skill, "skills"));
+    folders.forEach((workspace, index) => {
+      (sourceQueries[index]?.data ?? []).forEach((source) => addResource(source, workspace, "sources"));
+      (skillQueries[index]?.data ?? []).forEach((skill) => addResource(skill, workspace, "skills"));
+    });
     const settings = [
       ["modelsCredentials", "settings"] as const,
       ["workFolders", "settings"] as const,
@@ -277,13 +281,13 @@ export function CommandPalette(props: {
         title: props.t(key),
         detail: props.t("settings"),
         icon: "settings",
-        action: () => props.onOpenView("settings"),
+        action: () => props.onOpenContext("personal", "settings"),
       });
     });
     return result.slice(0, 28);
-  }, [normalized, props, sessions, skills.data, sources.data]);
-  const searching = search.isLoading || sources.isLoading || skills.isLoading;
-  const searchFailed = search.isError || sources.isError || skills.isError;
+  }, [folders, normalized, props, sessions, skillQueries, sourceQueries]);
+  const searching = search.isLoading || sourceQueries.some(({ isLoading }) => isLoading) || skillQueries.some(({ isLoading }) => isLoading);
+  const searchFailed = search.isError || sourceQueries.some(({ isError }) => isError) || skillQueries.some(({ isError }) => isError);
 
   useEffect(() => setActive(0), [query]);
   useEffect(() => {
@@ -374,25 +378,26 @@ export function CommandPalette(props: {
 
 export function NewTaskDialog(props: {
   open: boolean;
+  scope: WorkspaceScope;
   workspaces: Workspace[];
   providers: ProviderConfig[];
   models: ModelCatalog | undefined;
   settings: AppSettings | undefined;
   t: T;
   onOpenChange(open: boolean): void;
-  onAddWorkspace(): Promise<Workspace | null>;
   onCreated(session: Session): void;
 }) {
-  const folderWorkspaces = props.workspaces.filter(({ kind }) => kind === "folder");
+  const personal = props.scope === "personal";
+  const workspace = personal
+    ? null
+    : props.workspaces.find(({ id, kind }) => id === props.scope && kind === "folder") ?? null;
   const configured = new Set(props.providers.map(({ providerId }) => providerId));
   const availableModels = (props.models?.models ?? []).filter(({ providerId }) => configured.has(providerId));
   const defaultModel = availableModels.find(({ providerId, modelId }) => (
     providerId === props.settings?.providerId && modelId === props.settings.modelId
   )) ?? availableModels[0];
-  const [kind, setKind] = useState<"task" | "chat">("task");
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
-  const [workspaceId, setWorkspaceId] = useState(folderWorkspaces[0]?.id ?? "");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
   const [planMode, setPlanMode] = useState(true);
   const [advanced, setAdvanced] = useState(false);
@@ -400,9 +405,6 @@ export function NewTaskDialog(props: {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.settings?.thinkingLevel ?? "off");
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (workspaceId === "" && folderWorkspaces[0]) setWorkspaceId(folderWorkspaces[0].id);
-  }, [folderWorkspaces, workspaceId]);
   useEffect(() => {
     if (modelKey === "" && defaultModel) {
       setModelKey(`${defaultModel.providerId}/${defaultModel.modelId}`);
@@ -418,7 +420,7 @@ export function NewTaskDialog(props: {
       const cleanGoal = goal.trim();
       if (cleanGoal === "") throw new Error(props.t("validationRequired"));
       if (selectedModel === undefined) throw new Error(props.t("configureModel"));
-      if (kind === "chat") {
+      if (personal) {
         return window.piWork.chat.send({
           workspaceId: null,
           taskId: null,
@@ -431,8 +433,7 @@ export function NewTaskDialog(props: {
           attachments: [],
         });
       }
-      const workspace = folderWorkspaces.find(({ id }) => id === workspaceId);
-      if (workspace === undefined) throw new Error(props.t("chooseFolder"));
+      if (workspace === null) throw new Error(props.t("chooseFolder"));
       return window.piWork.task.create({
         workspaceId: workspace.id,
         title: title.trim() || cleanGoal.slice(0, 80),
@@ -460,39 +461,21 @@ export function NewTaskDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="new-task-dialog">
         <DialogHeader>
-          <DialogTitle>{kind === "task" ? props.t("newTask") : props.t("quickQuestion")}</DialogTitle>
-          <DialogDescription>{kind === "task" ? props.t("noTasksDetail") : props.t("messagePlaceholder")}</DialogDescription>
+          <DialogTitle>{personal ? props.t("newSession") : props.t("newTask")}</DialogTitle>
+          <DialogDescription>{personal ? props.t("privateSandboxDetail") : props.t("noTasksDetail")}</DialogDescription>
         </DialogHeader>
-        <ToggleGroup className="task-kind-switch" type="single" value={kind} onValueChange={(value) => value && setKind(value as "task" | "chat")}>
-          <ToggleGroupItem value="task"><Icon name="plan" />{props.t("newTask")}</ToggleGroupItem>
-          <ToggleGroupItem value="chat"><Icon name="inbox" />{props.t("quickQuestion")}</ToggleGroupItem>
-        </ToggleGroup>
         <FieldGroup>
-          {kind === "task" ? (
+          {!personal ? (
             <Field>
               <FieldLabel>{props.t("taskTitle")}</FieldLabel>
               <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={props.t("taskTitle")} />
             </Field>
           ) : null}
           <Field>
-            <FieldLabel>{kind === "task" ? props.t("taskDescription") : props.t("quickQuestion")}</FieldLabel>
+            <FieldLabel>{personal ? props.t("newSession") : props.t("taskDescription")}</FieldLabel>
             <Textarea autoFocus value={goal} onChange={(event) => setGoal(event.target.value)} rows={5} placeholder={props.t("goal")} />
           </Field>
-          {kind === "task" ? (
-            <Field>
-              <FieldLabel>{props.t("workFolder")}</FieldLabel>
-              <div className="folder-picker-row">
-                <Select value={workspaceId} onValueChange={setWorkspaceId}>
-                  <SelectTrigger><SelectValue placeholder={props.t("chooseFolder")} /></SelectTrigger>
-                  <SelectContent><SelectGroup>{folderWorkspaces.map((workspace) => <SelectItem key={workspace.id} value={workspace.id}>{workspace.name}</SelectItem>)}</SelectGroup></SelectContent>
-                </Select>
-                <Button variant="outline" size="icon" aria-label={props.t("addWorkFolder")} onClick={() => void props.onAddWorkspace().then((workspace) => {
-                  if (workspace !== null) setWorkspaceId(workspace.id);
-                })}><Icon name="folder-plus" /></Button>
-              </div>
-            </Field>
-          ) : null}
-          {kind === "task" ? (
+          {!personal ? (
             <Field>
               <FieldLabel>{props.t("confirmation")}</FieldLabel>
               <Select value={permissionMode} onValueChange={(value) => setPermissionMode(value as PermissionMode)}>
@@ -530,7 +513,7 @@ export function NewTaskDialog(props: {
                 <SelectContent><SelectGroup>{(selectedModel?.thinkingLevels ?? ["off"]).map((level) => <SelectItem key={level} value={level}>{thinkingLevelLabel(level, props.t)}</SelectItem>)}</SelectGroup></SelectContent>
               </Select>
             </Field>
-            {kind === "task" ? (
+            {!personal ? (
               <label className="switch-row"><span><strong>{props.t("planFirst")}</strong><small>{props.t("generatePlanNext")}</small></span><Switch checked={planMode} onCheckedChange={setPlanMode} /></label>
             ) : null}
           </FieldGroup>
@@ -539,7 +522,7 @@ export function NewTaskDialog(props: {
         <DialogFooter>
           <Button variant="ghost" onClick={() => props.onOpenChange(false)}>{props.t("cancel")}</Button>
           <Button disabled={create.isPending || goal.trim() === ""} onClick={() => create.mutate()}>
-            {create.isPending ? props.t("sending") : kind === "task" ? props.t("createTask") : props.t("askNow")}
+            {create.isPending ? props.t("sending") : personal ? props.t("startSession") : props.t("createTask")}
           </Button>
         </DialogFooter>
       </DialogContent>
