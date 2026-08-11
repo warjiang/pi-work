@@ -15,7 +15,7 @@ export function DropdownMenuContent({ className, sideOffset = 4, ...props }: Com
       <DropdownMenuPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          "z-50 min-w-36 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "z-50 min-w-36 overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}
@@ -28,7 +28,7 @@ export function DropdownMenuItem({ className, inset, ...props }: ComponentProps<
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
-        "flex h-8 cursor-default select-none items-center gap-2 rounded-sm px-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0",
+        "flex h-8 cursor-default select-none items-center gap-2 rounded-[var(--radius-control)] px-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0",
         inset && "pl-8",
         className,
       )}
@@ -42,7 +42,7 @@ export function DropdownMenuCheckboxItem({ className, children, checked, ...prop
     <DropdownMenuPrimitive.CheckboxItem
       checked={checked ?? false}
       className={cn(
-        "relative flex min-h-8 cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
+        "relative flex min-h-8 cursor-default select-none items-center rounded-[var(--radius-control)] py-1.5 pl-7 pr-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
         className,
       )}
       {...props}
@@ -61,7 +61,7 @@ export function DropdownMenuRadioItem({ className, children, ...props }: Compone
   return (
     <DropdownMenuPrimitive.RadioItem
       className={cn(
-        "relative flex min-h-8 cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
+        "relative flex min-h-8 cursor-default select-none items-center rounded-[var(--radius-control)] py-1.5 pl-7 pr-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
         className,
       )}
       {...props}
@@ -93,7 +93,7 @@ export function DropdownMenuSubTrigger({ className, inset, children, ...props }:
   return (
     <DropdownMenuPrimitive.SubTrigger
       className={cn(
-        "flex min-h-9 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
+        "flex min-h-9 cursor-default select-none items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-xs outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
         inset && "pl-8",
         className,
       )}
@@ -111,7 +111,7 @@ export function DropdownMenuSubContent({ className, sideOffset = 6, ...props }: 
       <DropdownMenuPrimitive.SubContent
         sideOffset={sideOffset}
         className={cn(
-          "min-w-44 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "min-w-44 overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}

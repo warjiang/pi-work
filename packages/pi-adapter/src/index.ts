@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getSupportedThinkingLevels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
@@ -21,6 +22,7 @@ import {
 import type { AgentSession, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AgentRuntime,
+  AgentImageAttachment,
   ChatMessage,
   ExtensionPackage,
   ModelOption,
@@ -146,6 +148,7 @@ export class PiAdapter {
   async chat(
     sessionId: string,
     messages: Pick<ChatMessage, "role" | "content">[],
+    imageAttachments: AgentImageAttachment[],
     provider: PiProviderCredential | null,
     modelId: string,
     thinkingLevel: ThinkingLevel,
@@ -236,13 +239,18 @@ export class PiAdapter {
 
     try {
       const latest = messages.at(-1)?.content ?? "";
+      const images: ImageContent[] = imageAttachments.map((attachment) => ({
+        type: "image",
+        data: attachment.data,
+        mimeType: attachment.mimeType,
+      }));
       await session.prompt(hasHistory ? latest : [
         "You are Pi Work, a concise assistant discussing work in the current local workspace.",
         "Use read/search tools directly. Editing, writing, and shell commands follow the selected permission mode.",
         "Conversation:",
         ...messages.map((message) => `${message.role}: ${message.content}`),
         "assistant:",
-      ].join("\n\n"));
+      ].join("\n\n"), images.length > 0 ? { images } : undefined);
     } catch (error) {
       if (!this.cancelledSessions.has(sessionId)) throw error;
     } finally {

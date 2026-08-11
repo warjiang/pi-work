@@ -133,6 +133,7 @@ process.parentPort?.on("message", async (event) => {
           result = await adapter.chat(
             sessionId,
             request.data.messages,
+            request.data.images,
             request.data.provider ?? null,
             request.data.modelId,
             request.data.thinkingLevel,

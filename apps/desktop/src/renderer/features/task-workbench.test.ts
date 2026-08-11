@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { isNearBottom, reduceLiveProcess } from "./task-workbench.js";
+import { isNearBottom, reduceLiveProcess, visibleAssistantContent } from "./task-workbench.js";
 
 const t = (key: string) => key;
 const empty = { thoughts: [], tools: [], notice: null };
 
 describe("live Pi process reducer", () => {
+  it("hides internal attached-file manifests from assistant content", () => {
+    expect(visibleAssistantContent(
+      "Attached files:\n- /Users/me/clipboard-attachments/a.png\n\nI reviewed the image.",
+    )).toBe("I reviewed the image.");
+  });
+
+  it("keeps regular assistant content untouched", () => {
+    expect(visibleAssistantContent("I reviewed the image.")).toBe("I reviewed the image.");
+  });
+
   it("only follows the message stream while the scroller remains near its end", () => {
     expect(isNearBottom({ scrollHeight: 1_000, scrollTop: 560, clientHeight: 400 })).toBe(true);
     expect(isNearBottom({ scrollHeight: 1_000, scrollTop: 400, clientHeight: 400 })).toBe(false);
