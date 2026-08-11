@@ -36,6 +36,9 @@ declare global {
         get(): Promise<AppSettings>;
         update(input: unknown): Promise<AppSettings>;
       };
+      system: {
+        openExternal(url: string): Promise<void>;
+      };
       extension: {
         list(): Promise<ExtensionPackage[]>;
         install(source: string): Promise<ExtensionPackage[]>;

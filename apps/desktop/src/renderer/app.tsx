@@ -16,6 +16,8 @@ import type {
   ToolApproval,
   Workspace,
 } from "@pi-work/protocol";
+import { MarkdownMessage } from "./components/markdown-message.js";
+import { PiMark } from "./components/pi-mark.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,6 +50,8 @@ import {
 } from "./components/ui/dropdown-menu.js";
 import { Empty, EmptyDescription } from "./components/ui/empty.js";
 import { Field, FieldGroup, FieldLabel } from "./components/ui/field.js";
+import { Icon } from "./components/ui/icon.js";
+import type { IconName } from "./components/ui/icon.js";
 import { Input } from "./components/ui/input.js";
 import {
   Select,
@@ -68,46 +72,6 @@ import type { MessageKey } from "./i18n.js";
 import { useWorkspaceUi } from "./store.js";
 
 type View = ReturnType<typeof useWorkspaceUi.getState>["view"];
-type IconName =
-  | "archive" | "arrow-up" | "back" | "browser" | "chevron-down" | "close"
-  | "command" | "external" | "file" | "flag" | "folder-kanban" | "forward"
-  | "inbox" | "list-todo" | "more" | "panel" | "paperclip" | "plan" | "plus"
-  | "refresh" | "search" | "settings" | "skills" | "source" | "square-pen"
-  | "stop" | "workspace";
-const appIconUrl = new URL("../../resources/icons/source/app-icon.svg", import.meta.url).href;
-
-function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, ReactNode> = {
-    archive: <><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8v11h14V8M10 12h4" /></>,
-    "arrow-up": <><path d="m6 11 6-6 6 6M12 5v14" /></>,
-    back: <path d="m15 18-6-6 6-6" />,
-    browser: <><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 0 20M12 2a15.3 15.3 0 0 0 0 20" /></>,
-    "chevron-down": <path d="m8 10 4 4 4-4" />,
-    close: <path d="m7 7 10 10M17 7 7 17" />,
-    command: <><path d="M9 6V5a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v14a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3Z" /></>,
-    external: <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" /></>,
-    file: <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v5h5" /></>,
-    flag: <><path d="M5 21V4" /><path d="M5 5h11l-2 4 2 4H5" /></>,
-    "folder-kanban": <><path d="M4 4h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /><path d="M8 11v5M12 11v3M16 11v4" /></>,
-    forward: <path d="m9 18 6-6-6-6" />,
-    inbox: <><path d="m4 10 3-5h10l3 5v9H4z" /><path d="M4 13h5l1.5 2h3L15 13h5" /></>,
-    "list-todo": <><rect x="3" y="5" width="6" height="6" rx="1" /><path d="m5 8 1 1 2-2M13 8h8" /><rect x="3" y="14" width="6" height="6" rx="1" /><path d="m5 17 1 1 2-2M13 17h8" /></>,
-    more: <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>,
-    panel: <><path d="M9 4v16" /><path d="M3.5 11.5v1c0 3.77 0 5.66 1.17 6.83S8.73 20.5 12.5 20.5s5.66 0 6.83-1.17 1.17-3.06 1.17-6.83v-1c0-3.77 0-5.66-1.17-6.83S16.27 3.5 12.5 3.5h-1c-3.77 0-5.66 0-6.83 1.17S3.5 7.73 3.5 11.5Z" /></>,
-    paperclip: <path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L14 3a3.5 3.5 0 0 1 5 5l-9.5 9.5a2 2 0 0 1-3-3L15 6" />,
-    plan: <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>,
-    plus: <path d="M12 5v14M5 12h14" />,
-    refresh: <><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 0-2 5" /></>,
-    search: <><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></>,
-    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
-    skills: <path d="m13 2-2 7h6l-6 13 2-9H7Z" />,
-    source: <><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 12 2.84M21 5v3M21 12l-3 5h4l-3 5M3 12a9 3 0 0 0 11.59 2.87" /></>,
-    "square-pen": <><path d="M12 3H7a4 4 0 0 0-4 4v10a4 4 0 0 0 4 4h10a4 4 0 0 0 4-4v-5" /><path d="M18.4 2.6a1 1 0 0 1 3 3l-9 9a2 2 0 0 1-.9.5l-2.9.9a.5.5 0 0 1-.6-.6l.9-2.9a2 2 0 0 1 .5-.9Z" /></>,
-    stop: <rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" stroke="none" />,
-    workspace: <><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></>,
-  };
-  return <svg className="ui-icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
-}
 
 function titleFromPath(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -265,7 +229,7 @@ export function App() {
       <Dialog open={onboarding}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-3"><span className="brand-mark">π</span>Pi Work</DialogTitle>
+            <DialogTitle className="flex items-center gap-3"><PiMark />Pi Work</DialogTitle>
             <DialogDescription>{language === "zh-CN" ? "连接模型提供商后开始，也可以先浏览本地工作区。" : "Connect a model provider to begin, or explore a local workspace first."}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -293,9 +257,9 @@ function TopBar(props: {
 }) {
   return (
     <header className="topbar">
-      <Button variant="ghost" size="icon" className="icon-button" aria-label="Toggle sidebar" onClick={props.onToggleSidebar}><Icon name="panel" size={18} /></Button>
-      <div className="history-controls"><Button variant="ghost" size="icon" aria-label="Back" disabled><Icon name="back" size={18} /></Button><Button variant="ghost" size="icon" aria-label="Forward" disabled><Icon name="forward" size={18} /></Button></div>
-      <Button variant="ghost" className="workspace-switcher"><img src={appIconUrl} alt="" /><span>{props.workspace?.name ?? "Pi Work"}</span><Icon name="chevron-down" size={14} /></Button>
+      <Button variant="ghost" size="icon" className="icon-button" aria-label="Toggle sidebar" onClick={props.onToggleSidebar}><Icon name="panel" /></Button>
+      <div className="history-controls"><Button variant="ghost" size="icon" aria-label="Back" disabled><Icon name="back" /></Button><Button variant="ghost" size="icon" aria-label="Forward" disabled><Icon name="forward" /></Button></div>
+      <Button variant="ghost" className="workspace-switcher"><PiMark size="compact" /><span>{props.workspace?.name ?? "Pi Work"}</span><Icon name="chevron-down" size={14} /></Button>
       <label className="global-search">
         <Icon name="search" />
         <Input className="global-search-input" ref={props.searchRef} value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder={props.t("search")} />
@@ -327,8 +291,8 @@ function Sidebar(props: {
   }).slice(0, 30);
   return (
     <aside className="sidebar">
-      <div className="sidebar-brand"><span className="brand-mark">π</span><strong>Pi Work</strong></div>
-      <Button variant="outline" className="new-chat" onClick={props.onNew}><Icon name="square-pen" size={14} />{props.t("newChat")}<kbd>⌘N</kbd></Button>
+      <div className="sidebar-brand"><PiMark /><strong>Pi Work</strong></div>
+      <Button variant="outline" className="new-chat" onClick={props.onNew}><Icon name="square-pen" />{props.t("newChat")}<kbd>⌘N</kbd></Button>
       <nav className="primary-nav">
         <NavButton active={props.view === "inbox" && props.sessionFilter === "all"} icon="inbox" label={props.t("inbox")} onClick={() => props.onSessionFilter("all")} />
         <NavButton active={props.view === "inbox" && props.sessionFilter === "flagged"} icon="flag" label={props.t("flagged")} badge={props.sessions.filter(({ flagged, archived }) => flagged && !archived).length} onClick={() => props.onSessionFilter("flagged")} />
@@ -341,7 +305,7 @@ function Sidebar(props: {
             <Button variant="ghost" className={`session-row ${session.id === props.selectedSessionId && props.view === "inbox" ? "selected" : ""}`} key={session.id} onClick={() => props.onSelect(session)}>
               <span className={`status-dot ${session.running ? "running" : ""}`} />
               <span><strong>{session.title}</strong><small>{session.permissionMode === "auto" ? "Auto" : session.permissionMode === "explore" ? "Explore" : "Ask"}</small></span>
-              {session.flagged ? <Icon name="flag" size={13} /> : null}
+              {session.flagged ? <Icon name="flag" size={14} /> : null}
             </Button>
           ))}
           {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
@@ -368,7 +332,7 @@ function Sidebar(props: {
 }
 
 function NavButton(props: { active: boolean; icon: IconName; label: string; badge?: number; onClick(): void }) {
-  return <Button variant="ghost" className={props.active ? "nav-button selected" : "nav-button"} onClick={props.onClick}><Icon name={props.icon} size={14} /><strong>{props.label}</strong>{props.badge ? <Badge>{props.badge}</Badge> : null}</Button>;
+  return <Button variant="ghost" className={props.active ? "nav-button selected" : "nav-button"} onClick={props.onClick}><Icon name={props.icon} /><strong>{props.label}</strong>{props.badge ? <Badge>{props.badge}</Badge> : null}</Button>;
 }
 
 function Chat(props: {
@@ -433,8 +397,15 @@ function Chat(props: {
       const delta = event.payload.delta;
       if (typeof delta === "string") enqueueStream(delta);
     }
-    if (event.kind === "cancelled") clearStream();
   }), []);
+  useEffect(() => {
+    const sessionId = props.session?.id ?? null;
+    if (sessionId === activeSessionId.current) return;
+    activeSessionId.current = sessionId;
+    clearStream();
+    setPendingPrompt(null);
+    setApprovals([]);
+  }, [props.session?.id]);
   useEffect(() => () => {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
     streamWaiters.current.splice(0).forEach((resolve) => resolve());
@@ -471,13 +442,15 @@ function Chat(props: {
     },
     onSuccess: async (session) => {
       await waitForStream();
-      setInput("");
-      setAttachments([]);
-      localStorage.removeItem(draftKey);
-      props.onCreated(session);
       await queryClient.invalidateQueries({ queryKey: ["messages", session.id] });
-      setPendingPrompt(null);
-      clearStream();
+      if (activeSessionId.current === session.id) {
+        setInput("");
+        setAttachments([]);
+        localStorage.removeItem(draftKey);
+        props.onCreated(session);
+        setPendingPrompt(null);
+        clearStream();
+      }
     },
     onError: (cause: Error) => {
       setPendingPrompt(null);
@@ -511,14 +484,15 @@ function Chat(props: {
                   <DropdownMenuItem onSelect={() => {
                     setRenameTitle(props.session?.title ?? "");
                     setRenameOpen(true);
-                  }}>{props.t("rename")}</DropdownMenuItem>
+                  }}><Icon name="rename" />{props.t("rename")}</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => props.onUpdate({ sessionId: props.session!.id, archived: !props.session!.archived })}>
+                    <Icon name={props.session.archived ? "archive-restore" : "archive"} />
                     {props.session.archived ? props.t("restore") : props.t("archive")}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
-                  <DropdownMenuItem className="text-[var(--danger)]" onSelect={() => setDeleteOpen(true)}>{props.t("delete")}</DropdownMenuItem>
+                  <DropdownMenuItem className="text-[var(--danger)]" onSelect={() => setDeleteOpen(true)}><Icon name="trash" />{props.t("delete")}</DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -528,7 +502,7 @@ function Chat(props: {
       <div className="message-scroller" ref={messageScroller}>
         {(messages.data?.length ?? 0) === 0 && pendingPrompt === null && streamed === "" && !send.isPending ? (
           <Empty className="welcome">
-            <span className="welcome-mark">π</span>
+            <PiMark size="hero" />
             <CardTitle>{props.t("emptyTitle")}</CardTitle>
             <EmptyDescription>{props.t("emptyDetail")}</EmptyDescription>
             <div className="suggestions">
@@ -537,9 +511,19 @@ function Chat(props: {
               <Button variant="outline" onClick={() => setInput("Find the highest-impact issue to fix next.")}><Icon name="search" />{props.t("findNext")}</Button>
             </div>
           </Empty>
-        ) : <MessageList messages={messages.data ?? []} />}
+        ) : <MessageList messages={messages.data ?? []} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} />}
         {pendingPrompt !== null ? <article className="message user pending"><span>You</span><div>{pendingPrompt}</div></article> : null}
-        {streamed ? <article className="message assistant streaming"><span>Pi</span><div>{streamed}</div></article> : null}
+        {streamed ? (
+          <article className="message assistant streaming">
+            <span>Pi</span>
+            <MarkdownMessage
+              content={streamed}
+              copyLabel={props.t("copyCode")}
+              copiedLabel={props.t("copied")}
+              streaming
+            />
+          </article>
+        ) : null}
         {(savedAttachments.data?.length ?? 0) > 0 ? <div className="attachment-strip">{savedAttachments.data?.map((attachment) => <Button variant="outline" key={attachment.id} onClick={() => void window.piWork.attachment.open(attachment.id)}><Icon name="file" /><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small></Button>)}</div> : null}
         {send.isPending ? <ActivityCard title={props.t("sending")} detail={props.session?.workingDirectory ?? props.workspace?.rootPath ?? ""} /> : null}
         {approvals.map((approval) => (
@@ -563,7 +547,7 @@ function Chat(props: {
             .catch((cause: Error) => props.onError(cause.message));
         }}
       >
-        {attachments.length > 0 ? <div className="composer-attachments">{attachments.map((attachment) => <span key={attachment.path}><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small><Button variant="ghost" size="icon" type="button" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((current) => current.filter(({ path }) => path !== attachment.path))}><Icon name="close" size={13} /></Button></span>)}</div> : null}
+        {attachments.length > 0 ? <div className="composer-attachments">{attachments.map((attachment) => <span key={attachment.path}><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small><Button variant="ghost" size="icon" type="button" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((current) => current.filter(({ path }) => path !== attachment.path))}><Icon name="close" size={14} /></Button></span>)}</div> : null}
         <Textarea
           className="composer-input"
           rows={1}
@@ -611,8 +595,8 @@ function Chat(props: {
               <Button size="icon" className="send-button stop-button" type="button" aria-label="Stop generating" onClick={() => {
                 const sessionId = activeSessionId.current;
                 if (sessionId !== null) void window.piWork.session.stop(sessionId);
-              }}><Icon name="stop" size={14} /></Button>
-            ) : <Button size="icon" className="send-button" aria-label="Send" disabled={input.trim() === ""}><Icon name="arrow-up" size={15} /></Button>}
+              }}><Icon name="stop" size={14} fill="currentColor" strokeWidth={0} /></Button>
+            ) : <Button size="icon" className="send-button" aria-label="Send" disabled={input.trim() === ""}><Icon name="arrow-up" /></Button>}
           </div>
         </div>
       </form>
@@ -677,8 +661,27 @@ function Chat(props: {
   }
 }
 
-function MessageList({ messages }: { messages: ChatMessage[] }) {
-  return <div className="messages">{messages.map((message) => <article className={`message ${message.role}`} key={message.id}><span>{message.role === "user" ? "You" : message.role === "assistant" ? "Pi" : "System"}</span><div>{message.content}</div></article>)}</div>;
+function MessageList({
+  messages,
+  copyLabel,
+  copiedLabel,
+}: {
+  messages: ChatMessage[];
+  copyLabel: string;
+  copiedLabel: string;
+}) {
+  return (
+    <div className="messages">
+      {messages.map((message) => (
+        <article className={`message ${message.role}`} key={message.id}>
+          <span>{message.role === "user" ? "You" : message.role === "assistant" ? "Pi" : "System"}</span>
+          {message.role === "assistant"
+            ? <MarkdownMessage content={message.content} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+            : <div>{message.content}</div>}
+        </article>
+      ))}
+    </div>
+  );
 }
 
 function ActivityCard({ title, detail }: { title: string; detail: string }) {
@@ -784,7 +787,7 @@ function ProjectsPage(props: { sessions: Session[]; workspaceId: string | null; 
           }}><header><strong>{label}</strong><span>{columnSessions.length}</span></header>{columnSessions.map((session) => <Button className="task-card" draggable key={session.id} onDragStart={(event) => {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("application/x-pi-work-session", session.id);
-          }} variant="outline" onClick={() => props.onOpen(session)}><strong>{session.title}</strong><p>{session.goal}</p><footer><span>{session.modelId?.split("/").at(-1) ?? "Pi"}</span>{session.flagged ? <Icon name="flag" size={13} /> : <span />}</footer></Button>)}</section>;
+          }} variant="outline" onClick={() => props.onOpen(session)}><strong>{session.title}</strong><p>{session.goal}</p><footer><span>{session.modelId?.split("/").at(-1) ?? "Pi"}</span>{session.flagged ? <Icon name="flag" size={14} /> : <span />}</footer></Button>)}</section>;
         })}</div>
       ) : <div className="data-list">{visibleSessions.map((session) => <Button variant="ghost" key={session.id} onClick={() => props.onOpen(session)}><strong>{session.title}</strong><span>{session.status}</span><small>{session.updatedAt.slice(0, 10)}</small></Button>)}</div>}
       <NameDialog open={createOpen} onOpenChange={setCreateOpen} title={`${props.t("add")} ${props.t("projects")}`} value={projectName} onValueChange={setProjectName} onSubmit={() => projectName.trim() && create.mutate(projectName.trim())} t={props.t} />
@@ -794,6 +797,7 @@ function ProjectsPage(props: { sessions: Session[]; workspaceId: string | null; 
 
 function SourcesPage({ workspaceId, t }: { workspaceId: string | null; t: (key: MessageKey) => string }) {
   return <DomainPage<Source>
+    icon="source"
     title={t("sources")}
     queryKey="sources"
     list={() => window.piWork.source.list(workspaceId)}
@@ -807,6 +811,7 @@ function SourcesPage({ workspaceId, t }: { workspaceId: string | null; t: (key: 
 
 function SkillsPage({ workspaceId, t }: { workspaceId: string | null; t: (key: MessageKey) => string }) {
   return <DomainPage<Skill>
+    icon="skills"
     title={t("skills")}
     queryKey="skills"
     list={() => window.piWork.skill.list(workspaceId)}
@@ -820,6 +825,7 @@ function SkillsPage({ workspaceId, t }: { workspaceId: string | null; t: (key: M
 
 function AutomationsPage({ workspaceId, t }: { workspaceId: string | null; t: (key: MessageKey) => string }) {
   return <DomainPage<Automation>
+    icon="list-todo"
     title={t("automations")}
     queryKey="automations"
     list={() => window.piWork.automation.list(workspaceId)}
@@ -832,6 +838,7 @@ function AutomationsPage({ workspaceId, t }: { workspaceId: string | null; t: (k
 }
 
 function DomainPage<T extends { id: string; name: string; enabled: boolean }>(props: {
+  icon: IconName;
   title: string;
   queryKey: string;
   list(): Promise<T[]>;
@@ -856,7 +863,7 @@ function DomainPage<T extends { id: string; name: string; enabled: boolean }>(pr
   const remove = useMutation({ mutationFn: props.remove, onSuccess: refresh });
   return <Page title={props.title} action={<Button onClick={() => setCreateOpen(true)}><Icon name="plus" size={14} />{props.t("add")}</Button>}>
     <div className="resource-grid">
-      {(query.data ?? []).map((item) => <Card className="resource-card" key={item.id}><div className="resource-icon"><Icon name="workspace" /></div><CardHeader className="resource-copy"><CardTitle>{item.name}</CardTitle><CardDescription>{props.renderDetail(item)}</CardDescription></CardHeader><Switch checked={item.enabled} aria-label={`${item.name}: ${props.t(item.enabled ? "enabled" : "disabled")}`} onCheckedChange={() => update.mutate(item)} /><Button variant="ghost" size="icon" className="card-delete" aria-label="Delete" onClick={() => setDeleteItem(item)}><Icon name="close" size={14} /></Button></Card>)}
+      {(query.data ?? []).map((item) => <Card className="resource-card" key={item.id}><div className="resource-icon"><Icon name={props.icon} /></div><CardHeader className="resource-copy"><CardTitle>{item.name}</CardTitle><CardDescription>{props.renderDetail(item)}</CardDescription></CardHeader><Switch checked={item.enabled} aria-label={`${item.name}: ${props.t(item.enabled ? "enabled" : "disabled")}`} onCheckedChange={() => update.mutate(item)} /><Button variant="ghost" size="icon" className="card-delete" aria-label="Delete" onClick={() => setDeleteItem(item)}><Icon name="trash" size={14} /></Button></Card>)}
       {(query.data?.length ?? 0) === 0 ? <Empty className="empty-card"><EmptyDescription>{props.t("noItems")}</EmptyDescription></Empty> : null}
     </div>
     <NameDialog open={createOpen} onOpenChange={setCreateOpen} title={`${props.t("add")} ${props.title}`} value={name} onValueChange={setName} onSubmit={() => name.trim() && create.mutate(name.trim())} t={props.t} />
@@ -920,7 +927,7 @@ function SettingsPage({ settings, onRefresh, t }: { settings: AppSettings | unde
           <Field><FieldLabel>{t("providers")}</FieldLabel><Select value={providerId} onValueChange={setProviderId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerOptions.map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
           <Field><FieldLabel>API key</FieldLabel><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="API key" /></Field>
           <Button disabled={!providerId || !apiKey} onClick={() => saveProvider.mutate()}>{t("save")}</Button>
-        </FieldGroup><div className="chips">{(providers.data ?? []).map((provider) => <Badge key={provider.providerId}>{provider.providerId} ✓</Badge>)}</div></CardContent>
+        </FieldGroup><div className="chips">{(providers.data ?? []).map((provider) => <Badge key={provider.providerId}><Icon name="check" size={14} />{provider.providerId}</Badge>)}</div></CardContent>
       </Card>
       <Card className="settings-card">
         <CardHeader><CardTitle>{t("keyboard")}</CardTitle></CardHeader>

@@ -36,6 +36,7 @@ import {
   browserNavigateInputSchema,
   createDomainEntityInputSchema,
   completeTaskInputSchema,
+  externalUrlInputSchema,
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   planSchema,
@@ -791,6 +792,10 @@ function registerIpc(): void {
     }
     const publishedPath = await publishArtifact(workspace, task, artifact);
     return artifactSchema.parse(getStore().publishArtifact(artifact.id, publishedPath));
+  });
+  ipcMain.handle("system:open-external", (_event, input: unknown) => {
+    const { url } = externalUrlInputSchema.parse(input);
+    return shell.openExternal(url);
   });
   ipcMain.handle("browser:open", async (_event, input: unknown) => {
     const { url } = browserNavigateInputSchema.parse(input);

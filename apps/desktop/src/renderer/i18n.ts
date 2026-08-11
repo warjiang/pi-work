@@ -54,6 +54,8 @@ const messages = {
     reviewWorkspace: "Review this workspace",
     createPlan: "Create a plan",
     findNext: "Find the next issue",
+    copyCode: "Copy code",
+    copied: "Copied",
   },
   "zh-CN": {
     newChat: "新建会话",
@@ -108,6 +110,8 @@ const messages = {
     reviewWorkspace: "检查此工作区",
     createPlan: "创建计划",
     findNext: "查找下一项问题",
+    copyCode: "复制代码",
+    copied: "已复制",
   },
 } as const;
 

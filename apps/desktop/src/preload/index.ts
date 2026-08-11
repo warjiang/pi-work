@@ -14,6 +14,9 @@ const piWork = {
     get: () => ipcRenderer.invoke("settings:get"),
     update: (input: unknown) => ipcRenderer.invoke("settings:update", input),
   },
+  system: {
+    openExternal: (url: string) => ipcRenderer.invoke("system:open-external", { url }),
+  },
   extension: {
     list: () => ipcRenderer.invoke("extension:list"),
     install: (source: string) => ipcRenderer.invoke("extension:install", source),

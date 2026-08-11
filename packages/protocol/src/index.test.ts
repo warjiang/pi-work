@@ -3,6 +3,7 @@ import {
   agentRequestSchema,
   agentMessageSchema,
   createArtifactInputSchema,
+  externalUrlInputSchema,
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   sendChatInputSchema,
@@ -28,6 +29,14 @@ describe("protocol schemas", () => {
       runtime: { cwd: "/workspace", agentDir: "/user/pi-agent" },
     }).success).toBe(true);
     expect(extensionSourceSchema.safeParse("  ").success).toBe(false);
+  });
+
+  it("allows only absolute HTTP and HTTPS external URLs", () => {
+    expect(externalUrlInputSchema.safeParse({ url: "https://example.com/docs?q=pi" }).success).toBe(true);
+    expect(externalUrlInputSchema.safeParse({ url: "http://localhost:3000" }).success).toBe(true);
+    expect(externalUrlInputSchema.safeParse({ url: "javascript:alert(1)" }).success).toBe(false);
+    expect(externalUrlInputSchema.safeParse({ url: "file:///tmp/secret" }).success).toBe(false);
+    expect(externalUrlInputSchema.safeParse({ url: "/relative/path" }).success).toBe(false);
   });
 
   it("accepts chat messages without requiring a title or plan", () => {

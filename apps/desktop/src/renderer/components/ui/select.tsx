@@ -1,5 +1,6 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import type { ComponentProps } from "react";
+import { Icon } from "./icon.js";
 import { cn } from "../../lib/utils.js";
 
 export const Select = SelectPrimitive.Root;
@@ -16,7 +17,9 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
       {...props}
     >
       {children}
-      <SelectPrimitive.Icon className="text-[var(--muted)]">⌄</SelectPrimitive.Icon>
+      <SelectPrimitive.Icon className="text-[var(--muted)]">
+        <Icon name="chevron-down" size={14} />
+      </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
 }
@@ -49,7 +52,7 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
       {...props}
     >
       <span className="absolute left-2 flex size-3.5 items-center justify-center">
-        <SelectPrimitive.ItemIndicator>✓</SelectPrimitive.ItemIndicator>
+        <SelectPrimitive.ItemIndicator><Icon name="check" size={14} /></SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     </SelectPrimitive.Item>

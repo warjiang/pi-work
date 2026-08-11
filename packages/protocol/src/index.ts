@@ -243,6 +243,10 @@ export const browserNavigateInputSchema = z.object({
   url: z.string().trim().min(1).max(8_192),
 });
 
+export const externalUrlInputSchema = z.object({
+  url: z.url({ protocol: /^https?$/ }).max(8_192),
+});
+
 export const browserBoundsInputSchema = z.object({
   x: z.number().int().nonnegative(),
   y: z.number().int().nonnegative(),

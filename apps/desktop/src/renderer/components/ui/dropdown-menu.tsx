@@ -25,7 +25,7 @@ export function DropdownMenuItem({ className, inset, ...props }: ComponentProps<
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
-        "flex h-7 cursor-default select-none items-center rounded-sm px-2 text-[11px] outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-[var(--hover)] data-[disabled]:opacity-50",
+        "flex h-7 cursor-default select-none items-center gap-2 rounded-sm px-2 text-[11px] outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-[var(--hover)] data-[disabled]:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0",
         inset && "pl-8",
         className,
       )}
