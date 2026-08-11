@@ -13,9 +13,12 @@ import type {
   ModelCatalog,
   Plan,
   SetProviderCredentialInput,
+  StatusDefinition,
+  Label,
   Skill,
   Source,
   ThinkingLevel,
+  ToolApproval,
   Automation,
   PermissionMode,
 } from "@pi-work/protocol";
@@ -34,6 +37,7 @@ import {
   browserBoundsInputSchema,
   browserNavigateInputSchema,
   createDomainEntityInputSchema,
+  generatePlanInputSchema,
   completeTaskInputSchema,
   externalUrlInputSchema,
   extensionSourceSchema,
@@ -44,6 +48,8 @@ import {
   sendChatInputSchema,
   setProviderCredentialInputSchema,
   taskSchema,
+  statusDefinitionSchema,
+  labelSchema,
   updateAppSettingsInputSchema,
   updateConversationModelInputSchema,
   removeConversationInputSchema,
@@ -55,6 +61,7 @@ import {
   workspaceSchema,
   updateDomainEntityInputSchema,
   updateSessionInputSchema,
+  updateTaskBriefInputSchema,
 } from "@pi-work/protocol";
 import { stageArtifact, publishArtifact } from "@pi-work/artifacts";
 import { PiWorkStore } from "@pi-work/storage";
@@ -72,6 +79,15 @@ const pendingAgentRequests = new Map<string, {
 }>();
 const activeAgentSessions = new Set<string>();
 const approvedAttachmentPaths = new Set<string>();
+const pendingToolApprovals = new Map<string, ToolApproval>();
+
+function clearPendingToolApprovals(sessionId: string): void {
+  for (const [approvalId, approval] of pendingToolApprovals) {
+    if (approval.sessionId === sessionId) {
+      pendingToolApprovals.delete(approvalId);
+    }
+  }
+}
 
 type AgentRequestInput = AgentRequest extends infer Request
   ? Request extends AgentRequest
@@ -202,10 +218,14 @@ function getAgentProcess(): UtilityProcess {
     }
     const response: AgentMessage = parsed.data;
     if (response.type === "tool.approval") {
+      pendingToolApprovals.set(response.approvalId, response);
       mainWindow?.webContents.send("chat:tool-approval", response);
       return;
     }
     if (response.type === "event") {
+      if (response.event.kind === "completed" || response.event.kind === "cancelled") {
+        clearPendingToolApprovals(response.sessionId);
+      }
       if (response.event.kind !== "text_delta" && response.event.kind !== "completed" && response.event.kind !== "cancelled") {
         const kind = response.event.kind === "thinking"
           ? "thinking"
@@ -260,6 +280,7 @@ function getAgentProcess(): UtilityProcess {
       }
     }
     activeAgentSessions.clear();
+    pendingToolApprovals.clear();
     agentProcess = null;
   });
   return agentProcess;
@@ -451,7 +472,9 @@ function registerIpc(): void {
     });
     const outputPath = join(rootPath, "Pi Work");
     await mkdir(outputPath, { recursive: true });
-    return workspaceSchema.parse(getStore().createWorkspace({ ...workspace, outputPath }));
+    const created = workspaceSchema.parse(getStore().createWorkspace({ ...workspace, outputPath }));
+    ensureDefaultStatuses(created.id);
+    return created;
   });
 
   ipcMain.handle("workspace:list", () => getStore().listWorkspaces().map((workspace) => workspaceSchema.parse(workspace)));
@@ -527,6 +550,7 @@ function registerIpc(): void {
     const workspace = task === null ? null : getStore().getWorkspace(task.workspaceId);
     if (workspace?.kind === "managed") assertManagedChatPath(workspace.rootPath);
     const removed = getStore().removeConversation(parsed.taskId);
+    clearPendingToolApprovals(parsed.taskId);
     if (removed.workspace.kind === "managed") await rm(removed.workspace.rootPath, { recursive: true, force: true });
   });
   ipcMain.handle("session:messages", (_event, sessionId: unknown) => getStore().listMessages(taskSchema.shape.id.parse(sessionId)));
@@ -557,6 +581,7 @@ function registerIpc(): void {
     const response = await sendAgentRequest({ type: "cancel", sessionId: id });
     if (response.type === "error") throw new Error(response.message);
     getStore().updateSession(id, { running: false });
+    clearPendingToolApprovals(id);
   });
   ipcMain.handle("conversation:update-model", (_event, input: unknown) => {
     const parsed = updateConversationModelInputSchema.parse(input);
@@ -570,6 +595,7 @@ function registerIpc(): void {
       assertManagedChatPath(workspace.rootPath);
     }
     const removed = getStore().removeConversation(parsed.taskId);
+    clearPendingToolApprovals(parsed.taskId);
     if (removed.workspace.kind === "managed") {
       await rm(removed.workspace.rootPath, { recursive: true, force: true });
     }
@@ -581,13 +607,48 @@ function registerIpc(): void {
       requestId: randomUUID(),
       ...parsed,
     });
+    pendingToolApprovals.delete(parsed.approvalId);
   });
   ipcMain.handle("task:list", (_event, workspaceId: unknown) => getStore().listTasks(workspaceSchema.shape.id.parse(workspaceId)).map((task) => taskSchema.parse(task)));
   ipcMain.handle("task:create", async (_event, input: unknown) => {
     const parsed = createTaskInputSchema.parse(input);
     return taskSchema.parse(getStore().createTask(parsed));
   });
+  ipcMain.handle("task:update-brief", (_event, input: unknown) => {
+    const { taskId, ...value } = updateTaskBriefInputSchema.parse(input);
+    return taskSchema.parse(getStore().updateTaskBrief(taskId, withoutUndefined(value)));
+  });
+  ipcMain.handle("task:generate-plan", async (_event, input: unknown) => {
+    const { taskId } = generatePlanInputSchema.parse(input);
+    const task = getStore().getTask(taskId);
+    if (task === null) throw new Error("Task not found.");
+    if (task.providerId === null || task.modelId === null) {
+      throw new Error("Choose a model before generating a plan.");
+    }
+    const workspace = getStore().getWorkspace(task.workspaceId);
+    if (workspace === null) throw new Error("Work folder not found.");
+    const plan = await generatePlan(
+      task,
+      await providerCredential(task.providerId),
+      task.modelId,
+      task.thinkingLevel,
+      agentRuntime(workspace.rootPath),
+    );
+    getStore().savePlan(plan);
+    getStore().addMessage({
+      taskId: task.id,
+      role: "assistant",
+      content: `Plan ready for review: ${plan.summary}`,
+    });
+    return planSchema.parse(plan);
+  });
   ipcMain.handle("chat:list", (_event, taskId: unknown) => getStore().listMessages(taskSchema.shape.id.parse(taskId)));
+  ipcMain.handle("chat:tool-approvals", (_event, taskId: unknown) => {
+    const parsedTaskId = taskId === undefined ? null : taskSchema.shape.id.parse(taskId);
+    return [...pendingToolApprovals.values()].filter((approval) => (
+      parsedTaskId === null || approval.sessionId === parsedTaskId
+    ));
+  });
   ipcMain.handle("chat:send", async (_event, input: unknown) => {
     const parsed = sendChatInputSchema.parse(input);
     if (parsed.attachments.some(({ path }) => !approvedAttachmentPaths.has(path))) {
@@ -824,11 +885,16 @@ function registerIpc(): void {
   ipcMain.handle("browser:close", () => closeBrowserView());
 
   const domain = {
+    status: { schema: statusDefinitionSchema, list: (workspaceId?: string | null) => {
+      if (workspaceId !== undefined && workspaceId !== null) ensureDefaultStatuses(workspaceId);
+      return getStore().listStatuses(workspaceId);
+    } },
+    label: { schema: labelSchema, list: (workspaceId?: string | null) => getStore().listLabels(workspaceId) },
     source: { schema: sourceSchema, list: (workspaceId?: string | null) => getStore().listSources(workspaceId) },
     skill: { schema: skillSchema, list: (workspaceId?: string | null) => getStore().listSkills(workspaceId) },
     automation: { schema: automationSchema, list: (workspaceId?: string | null) => getStore().listAutomations(workspaceId) },
   } as const;
-  type DomainEntity = Source | Skill | Automation;
+  type DomainEntity = StatusDefinition | Label | Source | Skill | Automation;
   for (const [name, definition] of Object.entries(domain)) {
     const domainName = name as keyof typeof domain;
     const schema = definition.schema as { parse(value: unknown): DomainEntity };
@@ -848,9 +914,25 @@ function registerIpc(): void {
     });
     ipcMain.handle(`${name}:remove`, (_event, input: unknown) => {
       const { id } = removeDomainEntityInputSchema.parse(input);
-      getStore().removeDomainEntity(domainName, id);
+      if (domainName === "status") getStore().removeStatus(id);
+      else if (domainName === "label") getStore().removeLabel(id);
+      else getStore().removeDomainEntity(domainName, id);
     });
   }
+}
+
+function ensureDefaultStatuses(workspaceId: string): void {
+  if (getStore().listStatuses(workspaceId).length > 0) return;
+  const english = getStore().getAppSettings().language === "en";
+  [
+    { name: english ? "To do" : "待处理", color: "#8a8275", position: 0 },
+    { name: english ? "In progress" : "进行中", color: "#a66f2b", position: 1 },
+    { name: english ? "Waiting" : "等待", color: "#967448", position: 2 },
+    { name: english ? "Completed" : "已完成", color: "#58745d", position: 3 },
+  ].forEach((value) => getStore().createDomainEntity("status", statusDefinitionSchema, {
+    workspaceId,
+    ...value,
+  }));
 }
 
 app.whenReady().then(async () => {

@@ -56,7 +56,9 @@ const piWork = {
   task: {
     list: (workspaceId: string) => ipcRenderer.invoke("task:list", workspaceId),
     create: (input: unknown) => ipcRenderer.invoke("task:create", input),
-    plan: (taskId: string) => ipcRenderer.invoke("task:plan", taskId),
+    getPlan: (taskId: string) => ipcRenderer.invoke("task:plan", taskId),
+    generatePlan: (input: unknown) => ipcRenderer.invoke("task:generate-plan", input),
+    updateBrief: (input: unknown) => ipcRenderer.invoke("task:update-brief", input),
     approvePlan: (input: unknown) => ipcRenderer.invoke("task:approve-plan", input),
     abort: (input: unknown) => ipcRenderer.invoke("task:abort", input),
     complete: (input: unknown) => ipcRenderer.invoke("task:complete", input),
@@ -64,6 +66,7 @@ const piWork = {
   },
   chat: {
     list: (taskId: string) => ipcRenderer.invoke("chat:list", taskId),
+    toolApprovals: (taskId?: string) => ipcRenderer.invoke("chat:tool-approvals", taskId),
     send: (input: unknown) => ipcRenderer.invoke("chat:send", input),
     onToolApproval: (listener: (approval: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, approval: unknown) => listener(approval);
@@ -77,6 +80,8 @@ const piWork = {
     create: (input: unknown) => ipcRenderer.invoke("artifact:create", input),
     publish: (input: unknown) => ipcRenderer.invoke("artifact:publish", input),
   },
+  status: domainApi("status"),
+  label: domainApi("label"),
   source: domainApi("source"),
   skill: domainApi("skill"),
   automation: domainApi("automation"),
@@ -99,7 +104,7 @@ const piWork = {
 
 contextBridge.exposeInMainWorld("piWork", piWork);
 
-function domainApi(name: "source" | "skill" | "automation") {
+function domainApi(name: "status" | "label" | "source" | "skill" | "automation") {
   return {
     list: (workspaceId?: string | null) => ipcRenderer.invoke(`${name}:list`, workspaceId),
     create: (input: unknown) => ipcRenderer.invoke(`${name}:create`, input),

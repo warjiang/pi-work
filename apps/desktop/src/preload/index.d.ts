@@ -13,6 +13,7 @@ import type {
   Session,
   Skill,
   Source,
+  StatusDefinition,
   Task,
   ToolApproval,
   Conversation,
@@ -73,7 +74,9 @@ declare global {
       task: {
         list(workspaceId: string): Promise<Task[]>;
         create(input: unknown): Promise<Task>;
-        plan(taskId: string): Promise<Plan | null>;
+        getPlan(taskId: string): Promise<Plan | null>;
+        generatePlan(input: unknown): Promise<Plan>;
+        updateBrief(input: unknown): Promise<Task>;
         approvePlan(input: unknown): Promise<Task>;
         abort(input: unknown): Promise<Task>;
         complete(input: unknown): Promise<Task>;
@@ -81,6 +84,7 @@ declare global {
       };
       chat: {
         list(taskId: string): Promise<ChatMessage[]>;
+        toolApprovals(taskId?: string): Promise<ToolApproval[]>;
         send(input: unknown): Promise<Task>;
         onToolApproval(listener: (approval: ToolApproval) => void): () => void;
         resolveToolApproval(input: unknown): Promise<void>;
@@ -90,6 +94,8 @@ declare global {
         create(input: unknown): Promise<Artifact>;
         publish(input: unknown): Promise<Artifact>;
       };
+      status: DomainApi<StatusDefinition>;
+      label: DomainApi<import("@pi-work/protocol").Label>;
       source: DomainApi<Source>;
       skill: DomainApi<Skill>;
       automation: DomainApi<Automation>;

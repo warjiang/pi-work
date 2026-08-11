@@ -1,17 +1,19 @@
-import type { Session, TaskStatus, Workspace } from "@pi-work/protocol";
-import type { MessageKey } from "./i18n.js";
+import type { Session, StatusDefinition, Workspace } from "@pi-work/protocol";
 
-export const boardColumns: ReadonlyArray<{
-  label: MessageKey;
-  statuses: readonly TaskStatus[];
-  targetStatus: TaskStatus;
-}> = [
-  { label: "backlog", statuses: ["draft", "planning", "awaiting_plan_approval"], targetStatus: "draft" },
-  { label: "inProgress", statuses: ["running", "awaiting_action_approval"], targetStatus: "running" },
-  { label: "review", statuses: ["reviewing"], targetStatus: "reviewing" },
-  { label: "done", statuses: ["completed"], targetStatus: "completed" },
-  { label: "closed", statuses: ["failed", "cancelled"], targetStatus: "cancelled" },
-];
+export function sessionsByStage<T extends Pick<Session, "statusId">>(
+  sessions: T[],
+  status: Pick<StatusDefinition, "id"> | null,
+  knownStatuses: ReadonlyArray<Pick<StatusDefinition, "id">> = [],
+): T[] {
+  if (status !== null) {
+    return sessions.filter((session) => session.statusId === status.id);
+  }
+  const knownStatusIds = new Set(knownStatuses.map(({ id }) => id));
+  return sessions.filter((session) => (
+    session.statusId === null
+    || (knownStatusIds.size > 0 && !knownStatusIds.has(session.statusId))
+  ));
+}
 
 export function sessionsForBoard<T extends Pick<Session, "workspaceId" | "archived">>(
   sessions: T[],

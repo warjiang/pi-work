@@ -155,6 +155,7 @@ export class PiWorkStore {
     workspaceId: string;
     title: string;
     goal: string;
+    kind?: Task["kind"];
     providerId?: string | null;
     modelId?: string | null;
     thinkingLevel?: ThinkingLevel;
@@ -171,7 +172,7 @@ export class PiWorkStore {
       providerId: input.providerId ?? null,
       modelId: input.modelId ?? null,
       thinkingLevel: input.thinkingLevel ?? "off",
-      kind: "chat",
+      kind: input.kind ?? "chat",
       archived: false,
       flagged: false,
       unread: false,
@@ -193,6 +194,13 @@ export class PiWorkStore {
   updateTaskGoal(taskId: string, goal: string): Task {
     this.requireTask(taskId);
     this.db.update(tasks).set({ goal, updatedAt: timestamp() }).where(eq(tasks.id, taskId)).run();
+    return this.requireTask(taskId);
+  }
+
+  updateTaskBrief(taskId: string, input: { title?: string; goal?: string }): Task {
+    this.requireTask(taskId);
+    this.db.update(tasks).set({ ...input, updatedAt: timestamp() }).where(eq(tasks.id, taskId)).run();
+    this.appendEvent(taskId, "session.updated", input);
     return this.requireTask(taskId);
   }
 
@@ -417,6 +425,28 @@ export class PiWorkStore {
 
   removeDomainEntity(domain: DomainName, id: string): void {
     this.db.delete(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).run();
+  }
+
+  removeStatus(id: string): void {
+    const transaction = this.sqlite.transaction(() => {
+      this.sqlite.prepare("UPDATE tasks SET status_id = NULL WHERE status_id = ?").run(id);
+      this.sqlite.prepare("DELETE FROM domain_entities WHERE id = ? AND domain = 'status'").run(id);
+    });
+    transaction();
+  }
+
+  removeLabel(id: string): void {
+    const transaction = this.sqlite.transaction(() => {
+      const rows = this.sqlite.prepare("SELECT id, label_ids FROM tasks").all() as Array<{ id: string; label_ids: string }>;
+      const update = this.sqlite.prepare("UPDATE tasks SET label_ids = ?, updated_at = ? WHERE id = ?");
+      for (const row of rows) {
+        const current = JSON.parse(row.label_ids) as string[];
+        if (!current.includes(id)) continue;
+        update.run(JSON.stringify(current.filter((labelId) => labelId !== id)), timestamp(), row.id);
+      }
+      this.sqlite.prepare("DELETE FROM domain_entities WHERE id = ? AND domain = 'label'").run(id);
+    });
+    transaction();
   }
 
   createSource(value: Omit<Source, "id" | "createdAt" | "updatedAt">): Source {

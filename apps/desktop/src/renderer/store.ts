@@ -1,56 +1,77 @@
 import { create } from "zustand";
 
+export type AppView =
+  | "inbox"
+  | "attention"
+  | "completed"
+  | "board"
+  | "sources"
+  | "skills"
+  | "automations"
+  | "browser"
+  | "settings";
+
+export type InspectorTab = "task" | "plan" | "activity" | "output";
+export type WorkspaceScope = "all" | "personal" | string;
+
 type WorkspaceUiState = {
-  view: "inbox" | "browser" | "board" | "sources" | "skills" | "automations" | "settings";
-  mode: "managed" | "folder";
-  selectedWorkspaceId: string | null;
+  view: AppView;
+  workspaceScope: WorkspaceScope;
   selectedTaskId: string | null;
   sidebarCollapsed: boolean;
+  sidebarDrawerOpen: boolean;
+  inspectorOpen: boolean;
+  inspectorTab: InspectorTab;
+  commandOpen: boolean;
+  newTaskOpen: boolean;
   search: string;
-  sessionFilter: "all" | "flagged" | "archived";
-  newChat(): void;
-  showInbox(filter?: WorkspaceUiState["sessionFilter"]): void;
-  showView(view: WorkspaceUiState["view"]): void;
-  showSettings(): void;
-  setSearch(value: string): void;
-  toggleSidebar(): void;
-  selectWorkspace(workspaceId: string): void;
-  selectConversation(workspaceId: string, taskId: string): void;
+  showView(view: AppView): void;
+  setWorkspaceScope(scope: WorkspaceScope): void;
   selectTask(taskId: string | null): void;
+  openTask(taskId: string): void;
+  toggleSidebar(): void;
+  setSidebarCollapsed(collapsed: boolean): void;
+  setSidebarDrawerOpen(open: boolean): void;
+  toggleInspector(): void;
+  showInspector(tab?: InspectorTab): void;
+  setInspectorTab(tab: InspectorTab): void;
+  setCommandOpen(open: boolean): void;
+  setNewTaskOpen(open: boolean): void;
+  setSearch(value: string): void;
 };
 
 export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
   view: "inbox",
-  mode: "managed",
-  selectedWorkspaceId: null,
+  workspaceScope: "all",
   selectedTaskId: null,
   sidebarCollapsed: false,
+  sidebarDrawerOpen: false,
+  inspectorOpen: true,
+  inspectorTab: "task",
+  commandOpen: false,
+  newTaskOpen: false,
   search: "",
-  sessionFilter: "all",
-  newChat: () => set({
-    view: "inbox",
-    mode: "managed",
-    selectedWorkspaceId: null,
+  showView: (view) => set({ view, sidebarDrawerOpen: false }),
+  setWorkspaceScope: (workspaceScope) => set({
+    workspaceScope,
     selectedTaskId: null,
-    sessionFilter: "all",
+    view: "inbox",
   }),
-  showInbox: (sessionFilter = "all") => set({ view: "inbox", sessionFilter }),
-  showView: (view) => set({ view }),
-  showSettings: () => set({ view: "settings" }),
+  selectTask: (selectedTaskId) => set({ selectedTaskId }),
+  openTask: (selectedTaskId) => set({
+    selectedTaskId,
+    view: "inbox",
+    sidebarDrawerOpen: false,
+  }),
+  toggleSidebar: () => set((state) => ({
+    sidebarCollapsed: !state.sidebarCollapsed,
+  })),
+  setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+  setSidebarDrawerOpen: (sidebarDrawerOpen) => set({ sidebarDrawerOpen }),
+  toggleInspector: () => set((state) => ({ inspectorOpen: !state.inspectorOpen })),
+  showInspector: (inspectorTab = "task") => set({ inspectorOpen: true, inspectorTab }),
+  setInspectorTab: (inspectorTab) => set({ inspectorTab }),
+  setCommandOpen: (commandOpen) => set({ commandOpen }),
+  setNewTaskOpen: (newTaskOpen) => set({ newTaskOpen }),
   setSearch: (search) => set({ search }),
-  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  selectWorkspace: (workspaceId) => set({
-    view: "inbox",
-    mode: "folder",
-    selectedWorkspaceId: workspaceId,
-    selectedTaskId: null,
-    sessionFilter: "all",
-  }),
-  selectConversation: (workspaceId, taskId) => set({
-    view: "inbox",
-    mode: "managed",
-    selectedWorkspaceId: workspaceId,
-    selectedTaskId: taskId,
-  }),
-  selectTask: (taskId) => set({ selectedTaskId: taskId }),
 }));

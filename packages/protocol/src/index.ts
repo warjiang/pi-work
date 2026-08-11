@@ -286,6 +286,25 @@ export const createTaskInputSchema = z.object({
   workspaceId: z.uuid(),
   title: z.string().trim().min(1).max(160),
   goal: z.string().trim().min(1).max(10_000),
+  kind: sessionKindSchema.default("task"),
+  providerId: z.string().trim().min(1).max(80).nullable().default(null),
+  modelId: z.string().trim().min(1).max(160).nullable().default(null),
+  thinkingLevel: thinkingLevelSchema.default("off"),
+  permissionMode: permissionModeSchema.default("ask"),
+  planMode: z.boolean().default(true),
+  workingDirectory: z.string().min(1).nullable().default(null),
+});
+
+export const updateTaskBriefInputSchema = z.object({
+  taskId: z.uuid(),
+  title: z.string().trim().min(1).max(160).optional(),
+  goal: z.string().trim().min(1).max(10_000).optional(),
+}).refine(({ title, goal }) => title !== undefined || goal !== undefined, {
+  message: "Update at least one task brief field.",
+});
+
+export const generatePlanInputSchema = z.object({
+  taskId: z.uuid(),
 });
 
 export const sendChatInputSchema = z.object({

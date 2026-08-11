@@ -11,13 +11,13 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        "flex h-8 min-w-0 items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--panel)] px-2.5 text-xs outline-none data-[placeholder]:text-[var(--faint)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-8 min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none transition-colors data-[placeholder]:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
     >
       {children}
-      <SelectPrimitive.Icon className="text-[var(--muted)]">
+      <SelectPrimitive.Icon className="text-muted-foreground">
         <Icon name="chevron-down" size={14} />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
@@ -30,7 +30,7 @@ export function SelectContent({ className, children, position = "popper", ...pro
       <SelectPrimitive.Content
         position={position}
         className={cn(
-          "z-50 max-h-72 min-w-[8rem] overflow-hidden rounded-md border border-[var(--border)] bg-[var(--panel)] text-[var(--text)] shadow-xl",
+          "z-50 max-h-72 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           position === "popper" && "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
           className,
         )}
@@ -46,7 +46,7 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
   return (
     <SelectPrimitive.Item
       className={cn(
-        "relative flex h-7 cursor-default select-none items-center rounded-sm py-1 pl-7 pr-2 text-[11px] outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-[var(--hover)] data-[disabled]:opacity-50",
+        "relative flex h-8 cursor-default select-none items-center rounded-sm py-1 pl-7 pr-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
         className,
       )}
       {...props}

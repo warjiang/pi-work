@@ -7,7 +7,7 @@ export function Spinner({ className, ...props }: ComponentProps<"span">) {
     <span
       role="status"
       aria-label="Loading"
-      className={cn("inline-flex size-4 items-center justify-center text-[var(--muted)]", className)}
+      className={cn("inline-flex size-4 items-center justify-center text-muted-foreground", className)}
       {...props}
     >
       <Icon name="refresh" size={14} className="animate-spin" />

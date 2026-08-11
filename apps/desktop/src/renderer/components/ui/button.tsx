@@ -4,19 +4,20 @@ import type { ButtonHTMLAttributes } from "react";
 import { cn } from "../../lib/utils.js";
 
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md text-xs font-medium transition-colors outline-none disabled:pointer-events-none disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--panel)] [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors outline-none disabled:pointer-events-none disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-background [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "border border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)] hover:opacity-90",
-        destructive: "border border-[var(--danger)] bg-[var(--danger)] text-white hover:opacity-90",
-        outline: "border border-[var(--border)] bg-[var(--panel)] text-[var(--text)] hover:bg-[var(--hover)]",
-        secondary: "border border-transparent bg-[var(--panel-muted)] text-[var(--text)] hover:bg-[var(--hover)]",
-        ghost: "border border-transparent bg-transparent text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]",
+        default: "border border-primary bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive: "border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        outline: "border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
+        secondary: "border border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost: "border border-transparent bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        link: "border border-transparent bg-transparent text-primary underline-offset-4 hover:underline",
       },
       size: {
         default: "h-8 px-3",
-        sm: "h-7 px-2.5 text-[11px]",
+        sm: "h-7 px-2.5 text-xs",
         icon: "size-7 p-0",
       },
     },

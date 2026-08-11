@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { taskStatuses } from "@pi-work/protocol";
-import { boardColumns, sessionsForBoard, workspaceHasBoard } from "./board.js";
+import { sessionsByStage, sessionsForBoard, workspaceHasBoard } from "./board.js";
 
 describe("board", () => {
   it("is available only for folder workspaces", () => {
@@ -19,14 +18,14 @@ describe("board", () => {
     expect(sessionsForBoard(sessions, "first").map(({ id }) => id)).toEqual(["current"]);
   });
 
-  it("maps every session status to one lane and a stable drop status", () => {
-    expect(boardColumns.flatMap(({ statuses }) => statuses).sort()).toEqual([...taskStatuses].sort());
-    expect(boardColumns.map(({ targetStatus }) => targetStatus)).toEqual([
-      "draft",
-      "running",
-      "reviewing",
-      "completed",
-      "cancelled",
-    ]);
+  it("groups tasks by user stage without reading lifecycle status", () => {
+    const sessions = [
+      { id: "first", statusId: "doing", status: "awaiting_plan_approval" },
+      { id: "second", statusId: null, status: "completed" },
+      { id: "legacy", statusId: "removed", status: "running" },
+    ];
+    const statuses = [{ id: "doing" }];
+    expect(sessionsByStage(sessions, statuses[0]!, statuses).map(({ id }) => id)).toEqual(["first"]);
+    expect(sessionsByStage(sessions, null, statuses).map(({ id }) => id)).toEqual(["second", "legacy"]);
   });
 });
