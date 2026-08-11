@@ -74,7 +74,6 @@ export function TopBar(props: {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="workspace-switcher">
-            <PiMark size="compact" />
             <span>{scopeLabel}</span>
             <Icon name="chevron-down" size={14} />
           </Button>
@@ -142,6 +141,7 @@ export function Sidebar(props: {
                 variant="ghost"
                 className={`recent-task ${props.view === "inbox" && props.selectedTaskId === session.id ? "selected" : ""}`}
                 key={session.id}
+                aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
                 onClick={() => props.onOpenTask(session.id)}
               >
                 <span className={`task-state-dot state-${session.status}`} />
@@ -183,7 +183,7 @@ function SidebarSection(props: { title: string; count?: number; className?: stri
 
 function SidebarNavButton(props: { active: boolean; icon: IconName; label: string; badge?: number; onClick(): void }) {
   return (
-    <Button variant="ghost" className={`sidebar-nav-button ${props.active ? "selected" : ""}`} onClick={props.onClick}>
+    <Button variant="ghost" className={`sidebar-nav-button ${props.active ? "selected" : ""}`} aria-current={props.active ? "page" : undefined} onClick={props.onClick}>
       <Icon name={props.icon} />
       <strong>{props.label}</strong>
       {props.badge ? <span className="nav-count">{props.badge}</span> : null}
@@ -376,6 +376,45 @@ export function CommandPalette(props: {
   );
 }
 
+function configuredModels(
+  providers: ProviderConfig[],
+  models: ModelCatalog | undefined,
+): ModelOption[] {
+  const catalog = models?.models ?? [];
+  return providers.flatMap(({ providerId }) => catalog.filter((model) => model.providerId === providerId));
+}
+
+export function resolveDefaultModel(
+  providers: ProviderConfig[],
+  models: ModelCatalog | undefined,
+  settings: AppSettings | undefined,
+): ModelOption | undefined {
+  const availableModels = configuredModels(providers, models);
+  return availableModels.find(({ providerId, modelId }) => (
+    providerId === settings?.providerId && modelId === settings.modelId
+  )) ?? availableModels[0];
+}
+
+export function resolveDefaultThinkingLevel(
+  model: ModelOption | undefined,
+  settings: AppSettings | undefined,
+): ThinkingLevel {
+  const configuredLevel = settings?.thinkingLevel ?? "off";
+  if (model?.thinkingLevels.includes(configuredLevel)) return configuredLevel;
+  return model?.thinkingLevels[0] ?? "off";
+}
+
+export function createNewSessionInput(
+  model: ModelOption,
+  thinkingLevel: ThinkingLevel,
+) {
+  return {
+    providerId: model.providerId,
+    modelId: model.modelId,
+    thinkingLevel,
+  };
+}
+
 export function NewTaskDialog(props: {
   open: boolean;
   scope: WorkspaceScope;
@@ -387,15 +426,9 @@ export function NewTaskDialog(props: {
   onOpenChange(open: boolean): void;
   onCreated(session: Session): void;
 }) {
-  const personal = props.scope === "personal";
-  const workspace = personal
-    ? null
-    : props.workspaces.find(({ id, kind }) => id === props.scope && kind === "folder") ?? null;
-  const configured = new Set(props.providers.map(({ providerId }) => providerId));
-  const availableModels = (props.models?.models ?? []).filter(({ providerId }) => configured.has(providerId));
-  const defaultModel = availableModels.find(({ providerId, modelId }) => (
-    providerId === props.settings?.providerId && modelId === props.settings.modelId
-  )) ?? availableModels[0];
+  const workspace = props.workspaces.find(({ id, kind }) => id === props.scope && kind === "folder") ?? null;
+  const availableModels = configuredModels(props.providers, props.models);
+  const defaultModel = resolveDefaultModel(props.providers, props.models, props.settings);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
@@ -420,19 +453,6 @@ export function NewTaskDialog(props: {
       const cleanGoal = goal.trim();
       if (cleanGoal === "") throw new Error(props.t("validationRequired"));
       if (selectedModel === undefined) throw new Error(props.t("configureModel"));
-      if (personal) {
-        return window.piWork.chat.send({
-          workspaceId: null,
-          taskId: null,
-          content: cleanGoal,
-          providerId: selectedModel.providerId,
-          modelId: selectedModel.modelId,
-          thinkingLevel,
-          permissionMode: "ask",
-          planMode: false,
-          attachments: [],
-        });
-      }
       if (workspace === null) throw new Error(props.t("chooseFolder"));
       return window.piWork.task.create({
         workspaceId: workspace.id,
@@ -461,34 +481,30 @@ export function NewTaskDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="new-task-dialog">
         <DialogHeader>
-          <DialogTitle>{personal ? props.t("newSession") : props.t("newTask")}</DialogTitle>
-          <DialogDescription>{personal ? props.t("privateSandboxDetail") : props.t("noTasksDetail")}</DialogDescription>
+          <DialogTitle>{props.t("newTask")}</DialogTitle>
+          <DialogDescription>{props.t("noTasksDetail")}</DialogDescription>
         </DialogHeader>
         <FieldGroup>
-          {!personal ? (
-            <Field>
-              <FieldLabel>{props.t("taskTitle")}</FieldLabel>
-              <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={props.t("taskTitle")} />
-            </Field>
-          ) : null}
           <Field>
-            <FieldLabel>{personal ? props.t("newSession") : props.t("taskDescription")}</FieldLabel>
+            <FieldLabel>{props.t("taskTitle")}</FieldLabel>
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={props.t("taskTitle")} />
+          </Field>
+          <Field>
+            <FieldLabel>{props.t("taskDescription")}</FieldLabel>
             <Textarea autoFocus value={goal} onChange={(event) => setGoal(event.target.value)} rows={5} placeholder={props.t("goal")} />
           </Field>
-          {!personal ? (
-            <Field>
-              <FieldLabel>{props.t("confirmation")}</FieldLabel>
-              <Select value={permissionMode} onValueChange={(value) => setPermissionMode(value as PermissionMode)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectGroup>
-                  <SelectItem value="ask">{props.t("askEveryTime")}</SelectItem>
-                  <SelectItem value="explore">{props.t("exploreOnly")}</SelectItem>
-                  <SelectItem value="auto">{props.t("automatic")}</SelectItem>
-                </SelectGroup></SelectContent>
-              </Select>
-              {permissionMode === "auto" ? <Alert className="risk-alert"><AlertDescription>{props.t("automaticRisk")}</AlertDescription></Alert> : null}
-            </Field>
-          ) : null}
+          <Field>
+            <FieldLabel>{props.t("confirmation")}</FieldLabel>
+            <Select value={permissionMode} onValueChange={(value) => setPermissionMode(value as PermissionMode)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value="ask">{props.t("askEveryTime")}</SelectItem>
+                <SelectItem value="explore">{props.t("exploreOnly")}</SelectItem>
+                <SelectItem value="auto">{props.t("automatic")}</SelectItem>
+              </SelectGroup></SelectContent>
+            </Select>
+            {permissionMode === "auto" ? <Alert className="risk-alert"><AlertDescription>{props.t("automaticRisk")}</AlertDescription></Alert> : null}
+          </Field>
         </FieldGroup>
         <Button variant="ghost" className="advanced-toggle" onClick={() => setAdvanced((value) => !value)}>
           <Icon name="sliders" />{props.t("advanced")}<Icon name="chevron-down" size={14} className={advanced ? "rotated" : ""} />
@@ -513,16 +529,14 @@ export function NewTaskDialog(props: {
                 <SelectContent><SelectGroup>{(selectedModel?.thinkingLevels ?? ["off"]).map((level) => <SelectItem key={level} value={level}>{thinkingLevelLabel(level, props.t)}</SelectItem>)}</SelectGroup></SelectContent>
               </Select>
             </Field>
-            {!personal ? (
-              <label className="switch-row"><span><strong>{props.t("planFirst")}</strong><small>{props.t("generatePlanNext")}</small></span><Switch checked={planMode} onCheckedChange={setPlanMode} /></label>
-            ) : null}
+            <label className="switch-row"><span><strong>{props.t("planFirst")}</strong><small>{props.t("generatePlanNext")}</small></span><Switch checked={planMode} onCheckedChange={setPlanMode} /></label>
           </FieldGroup>
         ) : null}
         {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
         <DialogFooter>
           <Button variant="ghost" onClick={() => props.onOpenChange(false)}>{props.t("cancel")}</Button>
           <Button disabled={create.isPending || goal.trim() === ""} onClick={() => create.mutate()}>
-            {create.isPending ? props.t("sending") : personal ? props.t("startSession") : props.t("createTask")}
+            {create.isPending ? props.t("sending") : props.t("createTask")}
           </Button>
         </DialogFooter>
       </DialogContent>

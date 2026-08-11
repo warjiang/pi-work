@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertAuthorizedFilePath, PiAdapter } from "./index.js";
+import { assertAuthorizedFilePath, consumeSessionEvent, PiAdapter } from "./index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -15,6 +15,84 @@ afterEach(async () => {
 });
 
 describe("PiAdapter", () => {
+  it("keeps thinking blocks separate from streamed text and aggregates by content index", () => {
+    const text: string[] = [];
+    const thinking = new Map<number, string>();
+    const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const onEvent = (kind: string, payload: Record<string, unknown>) => events.push({ kind, payload });
+
+    consumeSessionEvent(
+      { type: "message_update", assistantMessageEvent: { type: "thinking_start", contentIndex: 1 } },
+      text,
+      thinking,
+      onEvent,
+    );
+    consumeSessionEvent(
+      { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "Plan " } },
+      text,
+      thinking,
+      onEvent,
+    );
+    consumeSessionEvent(
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Answer" } },
+      text,
+      thinking,
+      onEvent,
+    );
+    consumeSessionEvent(
+      { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "complete." } },
+      text,
+      thinking,
+      onEvent,
+    );
+    consumeSessionEvent(
+      { type: "message_update", assistantMessageEvent: { type: "thinking_end", contentIndex: 1 } },
+      text,
+      thinking,
+      onEvent,
+    );
+
+    expect(text).toEqual(["Answer"]);
+    expect(events).toEqual([
+      { kind: "thinking", payload: { phase: "start", contentIndex: 1 } },
+      { kind: "thinking", payload: { phase: "delta", contentIndex: 1, delta: "Plan " } },
+      { kind: "text_delta", payload: { delta: "Answer", contentIndex: 0 } },
+      { kind: "thinking", payload: { phase: "delta", contentIndex: 1, delta: "complete." } },
+      { kind: "thinking", payload: { phase: "end", contentIndex: 1, content: "Plan complete." } },
+    ]);
+    expect(thinking.size).toBe(0);
+  });
+
+  it("maps native tool and runtime lifecycle events without duplicating tool starts", () => {
+    const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const onEvent = (kind: string, payload: Record<string, unknown>) => events.push({ kind, payload });
+    const thinking = new Map<number, string>();
+
+    for (const event of [
+      { type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" } },
+      { type: "tool_execution_update", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" }, partialResult: "working" },
+      { type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: "done", isError: false },
+      { type: "queue_update", steering: ["a"], followUp: [] },
+      { type: "compaction_start", reason: "context" },
+      { type: "compaction_end", reason: "context", aborted: false, willRetry: false },
+      { type: "auto_retry_start", attempt: 1, maxAttempts: 2, errorMessage: "temporary" },
+      { type: "auto_retry_end", success: true, attempt: 1 },
+    ]) {
+      consumeSessionEvent(event, [], thinking, onEvent);
+    }
+
+    expect(events).toEqual([
+      { kind: "tool_call", payload: { toolCallId: "call-1", toolName: "bash", arguments: { command: "pwd" } } },
+      { kind: "tool_update", payload: { toolCallId: "call-1", toolName: "bash", arguments: { command: "pwd" }, output: "working" } },
+      { kind: "tool_result", payload: { toolCallId: "call-1", toolName: "bash", result: "done", isError: false } },
+      { kind: "runtime", payload: { state: "queued", steering: 1, followUp: 0 } },
+      { kind: "runtime", payload: { state: "compacting", reason: "context" } },
+      { kind: "runtime", payload: { state: "compacted", reason: "context", aborted: false, willRetry: false, errorMessage: undefined } },
+      { kind: "runtime", payload: { state: "retrying", attempt: 1, maxAttempts: 2, errorMessage: "temporary" } },
+      { kind: "runtime", payload: { state: "retry_complete", success: true, attempt: 1, errorMessage: undefined } },
+    ]);
+  });
+
   it("creates a structured read-only planning fallback", () => {
     const plan = new PiAdapter().createPlanningFallback({
       id: randomUUID(),

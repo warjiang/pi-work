@@ -57,6 +57,7 @@ declare global {
       };
       session: {
         list(input?: unknown): Promise<Session[]>;
+        create(input: unknown): Promise<Session>;
         get(sessionId: string): Promise<Session | null>;
         update(input: unknown): Promise<Session>;
         remove(sessionId: string): Promise<void>;

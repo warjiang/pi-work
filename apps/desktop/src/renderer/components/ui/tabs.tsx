@@ -12,7 +12,7 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "inline-flex h-8 items-center justify-center rounded-md px-2.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground data-[state=active]:bg-accent data-[state=active]:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35",
+        "inline-flex h-8 items-center justify-center rounded-md px-2.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground data-[state=active]:bg-accent data-[state=active]:text-accent-foreground",
         className,
       )}
       {...props}
