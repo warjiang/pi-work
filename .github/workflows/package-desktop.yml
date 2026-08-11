@@ -32,7 +32,8 @@ jobs:
       - run: pnpm --filter @pi-work/desktop exec electron-builder ${{ matrix.target }} --publish never
       - if: runner.os == 'macOS'
         run: pnpm --filter @pi-work/desktop verify:pi-runtime
-      - uses: actions/upload-artifact@v4
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: pi-work-${{ runner.os }}
           path: apps/desktop/release/
