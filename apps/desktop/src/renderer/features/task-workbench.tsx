@@ -391,11 +391,13 @@ export function TaskWorkbench(props: {
   const [providerId, setProviderId] = useState(props.session.providerId ?? props.settings?.providerId ?? "");
   const [modelId, setModelId] = useState(props.session.modelId ?? props.settings?.modelId ?? "");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.session.thinkingLevel);
+  const [followStream, setFollowStream] = useState(true);
   const messageScroller = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const streamQueue = useRef("");
   const streamTimer = useRef<number | null>(null);
   const streamWaiters = useRef<Array<() => void>>([]);
+  const scrollFrame = useRef<number | null>(null);
 
   const messages = useQuery({
     queryKey: ["messages", sessionId],
@@ -446,12 +448,17 @@ export function TaskWorkbench(props: {
   }), [props.t, queryClient, sessionId]);
   useEffect(() => () => {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
+    if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
     streamWaiters.current.splice(0).forEach((resolve) => resolve());
   }, []);
   useEffect(() => {
-    const scroller = messageScroller.current;
-    if (scroller !== null) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-  }, [approvals.length, liveProcess.notice, liveProcess.thoughts.length, liveProcess.tools.length, messages.data?.length, pendingPrompt, streamed]);
+    setFollowStream(true);
+    scheduleScrollToLatest("auto");
+  }, [sessionId]);
+  useEffect(() => {
+    if (!followStream) return;
+    scheduleScrollToLatest("auto");
+  }, [approvals.length, followStream, liveProcess, messages.data?.length, pendingPrompt, streamed]);
   useEffect(() => {
     if (personal) return;
     if (props.session.status === "awaiting_plan_approval") props.onInspectorOpen("plan");
@@ -620,7 +627,12 @@ export function TaskWorkbench(props: {
           </div>
         </header>
         {error ? <Alert className="task-inline-error"><AlertDescription>{error}</AlertDescription><Button variant="ghost" size="icon" aria-label={props.t("close")} onClick={() => setError(null)}><Icon name="close" /></Button></Alert> : null}
-        <div className="message-scroller" ref={messageScroller}>
+        <div className="message-scroller" ref={messageScroller} onScroll={(event) => {
+          const next = isNearBottom(event.currentTarget);
+          setFollowStream((current) => {
+            return current === next ? current : next;
+          });
+        }}>
           {messages.isError ? (
             <TaskSectionError t={props.t} onRetry={() => void messages.refetch()} />
           ) : (messages.data?.length ?? 0) === 0 && pendingPrompt === null ? (
@@ -648,7 +660,14 @@ export function TaskWorkbench(props: {
           {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
           {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
         </div>
-        <form className="composer" onSubmit={submit} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+        <div className="composer-dock">
+          {!followStream ? (
+            <Button variant="secondary" className="scroll-to-latest" size="icon" type="button" aria-label={props.t("scrollToLatest")} onClick={() => {
+              setFollowStream(true);
+              scheduleScrollToLatest("smooth");
+            }}><Icon name="arrow-down" /></Button>
+          ) : null}
+          <form className="composer" onSubmit={submit} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
           event.preventDefault();
           void window.piWork.attachment.fromFiles(Array.from(event.dataTransfer.files)).then((selected) => setAttachments((current) => mergeAttachments(current, selected))).catch((cause: Error) => setError(cause.message));
           }}>
@@ -707,7 +726,8 @@ export function TaskWorkbench(props: {
               <AlertDescription>{props.t("automaticRisk")}</AlertDescription>
             </Alert>
           ) : null}
-        </form>
+          </form>
+        </div>
       </div>
       {!personal ? <TaskInspector
         session={props.session}
@@ -829,6 +849,15 @@ export function TaskWorkbench(props: {
     streamTimer.current = window.setTimeout(flush, 0);
   }
 
+  function scheduleScrollToLatest(behavior: ScrollBehavior) {
+    if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = window.requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const scroller = messageScroller.current;
+      if (scroller !== null) scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+    });
+  }
+
   function waitForStream(): Promise<void> {
     if (streamQueue.current === "" && streamTimer.current === null) return Promise.resolve();
     return new Promise((resolve) => streamWaiters.current.push(resolve));
@@ -857,18 +886,34 @@ export function TaskWorkbench(props: {
 }
 
 function MessageList({ messages, activities, t }: { messages: ChatMessage[]; activities: Activity[]; t: T }) {
+  let turn = 0;
   return (
     <div className="messages">
-      {messages.map((message) => (
-        <article className={`message ${message.role}`} key={message.id}>
-          <span>{message.role === "user" ? t("you") : message.role === "assistant" ? t("pi") : t("system")}</span>
-          {message.role === "assistant"
-            ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><MarkdownMessage content={message.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></>
-            : <div>{message.content}</div>}
-        </article>
-      ))}
+      {messages.map((message) => {
+        const startsTurn = message.role === "user";
+        if (startsTurn) turn += 1;
+        return (
+          <div className="message-turn" key={message.id}>
+            {startsTurn && turn > 1 ? <div className="turn-indicator" aria-label={turnLabel(t, turn)}><span>{turnLabel(t, turn)}</span></div> : null}
+            <article className={`message ${message.role}`}>
+              <span>{message.role === "user" ? t("you") : message.role === "assistant" ? t("pi") : t("system")}</span>
+              {message.role === "assistant"
+                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><MarkdownMessage content={message.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></>
+                : <div>{message.content}</div>}
+            </article>
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+export function isNearBottom(element: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">, threshold = 40): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
+}
+
+function turnLabel(t: T, turn: number): string {
+  return t("turn") === "第" ? `第 ${turn} 轮` : `${t("turn")} ${turn}`;
 }
 
 function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T }) {
@@ -880,12 +925,19 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
   return (
     <div className="live-process">
       {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
-        <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
+        <details className={`thinking-block ${thought.complete ? "" : "is-running"}`} key={thought.contentIndex} open={!thought.complete}>
           <summary>{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</summary>
           <div className="thinking-content">{thought.content}</div>
         </details>
       ))}
-      {process.tools.map((tool) => <div className="tool-status" key={tool.toolCallId}>{tool.complete ? `${tool.failed ? t("toolFailed") : t("toolCompleted")}: ${tool.toolName}` : `${t("toolRunning")}: ${tool.toolName}`}{tool.detail ? ` — ${tool.detail}` : ""}</div>)}
+      {process.tools.map((tool) => (
+        <div className={`tool-status ${tool.complete ? "" : "is-running"}`} key={tool.toolCallId}>
+          <span className="tool-status-copy">
+            {tool.complete ? `${tool.failed ? t("toolFailed") : t("toolCompleted")}: ${tool.toolName}` : `${t("toolRunning")}: ${tool.toolName}`}
+            {tool.detail ? `: ${tool.detail}` : ""}
+          </span>
+        </div>
+      ))}
       {process.notice ? <div className="process-notice">{process.notice}</div> : null}
     </div>
   );
