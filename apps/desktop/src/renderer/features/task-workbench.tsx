@@ -312,6 +312,22 @@ export function TaskListPage(props: {
   );
 }
 
+export function SessionEmptyState(props: { personal: boolean; t: T; onNewTask(): void }) {
+  return (
+    <section className="session-empty-state">
+      <div className="session-empty-state-content">
+        <div className="empty-symbol"><Icon name="inbox" /></div>
+        <h1>{props.t("selectSessionTitle")}</h1>
+        <p>{props.t("selectSessionDetail")}</p>
+        <Button onClick={props.onNewTask}>
+          <Icon name="plus" size={14} />
+          {props.personal ? props.t("newSession") : props.t("newTask")}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 export function TaskWorkbench(props: {
   session: Session;
   workspace: Workspace | null;
@@ -559,7 +575,7 @@ export function TaskWorkbench(props: {
           ) : null}
           <div className="task-header-actions">
             {!personal ? <Button variant="ghost" size="icon" aria-label={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => updateSession.mutate({ flagged: !props.session.flagged })}><Icon name="flag" /></Button> : null}
-            {!personal ? <Button variant="ghost" size="icon" aria-label={props.inspectorOpen ? props.t("closeInspector") : props.t("openInspector")} onClick={props.onInspectorToggle}><Icon name="panel-right" /></Button> : null}
+            {!personal ? <Button variant="ghost" size="icon" aria-label={props.inspectorOpen ? props.t("closeInspector") : props.t("openInspector")} aria-controls="task-inspector" aria-expanded={props.inspectorOpen} onClick={props.onInspectorToggle}><Icon name="panel-right" /></Button> : null}
             <DropdownMenu>
               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={props.t("advanced")}><Icon name="more" /></Button></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -864,7 +880,7 @@ function TaskInspector(props: {
   const [saving, setSaving] = useState(false);
   const unpublished = props.artifacts.filter(({ publishedPath }) => publishedPath === null);
   return (
-    <aside className="task-inspector">
+    <aside className="task-inspector" id="task-inspector">
       <header className="inspector-header">
         <Tabs value={props.tab} onValueChange={(value) => props.onTab(value as InspectorTab)}>
           <TabsList className="inspector-tabs">

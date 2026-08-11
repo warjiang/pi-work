@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils.js";
 import { Button, type ButtonProps } from "./button.js";
 
 const attachmentVariants = cva(
-  "group/attachment relative flex max-w-full min-w-0 shrink-0 items-center rounded-lg border border-border bg-card text-card-foreground transition-colors focus-within:ring-2 focus-within:ring-ring/35",
+  "group/attachment relative flex max-w-full min-w-0 shrink-0 items-center rounded-lg border border-border bg-card text-card-foreground transition-colors",
   {
     variants: {
       size: {

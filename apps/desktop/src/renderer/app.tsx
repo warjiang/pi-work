@@ -13,7 +13,7 @@ import {
 } from "./features/app-shell.js";
 import { BrowserPage } from "./features/browser-page.js";
 import { SettingsPage } from "./features/settings-page.js";
-import { TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
+import { SessionEmptyState, TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
 import {
   AutomationsPage,
   BoardPage,
@@ -327,15 +327,20 @@ export function App() {
             }}
           />
         ) : null}
-        {(ui.view === "inbox" && selectedSession === null) || ui.view === "attention" || ui.view === "completed" ? (
+        {ui.view === "inbox" && selectedSession === null ? (
+          <SessionEmptyState
+            personal={ui.workspaceScope === "personal"}
+            t={t}
+            onNewTask={() => ui.setNewTaskOpen(true)}
+          />
+        ) : null}
+        {ui.view === "attention" || ui.view === "completed" ? (
           <TaskListPage
             title={t(ui.view === "attention"
               ? "attention"
               : ui.view === "completed"
                 ? "completed"
-                : ui.workspaceScope === "personal"
-                  ? "personalSessions"
-                  : "folderTasks")}
+                : "inbox")}
             sessions={pageSessions}
             workspaces={workspaces.data ?? []}
             t={t}

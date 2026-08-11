@@ -74,7 +74,6 @@ export function TopBar(props: {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="workspace-switcher">
-            <PiMark size="compact" />
             <span>{scopeLabel}</span>
             <Icon name="chevron-down" size={14} />
           </Button>
@@ -142,6 +141,7 @@ export function Sidebar(props: {
                 variant="ghost"
                 className={`recent-task ${props.view === "inbox" && props.selectedTaskId === session.id ? "selected" : ""}`}
                 key={session.id}
+                aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
                 onClick={() => props.onOpenTask(session.id)}
               >
                 <span className={`task-state-dot state-${session.status}`} />
@@ -183,7 +183,7 @@ function SidebarSection(props: { title: string; count?: number; className?: stri
 
 function SidebarNavButton(props: { active: boolean; icon: IconName; label: string; badge?: number; onClick(): void }) {
   return (
-    <Button variant="ghost" className={`sidebar-nav-button ${props.active ? "selected" : ""}`} onClick={props.onClick}>
+    <Button variant="ghost" className={`sidebar-nav-button ${props.active ? "selected" : ""}`} aria-current={props.active ? "page" : undefined} onClick={props.onClick}>
       <Icon name={props.icon} />
       <strong>{props.label}</strong>
       {props.badge ? <span className="nav-count">{props.badge}</span> : null}
