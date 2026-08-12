@@ -68,41 +68,45 @@ export function TopBar(props: {
   const scopeLabel = personal ? props.t("personal") : (folder?.name ?? props.t("personal"));
   return (
     <header className="topbar">
-      <Button variant="ghost" size="icon" className="topbar-menu" aria-label={props.t("toggleSidebar")} onClick={props.onToggleSidebar}>
-        <Icon name="panel" />
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="workspace-switcher">
-            <span>{scopeLabel}</span>
-            <Icon name="chevron-down" size={14} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="workspace-menu">
-          <DropdownMenuGroup>
-            <DropdownMenuItem onSelect={() => props.onWorkspaceScope("personal")}><Icon name="lock" />{props.t("personal")}</DropdownMenuItem>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <div className="menu-label">{props.t("authorizedFolders")}</div>
-          <DropdownMenuGroup>
-            {props.workspaces.filter(({ kind }) => kind === "folder").map((workspace) => (
-              <DropdownMenuItem key={workspace.id} onSelect={() => props.onWorkspaceScope(workspace.id)}>
-                <Icon name="workspace" />
-                <span className="menu-item-copy">{workspace.name}</span>
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuItem onSelect={props.onAddWorkspace}><Icon name="folder-plus" />{props.t("addWorkFolder")}</DropdownMenuItem>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={props.onManageWorkspaces}><Icon name="settings" />{props.t("manageWorkspaces")}</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <div className="topbar-leading">
+        <Button variant="ghost" size="icon" className="topbar-menu" aria-label={props.t("toggleSidebar")} onClick={props.onToggleSidebar}>
+          <Icon name="panel" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="workspace-switcher">
+              <span>{scopeLabel}</span>
+              <Icon name="chevron-down" size={14} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="workspace-menu">
+            <DropdownMenuGroup>
+              <DropdownMenuItem onSelect={() => props.onWorkspaceScope("personal")}><Icon name="lock" />{props.t("personal")}</DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <div className="menu-label">{props.t("authorizedFolders")}</div>
+            <DropdownMenuGroup>
+              {props.workspaces.filter(({ kind }) => kind === "folder").map((workspace) => (
+                <DropdownMenuItem key={workspace.id} onSelect={() => props.onWorkspaceScope(workspace.id)}>
+                  <Icon name="workspace" />
+                  <span className="menu-item-copy">{workspace.name}</span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem onSelect={props.onAddWorkspace}><Icon name="folder-plus" />{props.t("addWorkFolder")}</DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={props.onManageWorkspaces}><Icon name="settings" />{props.t("manageWorkspaces")}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
       <Button variant="outline" className="search-trigger" onClick={props.onOpenSearch}>
         <Icon name="search" />
         <span>{props.t("globalSearch")}</span>
         <kbd>⌘K</kbd>
       </Button>
-      <Button className="topbar-new-task" onClick={props.onNewTask}><Icon name="plus" size={14} />{personal ? props.t("newSession") : props.t("newTask")}</Button>
+      <div className="topbar-trailing">
+        <Button className="topbar-new-task" onClick={props.onNewTask}><Icon name="plus" size={14} />{personal ? props.t("newSession") : props.t("newTask")}</Button>
+      </div>
     </header>
   );
 }

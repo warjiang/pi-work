@@ -81,6 +81,12 @@ type T = (key: MessageKey) => string;
 type LiveThought = { contentIndex: number; content: string; complete: boolean };
 type LiveTool = { toolCallId: string; toolName: string; detail: string; complete: boolean; failed: boolean };
 type LiveProcess = { thoughts: LiveThought[]; tools: LiveTool[]; notice: string | null };
+type ConversationTurn = {
+  messageId: string;
+  targetId: string;
+  question: string;
+  answer: string | null;
+};
 
 function formatBytes(size: number): string {
   if (size < 1_024) return `${size} B`;
@@ -462,6 +468,8 @@ export function TaskWorkbench(props: {
   const streamTimer = useRef<number | null>(null);
   const streamWaiters = useRef<Array<() => void>>([]);
   const scrollFrame = useRef<number | null>(null);
+  const navigatingTurnId = useRef<string | null>(null);
+  const navigationTimer = useRef<number | null>(null);
 
   const messages = useQuery({
     queryKey: ["messages", sessionId],
@@ -496,6 +504,8 @@ export function TaskWorkbench(props: {
   const activeModelKey = activeModel === undefined ? "" : `${activeModel.providerId}/${activeModel.modelId}`;
   const thinkingLevels: ThinkingLevel[] = activeModel?.thinkingLevels.length ? activeModel.thinkingLevels : ["off"];
   const approvals = props.approvals;
+  const turns = useMemo(() => conversationTurns(messages.data ?? []), [messages.data]);
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem(draftKey, input);
@@ -522,12 +532,20 @@ export function TaskWorkbench(props: {
   useEffect(() => () => {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
+    if (navigationTimer.current !== null) window.clearTimeout(navigationTimer.current);
     streamWaiters.current.splice(0).forEach((resolve) => resolve());
   }, []);
   useEffect(() => {
+    cancelTurnNavigation();
     setFollowStream(true);
     scheduleScrollToLatest("auto");
   }, [sessionId]);
+  useEffect(() => {
+    setActiveTurnId((current) => {
+      if (current !== null && turns.some(({ messageId }) => messageId === current)) return current;
+      return turns.at(-1)?.messageId ?? null;
+    });
+  }, [turns]);
   useEffect(() => {
     if (!followStream) return;
     scheduleScrollToLatest("auto");
@@ -702,47 +720,64 @@ export function TaskWorkbench(props: {
           </div>
         </header>
         {error ? <Alert className="task-inline-error"><AlertDescription>{error}</AlertDescription><Button variant="ghost" size="icon" aria-label={props.t("close")} onClick={() => setError(null)}><Icon name="close" /></Button></Alert> : null}
-        <div className="message-scroller" ref={messageScroller} onScroll={(event) => {
-          const next = isNearBottom(event.currentTarget);
-          setFollowStream((current) => {
-            return current === next ? current : next;
-          });
-        }}>
-          {messages.isError ? (
-            <TaskSectionError t={props.t} onRetry={() => void messages.refetch()} />
-          ) : (messages.data?.length ?? 0) === 0 && pendingPrompt === null ? (
-            <div className="conversation-empty">
-              <span>{personal ? props.t("privateSandbox") : props.t("taskDescription")}</span>
-              <h2>{props.session.goal}</h2>
-              <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
-            </div>
-          ) : (
-            <MessageList
-              messages={messages.data ?? []}
-              activities={activities.data ?? []}
-              attachments={savedAttachments.data ?? []}
-              t={props.t}
-              onPreview={(attachment) => {
-                if (typeof window.piWork.attachment.preview !== "function") {
-                  setError("Image preview is ready after restarting Pi Work.");
-                  return;
-                }
-                setPreviewAttachment(attachment);
-                setPreviewUrl(null);
-                void window.piWork.attachment.preview(attachment.id)
-                  .then(setPreviewUrl)
-                  .catch((cause: Error) => setError(cause.message));
-              }}
-            />
-          )}
-          {pendingPrompt !== null ? (
-            <article className="message user pending"><div>{pendingPrompt}</div></article>
-          ) : null}
-          {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
-            <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
-          ) : null}
-          {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
-          {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
+        <div className="conversation-stage">
+          <TurnNavigator
+            turns={turns}
+            activeTurnId={activeTurnId}
+            t={props.t}
+            onNavigate={navigateToTurn}
+          />
+          <div
+            className="message-scroller"
+            ref={messageScroller}
+            onPointerDown={cancelTurnNavigation}
+            onTouchStart={cancelTurnNavigation}
+            onWheel={cancelTurnNavigation}
+            onScroll={(event) => {
+              const scroller = event.currentTarget;
+              const next = isNearBottom(scroller);
+              setFollowStream((current) => current === next ? current : next);
+              const visibleTurnId = activeTurnForScroller(scroller, turns);
+              const nextTurnId = activeTurnDuringScroll(visibleTurnId, navigatingTurnId.current);
+              setActiveTurnId((current) => current === nextTurnId ? current : nextTurnId);
+            }}
+          >
+            {messages.isError ? (
+              <TaskSectionError t={props.t} onRetry={() => void messages.refetch()} />
+            ) : (messages.data?.length ?? 0) === 0 && pendingPrompt === null ? (
+              <div className="conversation-empty">
+                <span>{personal ? props.t("privateSandbox") : props.t("taskDescription")}</span>
+                <h2>{props.session.goal}</h2>
+                <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
+              </div>
+            ) : (
+              <MessageList
+                messages={messages.data ?? []}
+                activities={activities.data ?? []}
+                attachments={savedAttachments.data ?? []}
+                t={props.t}
+                onPreview={(attachment) => {
+                  if (typeof window.piWork.attachment.preview !== "function") {
+                    setError("Image preview is ready after restarting Pi Work.");
+                    return;
+                  }
+                  setPreviewAttachment(attachment);
+                  setPreviewUrl(null);
+                  void window.piWork.attachment.preview(attachment.id)
+                    .then(setPreviewUrl)
+                    .catch((cause: Error) => setError(cause.message));
+                }}
+              />
+            )}
+            {pendingPrompt !== null ? (
+              <article className="message user pending"><div>{pendingPrompt}</div></article>
+            ) : null}
+            {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
+              <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
+            ) : null}
+            {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
+            {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
+          </div>
         </div>
         <div className="composer-dock">
           {!followStream ? (
@@ -893,25 +928,17 @@ export function TaskWorkbench(props: {
         }}
       /> : null}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent className="w-[min(460px,calc(100%-40px))] gap-0 overflow-hidden p-0">
-          <div className="flex items-start gap-3 px-6 pb-4 pt-6">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-surface)] bg-[var(--danger-bg)] text-destructive">
-              <Icon name="trash" />
+        <AlertDialogContent className="delete-session-dialog">
+          <AlertDialogHeader className="delete-session-header">
+            <div className="delete-session-heading">
+              <span className="delete-session-icon" aria-hidden="true"><Icon name="trash" size={14} /></span>
+              <AlertDialogTitle>{props.t("deleteSession")}</AlertDialogTitle>
             </div>
-            <AlertDialogHeader className="gap-1">
-              <AlertDialogTitle className="text-lg tracking-[-0.01em]">{props.t("deleteSession")}</AlertDialogTitle>
-              <AlertDialogDescription className="max-w-[360px] text-[13px] leading-5">
-                {props.t("deleteSessionDetail")}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-          </div>
-          <div className="mx-6 mb-5 rounded-[var(--radius-surface)] bg-[var(--panel-muted)] px-4 py-3">
-            <p className="text-[11px] font-medium text-muted-foreground">{props.t("session")}</p>
-            <p className="mt-0.5 truncate text-sm font-semibold text-foreground" title={props.session.title}>{props.session.title}</p>
-          </div>
-          <AlertDialogFooter className="border-t border-border/80 bg-[var(--panel-muted)] px-6 py-4">
-            <AlertDialogCancel className="h-9 px-3.5">{props.t("cancel")}</AlertDialogCancel>
-            <AlertDialogAction className="h-9 px-3.5" onClick={props.onDelete}>{props.t("delete")}</AlertDialogAction>
+            <AlertDialogDescription>{props.t("deleteSessionDetail")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="delete-session-actions">
+            <AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={props.onDelete}>{props.t("delete")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -989,6 +1016,28 @@ export function TaskWorkbench(props: {
     });
   }
 
+  function cancelTurnNavigation() {
+    navigatingTurnId.current = null;
+    if (navigationTimer.current !== null) {
+      window.clearTimeout(navigationTimer.current);
+      navigationTimer.current = null;
+    }
+  }
+
+  function navigateToTurn(turn: ConversationTurn) {
+    const target = document.getElementById(turn.targetId);
+    if (target === null) return;
+    cancelTurnNavigation();
+    setFollowStream(false);
+    setActiveTurnId(turn.messageId);
+    navigatingTurnId.current = turn.messageId;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    navigationTimer.current = window.setTimeout(() => {
+      if (navigatingTurnId.current === turn.messageId) navigatingTurnId.current = null;
+      navigationTimer.current = null;
+    }, 1_000);
+  }
+
   function waitForStream(): Promise<void> {
     if (streamQueue.current === "" && streamTimer.current === null) return Promise.resolve();
     return new Promise((resolve) => streamWaiters.current.push(resolve));
@@ -1023,7 +1072,6 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
   t: T;
   onPreview(attachment: StoredAttachment): void;
 }) {
-  let turn = 0;
   return (
     <div className="messages">
       {messages.map((message) => {
@@ -1031,10 +1079,8 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
         const assistantContent = message.role === "assistant"
           ? visibleAssistantContent(message.content)
           : message.content;
-        if (startsTurn) turn += 1;
         return (
-          <div className="message-turn" key={message.id}>
-            {startsTurn && turn > 1 ? <div className="turn-indicator" aria-label={turnLabel(t, turn)}><span>{turnLabel(t, turn)}</span></div> : null}
+          <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
                 ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} />{assistantContent !== "" ? <MarkdownMessage content={assistantContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
@@ -1045,6 +1091,132 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
       })}
     </div>
   );
+}
+
+function TurnNavigator(props: {
+  turns: ConversationTurn[];
+  activeTurnId: string | null;
+  t: T;
+  onNavigate(turn: ConversationTurn): void;
+}) {
+  const [hoveredTurnId, setHoveredTurnId] = useState<string | null>(null);
+  if (props.turns.length === 0) return null;
+  const hoveredIndex = props.turns.findIndex(({ messageId }) => messageId === hoveredTurnId);
+  return (
+    <nav
+      className="turn-navigator"
+      aria-label={props.t("turnNavigation")}
+      data-hovering={hoveredIndex >= 0 ? "true" : undefined}
+      onPointerLeave={() => setHoveredTurnId(null)}
+    >
+      {props.turns.map((turn, index) => {
+        const label = turnLabel(props.t, index + 1);
+        const previewId = `turn-preview-${turn.messageId}`;
+        const hoverDistance = turnHoverDistance(index, hoveredIndex);
+        return (
+          <div className="turn-navigator-item" key={turn.messageId}>
+            <button
+              type="button"
+              className="turn-navigator-button"
+              aria-label={label}
+              aria-current={props.activeTurnId === turn.messageId ? "step" : undefined}
+              aria-describedby={previewId}
+              data-hover-distance={hoverDistance ?? undefined}
+              onPointerEnter={() => setHoveredTurnId(turn.messageId)}
+              onFocus={(event) => {
+                if (event.currentTarget.matches(":focus-visible")) setHoveredTurnId(turn.messageId);
+              }}
+              onBlur={() => setHoveredTurnId((current) => current === turn.messageId ? null : current)}
+              onClick={() => props.onNavigate(turn)}
+            >
+              <span className="turn-navigator-mark" aria-hidden="true" />
+            </button>
+            <div className="turn-navigator-preview" id={previewId} role="tooltip">
+              <span className="turn-navigator-question">{turn.question}</span>
+              {turn.answer !== null
+                ? (
+                    <div className="turn-navigator-answer">
+                      <MarkdownMessage
+                        compact
+                        content={turn.answer}
+                        copyLabel={props.t("copyCode")}
+                        copiedLabel={props.t("copied")}
+                      />
+                    </div>
+                  )
+                : null}
+            </div>
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
+function turnTargetId(messageId: string): string {
+  return `turn-${messageId}`;
+}
+
+export function conversationTurns(messages: ChatMessage[]): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+  for (const message of messages) {
+    if (message.role === "user") {
+      turns.push({
+        messageId: message.id,
+        targetId: turnTargetId(message.id),
+        question: message.content.trim(),
+        answer: null,
+      });
+      continue;
+    }
+    if (message.role !== "assistant" || turns.length === 0) continue;
+    const answer = visibleAssistantContent(message.content).trim();
+    if (answer !== "") turns[turns.length - 1]!.answer = answer;
+  }
+  return turns;
+}
+
+export function activeTurnIndex(turnTops: number[], threshold: number): number {
+  if (turnTops.length === 0) return -1;
+  let active = 0;
+  for (const [index, top] of turnTops.entries()) {
+    if (top > threshold) break;
+    active = index;
+  }
+  return active;
+}
+
+export function turnHoverDistance(index: number, hoveredIndex: number): number | null {
+  if (hoveredIndex < 0) return null;
+  const distance = Math.abs(index - hoveredIndex);
+  return distance <= 3 ? distance : null;
+}
+
+export function activeTurnDuringScroll(
+  visibleTurnId: string | null,
+  navigationTargetId: string | null,
+): string | null {
+  return navigationTargetId ?? visibleTurnId;
+}
+
+function activeTurnForScroller(
+  scroller: HTMLDivElement,
+  turns: ConversationTurn[],
+): string | null {
+  if (turns.length === 0) return null;
+  const scrollerBounds = scroller.getBoundingClientRect();
+  const threshold = scrollerBounds.top + Math.min(140, scrollerBounds.height * 0.24);
+  const visibleTurns = turns.flatMap((turn) => {
+    const target = document.getElementById(turn.targetId);
+    return target === null
+      ? []
+      : [{ messageId: turn.messageId, top: target.getBoundingClientRect().top }];
+  });
+  const activeIndex = activeTurnIndex(
+    visibleTurns.map(({ top }) => top),
+    threshold,
+  );
+  return visibleTurns[activeIndex]?.messageId ?? turns[0]?.messageId ?? null;
 }
 
 function MessageAttachments(props: {
