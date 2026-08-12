@@ -1666,8 +1666,8 @@ kbd {
 .live-process {
   display: grid;
   width: min(100%, 680px);
-  gap: 2px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 
 .thinking-block {
@@ -1747,6 +1747,8 @@ kbd {
 }
 
 .thinking-preview {
+  width: 400px;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   border-radius: 5px;
@@ -1785,6 +1787,14 @@ kbd {
   overflow: hidden;
   border-radius: var(--radius-control);
   background: transparent;
+}
+
+.message.assistant > .thinking-block + .tool-status {
+  margin-top: 8px;
+}
+
+.message.assistant > .tool-status + .markdown-message {
+  margin-top: 14px;
 }
 
 .tool-status > summary {
@@ -1838,7 +1848,10 @@ kbd {
 }
 
 .tool-status-preview {
-  min-width: min(100%, 130px);
+  width: 400px;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 400px;
   overflow: hidden;
   border-radius: 5px;
   background: color-mix(in srgb, var(--panel) 60%, var(--panel-strong));
@@ -2541,12 +2554,9 @@ kbd {
 
 .composer-permission-option.is-auto .composer-permission-option-icon,
 .composer-permission-option.is-auto .composer-permission-option-copy strong,
+.composer-permission-option.is-auto .composer-permission-option-copy small,
 .composer-permission-option.is-auto[data-state="checked"] > span:first-child {
   color: var(--danger);
-}
-
-.composer-permission-option.is-auto[data-state="checked"] {
-  background: color-mix(in srgb, var(--danger) 10%, var(--panel-muted));
 }
 
 .composer-execution-menu {
@@ -4881,6 +4891,7 @@ textarea,
 
 .task-context-header-personal .task-context-title {
   min-width: 0;
+  align-self: center;
 }
 
 .task-context-header-personal .task-context-title > span {
@@ -5431,12 +5442,54 @@ h3,
   height: 36px;
   border-radius: var(--radius-control);
   background: var(--panel-muted);
+  font-weight: 400;
+}
+
+.search-trigger > span {
+  font-weight: 400;
+}
+
+.search-trigger > .search-shortcut {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: auto;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  overflow: visible;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1;
+  text-align: initial;
+}
+
+.search-shortcut kbd {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-color: color-mix(in srgb, var(--border-strong) 76%, var(--border));
+  border-bottom-color: var(--border-strong);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 0 4px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.search-shortcut > span {
+  color: var(--faint);
+  font-weight: 400;
 }
 
 .topbar-new-task {
-  height: 40px;
+  height: 32px;
   border-radius: var(--radius-control);
-  padding-inline: 16px;
+  padding-inline: 12px;
+  font-size: 13px;
 }
 
 .sidebar,
@@ -5566,13 +5619,33 @@ h3,
 }
 
 .task-context-header {
-  min-height: 80px;
-  padding: 17px 32px;
+  min-height: 64px;
+  padding: 11px 28px;
 }
 
-.task-context-title h1 {
-  font-size: 22px;
-  line-height: 1.2;
+.task-context-header-personal {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 16px;
+  padding-block: 7px;
+}
+
+.task-context-header-personal .task-context-title {
+  flex: 1;
+}
+
+.task-context-header-personal .task-header-actions {
+  grid-column: auto;
+  grid-row: auto;
+  align-self: auto;
+  margin-left: auto;
+}
+
+.task-context-title h1,
+.task-context-header-personal .task-context-title h1 {
+  font-size: 16px;
+  line-height: 1.3;
 }
 
 .task-context-title > span,
@@ -5593,7 +5666,7 @@ h3,
 .message.user > .message-user-content {
   border-color: transparent;
   border-radius: var(--radius-surface) var(--radius-surface) 4px;
-  background: var(--panel-muted);
+  background: transparent;
   box-shadow: none;
 }
 
@@ -5606,16 +5679,112 @@ h3,
 
 .composer {
   border-color: var(--border);
-  border-radius: var(--radius-surface);
+  border-radius: var(--radius-overlay);
   background: var(--panel);
   box-shadow: none;
-  padding: 12px;
+  padding: 6px 10px;
+}
+
+.composer .composer-input {
+  min-height: 32px;
+  padding: 0 4px 5px;
+  font-weight: 400;
+}
+
+.composer .composer-input::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+  opacity: 1;
+}
+
+.composer-toolbar,
+.composer-toolbar-start,
+.composer-toolbar-end {
+  gap: 8px;
+}
+
+.composer-toolbar {
+  min-height: 36px;
+  padding: 0;
+  align-items: center;
+}
+
+.composer-attachment-trigger,
+.send-button {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  align-self: center;
+}
+
+.composer-attachment-trigger,
+.send-button {
+  border-radius: var(--radius-pill);
+}
+
+.composer-attachment-trigger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-attachment-trigger:hover:not(:disabled) {
+  background: var(--panel-muted);
+  color: var(--text);
+}
+
+.composer-attachment-trigger:active:not(:disabled) {
+  background: var(--active);
+}
+
+.composer-permission-trigger {
+  height: 32px;
+  min-height: 32px;
+  align-self: center;
+  padding-block: 0;
+  padding-inline: 10px;
+  background: transparent;
+}
+
+.composer-permission-trigger:hover:not(:disabled),
+.composer-permission-trigger[data-state="open"] {
+  background: var(--panel-muted);
+}
+
+.composer-permission-trigger:active:not(:disabled) {
+  background: var(--active);
+}
+
+.send-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.send-button:hover:not(:disabled) {
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.send-button:disabled {
+  border-color: var(--panel-strong);
+  background: var(--panel-strong);
+  color: var(--muted);
+  opacity: 1;
 }
 
 .composer-permission-trigger,
-.composer-model-trigger,
-.send-button {
+.composer-model-trigger {
   border-radius: var(--radius-control);
+  align-self: center;
+}
+
+.composer-model-trigger {
+  height: 32px;
+  min-height: 32px;
+  padding-block: 0;
 }
 
 .task-inspector {

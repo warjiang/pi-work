@@ -116,7 +116,11 @@ export function TopBar(props: {
       <Button variant="outline" className="search-trigger" onClick={props.onOpenSearch}>
         <Icon name="search" />
         <span>{props.t("globalSearch")}</span>
-        <kbd>⌘K</kbd>
+        <span className="search-shortcut" aria-hidden="true">
+          <kbd>⌘</kbd>
+          <span>+</span>
+          <kbd>K</kbd>
+        </span>
       </Button>
       <div className="topbar-trailing">
         <Button

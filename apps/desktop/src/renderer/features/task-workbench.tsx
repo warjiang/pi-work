@@ -737,7 +737,7 @@ export function TaskWorkbench(props: {
       <div className="execution-pane">
         <header className={`task-context-header ${personal ? "task-context-header-personal" : ""}`}>
           <div className="task-context-title">
-            <span>{personal ? props.t("privateSandbox") : (props.workspace?.name ?? props.t("workFolder"))}</span>
+            {!personal ? <span>{props.workspace?.name ?? props.t("workFolder")}</span> : null}
             <h1>{props.session.title}</h1>
           </div>
           {!personal ? (
@@ -897,7 +897,7 @@ export function TaskWorkbench(props: {
           }} placeholder={props.t("messagePlaceholder")} rows={2} />
           <div className="composer-toolbar">
             <div className="composer-toolbar-start">
-              <Button variant="ghost" size="icon" type="button" aria-label={props.t("addAttachment")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected))).catch((cause: Error) => setError(cause.message))}><Icon name="paperclip" /></Button>
+              <Button variant="ghost" size="icon" className="composer-attachment-trigger" type="button" aria-label={props.t("addAttachment")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected))).catch((cause: Error) => setError(cause.message))}><Icon name="paperclip" /></Button>
               <ComposerPermissionMenu
                 permissionMode={props.session.permissionMode}
                 planMode={props.session.planMode}
