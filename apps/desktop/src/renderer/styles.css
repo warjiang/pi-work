@@ -1516,14 +1516,194 @@ kbd {
 .tool-status,
 .process-notice {
   position: relative;
-  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
+.tool-status {
+  width: min(100%, 640px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--panel-muted) 72%, var(--panel));
+}
+
+.tool-status > summary {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 14px;
+  gap: 9px;
+  align-items: start;
+  cursor: pointer;
+  list-style: none;
+  padding: 8px 10px 9px 8px;
+}
+
+.tool-status > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-status > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.tool-status-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.tool-status-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.tool-status-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tool-status-heading code {
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-status-preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-status-preview:empty {
+  display: none;
+}
+
+.tool-status-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tool-status-state::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: "";
+}
+
+.tool-status-detail {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-status-chevron {
+  align-self: center;
+  color: var(--faint);
+  transition: transform 160ms ease;
+}
+
+.tool-status[open] .tool-status-chevron {
+  transform: rotate(180deg);
+}
+
+.tool-status-expanded {
+  border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--panel) 82%, var(--panel-muted));
+}
+
+.tool-status-section {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+}
+
+.tool-status-section + .tool-status-section {
+  border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+}
+
+.tool-status-section > span {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tool-status-section > pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-status-section.is-error > pre {
+  color: var(--danger);
+}
+
 .tool-status.is-running {
   isolation: isolate;
+}
+
+.tool-status.is-running .tool-status-icon {
+  background: var(--amber-bg);
+  color: var(--amber);
+  box-shadow: none;
+}
+
+.tool-status.is-running .tool-status-state {
+  color: var(--amber);
+}
+
+.tool-status.is-complete .tool-status-icon,
+.tool-status.is-complete .tool-status-state {
+  color: var(--green);
+}
+
+.tool-status.is-complete .tool-status-icon {
+  background: var(--green-bg);
+  box-shadow: none;
+}
+
+.tool-status.is-failed .tool-status-icon,
+.tool-status.is-failed .tool-status-state {
+  color: var(--danger);
+}
+
+.tool-status.is-failed .tool-status-icon {
+  background: var(--danger-bg);
 }
 
 .tool-status.is-running::after {
@@ -1538,7 +1718,7 @@ kbd {
   transform: translateX(-180%);
 }
 
-.tool-status.is-running > .tool-status-copy {
+.tool-status.is-running > summary > * {
   position: relative;
   z-index: 1;
 }

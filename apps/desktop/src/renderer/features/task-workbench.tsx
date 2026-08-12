@@ -79,7 +79,15 @@ import type { InspectorTab } from "../store.js";
 
 type T = (key: MessageKey) => string;
 type LiveThought = { contentIndex: number; content: string; complete: boolean };
-type LiveTool = { toolCallId: string; toolName: string; detail: string; complete: boolean; failed: boolean };
+type LiveTool = {
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  detail: string;
+  output: unknown;
+  complete: boolean;
+  failed: boolean;
+};
 type LiveProcess = { thoughts: LiveThought[]; tools: LiveTool[]; notice: string | null };
 type ConversationTurn = {
   messageId: string;
@@ -1150,7 +1158,7 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} />{assistantContent !== "" ? <MarkdownMessage content={assistantContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
+                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><HistoricalTools activities={activities.filter((activity) => activity.kind === "tool_result" && activity.messageId === message.id)} t={t} />{assistantContent !== "" ? <MarkdownMessage content={assistantContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
                 : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} /><div className="message-user-content">{message.content}</div></>}
             </article>
           </div>
@@ -1358,6 +1366,14 @@ function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T })
   return <details className="thinking-block"><summary>{t("thoughtProcess")}</summary>{activities.map((activity) => <div className="thinking-content" key={activity.id}>{activity.detail}</div>)}</details>;
 }
 
+function HistoricalTools({ activities, t }: { activities: Activity[]; t: T }) {
+  return (
+    <>
+      {activities.map((activity) => <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />)}
+    </>
+  );
+}
+
 function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
   return (
     <div className="live-process">
@@ -1367,17 +1383,59 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
           <div className="thinking-content">{thought.content}</div>
         </details>
       ))}
-      {process.tools.map((tool) => (
-        <div className={`tool-status ${tool.complete ? "" : "is-running"}`} key={tool.toolCallId}>
-          <span className="tool-status-copy">
-            {tool.complete ? `${tool.failed ? t("toolFailed") : t("toolCompleted")}: ${tool.toolName}` : `${t("toolRunning")}: ${tool.toolName}`}
-            {tool.detail ? `: ${tool.detail}` : ""}
-          </span>
-        </div>
-      ))}
+      {process.tools.map((tool) => <ToolProcessCard key={tool.toolCallId} tool={tool} t={t} />)}
       {process.notice ? <div className="process-notice">{process.notice}</div> : null}
     </div>
   );
+}
+
+function ToolProcessCard({ tool, t }: { tool: LiveTool; t: T }) {
+  const preview = toolPreview(tool.arguments);
+  return (
+    <details className={`tool-status ${tool.complete ? "is-complete" : "is-running"}${tool.failed ? " is-failed" : ""}`}>
+      <summary>
+        <span className="tool-status-icon"><Icon name={toolIcon(tool.toolName)} size={14} /></span>
+        <span className="tool-status-copy">
+          <span className="tool-status-heading">
+            <code>{tool.toolName}</code>
+            <span className="tool-status-preview" title={preview}>{preview}</span>
+            <span className="tool-status-state">
+              {tool.complete ? (tool.failed ? t("toolFailed") : t("toolCompleted")) : t("toolRunning")}
+            </span>
+          </span>
+          {tool.detail ? <span className="tool-status-detail" title={tool.detail}>{tool.detail}</span> : null}
+        </span>
+        <Icon name="chevron-down" size={14} className="tool-status-chevron" />
+      </summary>
+      <div className="tool-status-expanded">
+        <ToolProcessSection label={t("activityToolCall")} value={tool.arguments} />
+        {tool.output !== undefined ? <ToolProcessSection label={t("activityToolResult")} value={tool.output} error={tool.failed} /> : null}
+      </div>
+    </details>
+  );
+}
+
+function ToolProcessSection(props: { label: string; value: unknown; error?: boolean }) {
+  return (
+    <section className={`tool-status-section${props.error ? " is-error" : ""}`}>
+      <span>{props.label}</span>
+      <pre>{formatProcessValue(props.value)}</pre>
+    </section>
+  );
+}
+
+export function toolFromActivity(activity: Pick<Activity, "id" | "title" | "detail" | "metadata">): LiveTool {
+  const metadata = activity.metadata;
+  const output = metadata.result ?? metadata.output;
+  return {
+    toolCallId: typeof metadata.toolCallId === "string" ? metadata.toolCallId : activity.id,
+    toolName: typeof metadata.toolName === "string" ? metadata.toolName : activity.title,
+    arguments: processArguments(metadata.arguments ?? metadata.args),
+    detail: activity.detail,
+    output,
+    complete: true,
+    failed: metadata.isError === true,
+  };
 }
 
 export function reduceLiveProcess(current: LiveProcess, kind: string, payload: Record<string, unknown>, t: T): LiveProcess {
@@ -1400,7 +1458,9 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
     tools: [...current.tools.filter((tool) => tool.toolCallId !== payload.toolCallId), {
       toolCallId: payload.toolCallId,
       toolName: String(payload.toolName ?? "tool"),
+      arguments: processArguments(payload.arguments),
       detail: "",
+      output: undefined,
       complete: false,
       failed: false,
     }],
@@ -1410,17 +1470,22 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
     const tool = existing ?? {
       toolCallId: payload.toolCallId,
       toolName: String(payload.toolName ?? "tool"),
+      arguments: processArguments(payload.arguments),
       detail: "",
+      output: undefined,
       complete: false,
       failed: false,
     };
-    const detail = summarizeProcessValue(kind === "tool_result" ? payload.result : payload.output);
+    const output = kind === "tool_result" ? payload.result : payload.output;
+    const detail = summarizeProcessValue(output);
     return {
       ...current,
       tools: [...current.tools.filter((item) => item.toolCallId !== payload.toolCallId), {
         ...tool,
         toolName: String(payload.toolName ?? tool.toolName),
+        arguments: Object.keys(processArguments(payload.arguments)).length > 0 ? processArguments(payload.arguments) : tool.arguments,
         detail: detail || tool.detail,
+        output,
         complete: kind === "tool_result",
         failed: kind === "tool_result" && payload.isError === true,
       }],
@@ -1442,10 +1507,73 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
   return current;
 }
 
-function summarizeProcessValue(value: unknown): string {
-  const source = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  const compact = source.replace(/\s+/g, " ").trim();
-  return compact.length > 120 ? `${compact.slice(0, 117)}…` : compact;
+function toolIcon(toolName: string) {
+  const normalized = toolName.toLowerCase();
+  if (normalized.includes("search") || normalized.includes("web") || normalized.includes("browse")) return "search" as const;
+  if (normalized.includes("read") || normalized.includes("write") || normalized.includes("file")) return "file" as const;
+  return "terminal" as const;
+}
+
+function processArguments(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+export function toolPreview(input?: Record<string, unknown>): string {
+  if (input === undefined || input === null) return "";
+  for (const key of ["command", "path", "file_path", "query", "pattern", "url", "prompt"]) {
+    const value = summarizeToolValue(input[key]);
+    if (value) return truncateProcessValue(value, 96);
+  }
+  const firstValue = Object.values(input).map(summarizeToolValue).find(Boolean);
+  return firstValue ? truncateProcessValue(firstValue, 96) : "";
+}
+
+export function summarizeProcessValue(value: unknown): string {
+  const parsed = typeof value === "string" ? parseToolValue(value) : value;
+  const summary = summarizeToolValue(parsed);
+  return summary ? truncateProcessValue(summary, 160) : "";
+}
+
+function formatProcessValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseToolValue(value: string): unknown {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (!compact.startsWith("{") && !compact.startsWith("[")) return compact;
+  try {
+    return JSON.parse(compact);
+  } catch {
+    return compact;
+  }
+}
+
+function summarizeToolValue(value: unknown): string {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (Array.isArray(value)) {
+    return value.map(summarizeToolValue).filter(Boolean).slice(0, 2).join(" · ");
+  }
+  if (value === null || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["text", "message", "summary", "title", "query", "url", "path", "command"]) {
+    const candidate = summarizeToolValue(record[key]);
+    if (candidate) return candidate;
+  }
+  for (const key of ["content", "output", "result", "data", "details"]) {
+    const candidate = summarizeToolValue(record[key]);
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+function truncateProcessValue(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, limit - 1).trimEnd()}…` : value;
 }
 
 function TaskInspector(props: {

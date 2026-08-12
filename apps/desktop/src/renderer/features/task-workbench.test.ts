@@ -5,6 +5,9 @@ import {
   conversationTurns,
   isNearBottom,
   reduceLiveProcess,
+  summarizeProcessValue,
+  toolFromActivity,
+  toolPreview,
   turnHoverDistance,
   visibleAssistantContent,
 } from "./task-workbench.js";
@@ -120,9 +123,59 @@ describe("live Pi process reducer", () => {
     expect(completed.tools).toEqual([{
       toolCallId: "call-1",
       toolName: "read",
+      arguments: {},
       detail: "done",
+      output: "done",
       complete: true,
       failed: false,
     }]);
+  });
+
+  it("turns structured tool progress into readable copy", () => {
+    expect(summarizeProcessValue({
+      content: [{ type: "text", text: "Searching 3/3: NVIDIA stock price today" }],
+      details: { phase: "search", progress: 0.666666 },
+    })).toBe("Searching 3/3: NVIDIA stock price today");
+  });
+
+  it("does not expose unparseable structured tool payloads as JSON", () => {
+    expect(summarizeProcessValue({ phase: "search", progress: 0.666666 })).toBe("");
+  });
+
+  it("keeps tool arguments for a compact preview and expandable details", () => {
+    const started = reduceLiveProcess(empty, "tool_call", {
+      toolCallId: "call-1",
+      toolName: "web_search",
+      arguments: { query: "NVIDIA stock price today" },
+    }, t);
+
+    expect(started.tools[0]?.arguments).toEqual({ query: "NVIDIA stock price today" });
+    expect(toolPreview(started.tools[0]?.arguments ?? {})).toBe("NVIDIA stock price today");
+  });
+
+  it("accepts tool calls created before arguments were available", () => {
+    expect(toolPreview(undefined)).toBe("");
+  });
+
+  it("rebuilds persisted tool results after switching sessions", () => {
+    expect(toolFromActivity({
+      id: "activity-1",
+      title: "web_search",
+      detail: "Found NVIDIA stock data",
+      metadata: {
+        toolCallId: "call-1",
+        toolName: "web_search",
+        arguments: { query: "NVIDIA stock price today" },
+        result: { content: [{ type: "text", text: "Found NVIDIA stock data" }] },
+        isError: false,
+      },
+    })).toMatchObject({
+      toolCallId: "call-1",
+      toolName: "web_search",
+      arguments: { query: "NVIDIA stock price today" },
+      detail: "Found NVIDIA stock data",
+      complete: true,
+      failed: false,
+    });
   });
 });
