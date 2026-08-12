@@ -110,10 +110,10 @@ function parseAttachment(row: typeof attachments.$inferSelect): Attachment {
 
 type DomainName = "status" | "label" | "view" | "subtask" | "source" | "skill" | "automation" | "automationRun" | "browserTab";
 type DomainValue = StatusDefinition | Label | SavedView | Subtask | Source | Skill | Automation | AutomationRun | BrowserTab;
-type FolderDomainName = "status" | "label" | "source" | "skill" | "automation";
+type FolderDomainName = "status" | "label" | "source" | "automation";
 
 function isFolderDomain(domain: DomainName): domain is FolderDomainName {
-  return domain === "status" || domain === "label" || domain === "source" || domain === "skill" || domain === "automation";
+  return domain === "status" || domain === "label" || domain === "source" || domain === "automation";
 }
 
 export class PiWorkStore {
@@ -496,6 +496,31 @@ export class PiWorkStore {
   }
   listSkills(workspaceId: string): Skill[] {
     return this.listDomainEntities("skill", skillSchema, workspaceId);
+  }
+  listGlobalSkills(): Skill[] {
+    return this.listDomainEntities("skill", skillSchema, null);
+  }
+  migrateSkillsToGlobal(): Skill[] {
+    const rows = this.db.select().from(domainEntities).where(eq(domainEntities.domain, "skill")).orderBy(asc(domainEntities.createdAt)).all();
+    const migrated: Skill[] = [];
+    const transaction = this.sqlite.transaction(() => {
+      for (const row of rows) {
+        const skill = skillSchema.parse(JSON.parse(row.value));
+        if (skill.workspaceId === null) {
+          migrated.push(skill);
+          continue;
+        }
+        const next = { ...skill, workspaceId: null, updatedAt: timestamp() };
+        this.db.update(domainEntities).set({
+          workspaceId: null,
+          value: JSON.stringify(next),
+          updatedAt: next.updatedAt,
+        }).where(eq(domainEntities.id, skill.id)).run();
+        migrated.push(next);
+      }
+    });
+    transaction();
+    return migrated;
   }
   createAutomation(value: Omit<Automation, "id" | "createdAt" | "updatedAt">): Automation {
     return this.createDomainEntity("automation", automationSchema, value);

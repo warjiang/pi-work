@@ -283,9 +283,12 @@ export class PiAdapter {
       ),
     ];
     const customTools: ToolDefinition<any, any, any>[] = [...readTools, ...writeTools];
-    const enabledTools = permissionMode === "explore"
+    const enabledTools = [
+      ...(permissionMode === "explore"
       ? ["read", "grep", "find", "ls"]
-      : ["read", "grep", "find", "ls", "edit", "write", "bash"];
+      : ["read", "grep", "find", "ls", "edit", "write", "bash"]),
+      ...extensionToolNames(services.resourceLoader.getExtensions().extensions),
+    ];
     const sessionDirectory = join(runtime.agentDir, "sessions");
     const existing = (await SessionManager.list(runtime.cwd, sessionDirectory))
       .find(({ id }) => id === sessionId);
@@ -361,7 +364,7 @@ export class PiAdapter {
     const value = source.trim();
     assertExtensionSource(value);
     const { manager, settings } = this.packageManager(runtime);
-    await manager.installAndPersist(value);
+    await this.withElectronNodeEnvironment(() => manager.installAndPersist(value));
     await settings.flush();
     return this.listExtensions(runtime);
   }
@@ -370,7 +373,7 @@ export class PiAdapter {
     const value = source.trim();
     assertExtensionSource(value);
     const { manager, settings } = this.packageManager(runtime);
-    const removed = await manager.removeAndPersist(value);
+    const removed = await this.withElectronNodeEnvironment(() => manager.removeAndPersist(value));
     await settings.flush();
     if (!removed) {
       throw new Error(`Pi extension is not installed: ${value}`);
@@ -447,9 +450,34 @@ export class PiAdapter {
   }
 
   private settingsManager(runtime: AgentRuntime): SettingsManager {
-    return SettingsManager.create(runtime.cwd, runtime.agentDir, {
+    const settings = SettingsManager.create(runtime.cwd, runtime.agentDir, {
       projectTrusted: false,
     });
+    const nodeExecutable = process.env.PI_WORK_NODE_EXECUTABLE;
+    const npmCli = process.env.PI_WORK_NPM_CLI;
+    if (nodeExecutable !== undefined && npmCli !== undefined) {
+      settings.applyOverrides({
+        npmCommand: [nodeExecutable, npmCli],
+      });
+    }
+    return settings;
+  }
+
+  private async withElectronNodeEnvironment<T>(operation: () => Promise<T>): Promise<T> {
+    if (process.env.PI_WORK_NODE_EXECUTABLE === undefined) {
+      return operation();
+    }
+    const previous = process.env.ELECTRON_RUN_AS_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    try {
+      return await operation();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ELECTRON_RUN_AS_NODE;
+      } else {
+        process.env.ELECTRON_RUN_AS_NODE = previous;
+      }
+    }
   }
 
   private credentials(runtime: AgentRuntime): PrivateAuthCredentialStore {
@@ -591,6 +619,12 @@ export function consumeSessionEvent(
     default:
       return;
   }
+}
+
+export function extensionToolNames(
+  extensions: Iterable<{ tools: ReadonlyMap<string, unknown> }>,
+): string[] {
+  return [...new Set(Array.from(extensions, ({ tools }) => [...tools.keys()]).flat())];
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

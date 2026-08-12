@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertAuthorizedFilePath, consumeSessionEvent, PiAdapter } from "./index.js";
+import { assertAuthorizedFilePath, consumeSessionEvent, extensionToolNames, PiAdapter } from "./index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -15,6 +15,13 @@ afterEach(async () => {
 });
 
 describe("PiAdapter", () => {
+  it("keeps installed extension tools available to chat sessions", () => {
+    expect(extensionToolNames([
+      { tools: new Map([["web_search", {}], ["fetch_content", {}]]) },
+      { tools: new Map([["web_search", {}], ["source_check", {}]]) },
+    ])).toEqual(["web_search", "fetch_content", "source_check"]);
+  });
+
   it("keeps thinking blocks separate from streamed text and aggregates by content index", () => {
     const text: string[] = [];
     const thinking = new Map<number, string>();
