@@ -49,6 +49,7 @@ describe("bundled Pi Console runtime", () => {
     const environment = createIsolatedPiEnvironment({
       userData: "/Users/example/Library/Application Support/@pi-work/desktop",
       runtimeDirectory: "/Applications/Pi Work.app/Contents/Resources/pi-runtime",
+      nodeExecutable: "/Applications/Pi Work.app/Contents/MacOS/Pi Work",
       baseEnvironment: {
         PATH: "/Users/example/.local/bin:/usr/bin:/bin",
         PI_CODING_AGENT_DIR: "/Users/example/.pi/agent",
@@ -63,6 +64,9 @@ describe("bundled Pi Console runtime", () => {
     });
     expect(environment.PI_CODING_AGENT_DIR).toContain("/desktop/pi-agent");
     expect(environment.PI_PACKAGE_DIR).toContain("/pi-runtime/node_modules/@earendil-works/pi-coding-agent");
+    expect(environment.PI_WORK_NODE_EXECUTABLE).toBe("/Applications/Pi Work.app/Contents/MacOS/Pi Work");
+    expect(environment.PI_WORK_NPM_CLI).toContain("/pi-runtime/node_modules/npm/bin/npm-cli.js");
+    expect(environment.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(environment.HOME).toContain("/desktop/pi-home");
     expect(environment.XDG_CONFIG_HOME).toContain("/desktop/pi-home/.config");
     expect(environment.PATH).toContain("/pi-runtime/node_modules/.bin");

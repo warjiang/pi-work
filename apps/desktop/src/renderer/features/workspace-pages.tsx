@@ -8,6 +8,7 @@ import type {
   Skill,
   Source,
   StatusDefinition,
+  SystemSkill,
   Workspace,
 } from "@pi-work/protocol";
 import {
@@ -44,6 +45,7 @@ import {
   SelectValue,
 } from "../components/ui/select.js";
 import { Textarea } from "../components/ui/textarea.js";
+import { Switch } from "../components/ui/switch.js";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.js";
 import { sessionsByStage, sessionsForBoard } from "../board.js";
 import type { MessageKey } from "../i18n.js";
@@ -271,44 +273,147 @@ function SourceEditor({ source, t, onSaved, onDeleted }: { source: Source; t: T;
   </ResourceEditor>;
 }
 
-export function SkillsPage({ workspaceId, t }: { workspaceId: string; t: T }) {
+export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const query = useQuery({ queryKey: ["skills", workspaceId], queryFn: () => window.piWork.skill.list(workspaceId) });
+  const [error, setError] = useState<string | null>(null);
+  const query = useQuery({ queryKey: ["skills"], queryFn: () => window.piWork.skill.list() });
+  const systemSkills = useQuery({
+    queryKey: ["system-skills"],
+    queryFn: () => window.piWork.skill.scanSystem(),
+    enabled: false,
+  });
   const filtered = (query.data ?? []).filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   const selected = query.data?.find(({ id }) => id === selectedId) ?? null;
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["skills", workspaceId] });
-  const create = useMutation({ mutationFn: () => window.piWork.skill.create({ workspaceId, value: { name: t("newSkill"), description: "", instructions: "# Instructions\n", enabled: false } }), onSuccess: async (skill) => { await refresh(); setSelectedId(skill.id); } });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["skills"] });
+  const create = useMutation({
+    mutationFn: () => window.piWork.skill.create({
+      name: nextSkillName(query.data ?? []),
+      description: t("newSkillDescription"),
+      instructions: "# Instructions\n",
+      enabled: true,
+    }),
+    onSuccess: async (skill) => { setError(null); await refresh(); setSelectedId(skill.id); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const importSkill = useMutation({
+    mutationFn: async () => {
+      const path = await window.piWork.skill.chooseImport();
+      if (path === null) return null;
+      return window.piWork.skill.import(path);
+    },
+    onSuccess: async (skill) => {
+      if (skill === null) return;
+      setError(null);
+      await refresh();
+      setSelectedId(skill.id);
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const importSystemSkill = useMutation({
+    mutationFn: (path: string) => window.piWork.skill.import(path),
+    onSuccess: async (skill) => {
+      setError(null);
+      await refresh();
+      await systemSkills.refetch();
+      setSelectedId(skill.id);
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const actions = <div className="page-header-actions"><Button variant="outline" disabled={systemSkills.isFetching} onClick={() => void systemSkills.refetch()}><Icon name="search" />{t("scanSystemSkills")}</Button><Button variant="outline" disabled={importSkill.isPending} onClick={() => importSkill.mutate()}><Icon name="folder-plus" />{t("importSkill")}</Button><Button disabled={create.isPending} onClick={() => create.mutate()}><Icon name="plus" />{t("add")}</Button></div>;
   return (
     <LibraryLayout
       title={t("skills")}
+      className={embedded ? "settings-skills-page" : undefined}
+      showHeader={!embedded}
+      toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : undefined}
       t={t}
-      detail={t("skillDraftDetail")}
+      detail={t("skillRuntimeDetail")}
       icon="skills"
       items={filtered}
       selectedId={selectedId}
       loading={query.isLoading}
       empty={t("noItems")}
       addLabel={t("add")}
+      action={actions}
       filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchSkills")} /></label>}
-      onAdd={() => create.mutate()}
       onSelect={setSelectedId}
-      renderItem={(skill) => <><strong>{skill.name}</strong><small>{skill.description || t("skillDraft")}</small><Badge>{t("skillDraft")}</Badge></>}
-      detailPane={selected ? <SkillEditor skill={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : null}
+      renderItem={(skill) => <><strong>{skill.name}</strong><small>{skill.description}</small><Badge>{skill.enabled ? t("enabled") : t("disabled")}</Badge></>}
+      detailPane={selected ? <SkillEditor skill={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
     />
   );
+}
+
+function SystemSkillsPanel(props: {
+  skills: SystemSkill[] | undefined;
+  loading: boolean;
+  error: string | null;
+  importingPath: string | null;
+  t: T;
+  onImport(path: string): void;
+}) {
+  if (props.error) return <Alert className="form-error"><AlertDescription>{props.error}</AlertDescription></Alert>;
+  if (props.skills === undefined) return <div className="resource-detail-empty"><Icon name="search" /><p>{props.t("scanSystemSkillsDetail")}</p></div>;
+  if (props.loading) return <div className="page-loading"><span /><span /><span /></div>;
+  if (props.skills.length === 0) return <div className="resource-detail-empty"><Icon name="skills" /><p>{props.t("noSystemSkills")}</p></div>;
+  return <div className="resource-editor-body system-skills-panel">
+    <Alert className="runtime-boundary"><AlertDescription>{props.t("scanSystemSkillsDetail")}</AlertDescription></Alert>
+    <div className="system-skills-list">
+      {props.skills.map((skill) => <div className="system-skill-row" key={skill.path}>
+        <span className="resource-symbol"><Icon name="skills" /></span>
+        <span className="system-skill-copy"><strong>{skill.name}</strong><small>{skill.description}</small><small>{systemSkillSourceLabel(skill.source, props.t)} · {skill.path}</small></span>
+        <Button size="sm" disabled={skill.imported || props.importingPath === skill.path} onClick={() => props.onImport(skill.path)}>{skill.imported ? props.t("imported") : props.t("importSkill")}</Button>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function systemSkillSourceLabel(source: SystemSkill["source"], t: T): string {
+  const labels: Record<SystemSkill["source"], MessageKey> = {
+    pi: "systemSkillSourcePi",
+    agents: "systemSkillSourceAgents",
+    codex: "systemSkillSourceCodex",
+    claude: "systemSkillSourceClaude",
+  };
+  return t(labels[source]);
 }
 
 function SkillEditor({ skill, t, onSaved, onDeleted }: { skill: Skill; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
   const [name, setName] = useState(skill.name);
   const [description, setDescription] = useState(skill.description);
   const [instructions, setInstructions] = useState(skill.instructions);
-  useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); }, [skill]);
-  const save = useMutation({ mutationFn: () => window.piWork.skill.update({ id: skill.id, value: { name, description, instructions, enabled: false } }), onSuccess: onSaved });
-  return <ResourceEditor title={skill.name} status={t("skillDraftDetail")} t={t} onDelete={() => void window.piWork.skill.remove(skill.id).then(onDeleted)}>
-    <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field><Field><FieldLabel>{t("instructions")}</FieldLabel><Textarea className="markdown-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={18} /></Field><Button disabled={save.isPending || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
+  const [enabled, setEnabled] = useState(skill.enabled);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); setEnabled(skill.enabled); setError(null); }, [skill]);
+  const save = useMutation({
+    mutationFn: () => window.piWork.skill.update({ id: skill.id, value: { name, description, instructions, enabled } }),
+    onSuccess: onSaved,
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const toggle = useMutation({
+    mutationFn: (next: boolean) => window.piWork.skill.setEnabled(skill.id, next),
+    onSuccess: async () => { setError(null); await onSaved(); },
+    onError: (cause: Error) => { setEnabled(skill.enabled); setError(cause.message); },
+  });
+  const remove = useMutation({
+    mutationFn: () => window.piWork.skill.remove(skill.id),
+    onSuccess: onDeleted,
+    onError: (cause: Error) => setError(cause.message),
+  });
+  return <ResourceEditor title={skill.name} status={t("skillRuntimeDetail")} t={t} onDelete={() => remove.mutate()}>
+    <Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert>
+    <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field><Field><FieldLabel>{t("instructions")}</FieldLabel><Textarea className="markdown-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={18} /></Field><Field><FieldLabel>{t("enabled")}</FieldLabel><Switch checked={enabled} disabled={toggle.isPending} onCheckedChange={(next) => { setEnabled(next); toggle.mutate(next); }} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button disabled={save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
   </ResourceEditor>;
+}
+
+function nextSkillName(skills: Skill[]): string {
+  const names = new Set(skills.map(({ name }) => name));
+  if (!names.has("untitled-skill")) return "untitled-skill";
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `untitled-skill-${suffix}`;
+    if (!names.has(candidate)) return candidate;
+  }
 }
 
 export function AutomationsPage({ workspaceId, t }: { workspaceId: string; t: T }) {
@@ -562,20 +667,25 @@ function LibraryLayout<T extends { id: string }>(props: {
   detail: string;
   t: (key: MessageKey) => string;
   icon: IconName;
+  className?: string | undefined;
+  showHeader?: boolean;
+  toolbar?: ReactNode | undefined;
   items: T[];
   selectedId: string | null;
   loading: boolean;
   empty: string;
   addLabel: string;
+  action?: ReactNode;
   filter?: ReactNode;
-  onAdd(): void;
+  onAdd?(): void;
   onSelect(id: string): void;
   renderItem(item: T): ReactNode;
   detailPane: ReactNode;
 }) {
   return (
-    <section className="page library-page">
-      <PageHeader title={props.title} detail={props.detail} action={<Button onClick={props.onAdd}><Icon name="plus" />{props.addLabel}</Button>} />
+    <section className={`page library-page${props.className ? ` ${props.className}` : ""}`}>
+      {props.showHeader !== false ? <PageHeader title={props.title} detail={props.detail} action={props.action ?? <Button onClick={props.onAdd}><Icon name="plus" />{props.addLabel}</Button>} /> : null}
+      {props.toolbar}
       <div className={`library-layout ${props.detailPane ? "has-detail" : ""}`}>
         <div className="library-list-pane">
           {props.filter}

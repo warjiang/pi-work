@@ -3,6 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import type { Session, Workspace } from "@pi-work/protocol";
 import { Alert, AlertDescription } from "./components/ui/alert.js";
 import { Button } from "./components/ui/button.js";
+import { Disclosure, DisclosureContent, DisclosureTrigger } from "./components/ui/disclosure.js";
 import { Icon } from "./components/ui/icon.js";
 import {
   CommandPalette,
@@ -21,7 +22,6 @@ import {
   AutomationsPage,
   BoardPage,
   FolderSettingsPage,
-  SkillsPage,
   SourcesPage,
 } from "./features/workspace-pages.js";
 import { translator } from "./i18n.js";
@@ -248,7 +248,7 @@ export function App() {
   function showView(view: AppView) {
     ui.selectTask(null);
     if (
-      (view === "board" || view === "sources" || view === "skills" || view === "automations" || view === "folder-settings")
+      (view === "board" || view === "sources" || view === "automations" || view === "folder-settings")
       && scopeWorkspace?.kind !== "folder"
     ) {
       return;
@@ -453,7 +453,6 @@ export function App() {
             />
         ) : null}
         {ui.view === "sources" && resourceWorkspaceId !== null ? <SourcesPage workspaceId={resourceWorkspaceId} t={t} /> : null}
-        {ui.view === "skills" && resourceWorkspaceId !== null ? <SkillsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
         {ui.view === "automations" && resourceWorkspaceId !== null ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
           {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
         </main>
@@ -554,11 +553,24 @@ function AppFailure(props: {
   onRetry(): void;
 }) {
   return (
-    <div className="app-state">
-      <Icon name="alert" />
-      <h1>{props.t("failedToLoad")}</h1>
-      <p>{props.detail}</p>
-      <Button onClick={props.onRetry}>{props.t("tryAgain")}</Button>
+    <div className="app-state app-state-failure">
+      <section className="app-failure" aria-labelledby="app-failure-title" aria-describedby="app-failure-summary">
+        <div className="app-failure-message" role="alert" aria-atomic="true">
+          <Icon className="app-failure-icon" name="alert" />
+          <h1 id="app-failure-title">{props.t("appLoadFailedTitle")}</h1>
+          <p className="app-failure-summary" id="app-failure-summary">{props.t("appLoadFailedDetail")}</p>
+        </div>
+        <Button onClick={props.onRetry}>{props.t("tryAgain")}</Button>
+        <Disclosure className="app-failure-details">
+          <DisclosureTrigger className="app-failure-details-trigger">
+            {props.t("technicalDetails")}
+            <Icon name="chevron-down" size={14} />
+          </DisclosureTrigger>
+          <DisclosureContent className="app-failure-details-content">
+            <pre>{props.detail}</pre>
+          </DisclosureContent>
+        </Disclosure>
+      </section>
     </div>
   );
 }

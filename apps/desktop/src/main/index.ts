@@ -16,7 +16,6 @@ import type {
   SetProviderCredentialInput,
   StatusDefinition,
   Label,
-  Skill,
   Source,
   ThinkingLevel,
   ToolApproval,
@@ -42,9 +41,11 @@ import {
   createDomainEntityInputSchema,
   generatePlanInputSchema,
   completeTaskInputSchema,
+  createSkillInputSchema,
   externalUrlInputSchema,
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
+  importSkillInputSchema,
   planSchema,
   promoteSessionInputSchema,
   publishArtifactInputSchema,
@@ -60,16 +61,18 @@ import {
   removeDomainEntityInputSchema,
   resolveToolApprovalInputSchema,
   sessionSearchInputSchema,
-  skillSchema,
+  setSkillEnabledInputSchema,
   sourceSchema,
   workspaceSchema,
   updateDomainEntityInputSchema,
+  updateSkillInputSchema,
   updateSessionInputSchema,
   updateTaskBriefInputSchema,
 } from "@pi-work/protocol";
 import { stageArtifact, publishArtifact } from "@pi-work/artifacts";
 import { PiWorkStore } from "@pi-work/storage";
 import { CredentialBroker } from "./credential-broker.js";
+import { SkillManager } from "./skill-manager.js";
 import {
   createIsolatedPiEnvironment,
   PiConsole,
@@ -84,6 +87,7 @@ let agentProcess: UtilityProcess | null = null;
 let credentialBroker: CredentialBroker;
 let piConsole: PiConsole | null = null;
 let browserView: WebContentsView | null = null;
+let skillManager: SkillManager | null = null;
 const pendingAgentRequests = new Map<string, {
   resolve: (response: AgentResponse) => void;
   reject: (error: Error) => void;
@@ -345,6 +349,11 @@ function getStore(): PiWorkStore {
   return store;
 }
 
+function getSkillManager(): SkillManager {
+  skillManager ??= new SkillManager(getStore(), app.getPath("userData"));
+  return skillManager;
+}
+
 function getCredentialBroker(): CredentialBroker {
   if (credentialBroker === undefined) {
     credentialBroker = new CredentialBroker(
@@ -475,6 +484,7 @@ function getAgentProcess(): UtilityProcess {
     env: createIsolatedPiEnvironment({
       userData: app.getPath("userData"),
       runtimeDirectory: bundledPiRuntimeDirectory(),
+      nodeExecutable: app.getPath("exe"),
     }),
   });
   agentProcess.on("message", (message) => {
@@ -845,6 +855,37 @@ function registerIpc(): void {
       : await dialog.showOpenDialog(mainWindow, pickerOptions);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
+  ipcMain.handle("skill:list", () => getSkillManager().list());
+  ipcMain.handle("skill:scan-system", () => getSkillManager().scanSystem());
+  ipcMain.handle("skill:create", (_event, input: unknown) => (
+    getSkillManager().create(createSkillInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:update", (_event, input: unknown) => {
+    const parsed = updateDomainEntityInputSchema.parse(input);
+    return getSkillManager().update(parsed.id, updateSkillInputSchema.parse(parsed.value));
+  });
+  ipcMain.handle("skill:remove", async (_event, input: unknown) => {
+    const { id } = removeDomainEntityInputSchema.parse(input);
+    await getSkillManager().remove(id);
+  });
+  ipcMain.handle("skill:set-enabled", (_event, input: unknown) => {
+    const parsed = setSkillEnabledInputSchema.parse(input);
+    return getSkillManager().setEnabled(parsed.id, parsed.enabled);
+  });
+  ipcMain.handle("skill:import", (_event, input: unknown) => {
+    const parsed = importSkillInputSchema.parse(input);
+    return getSkillManager().import(parsed.path);
+  });
+  ipcMain.handle("skill:choose-import", async () => {
+    const pickerOptions: OpenDialogOptions = {
+      title: "Choose a Skill folder",
+      properties: ["openDirectory"],
+    };
+    const result = mainWindow === null
+      ? await dialog.showOpenDialog(pickerOptions)
+      : await dialog.showOpenDialog(mainWindow, pickerOptions);
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
   ipcMain.handle("pi-console:start", () => getPiConsole().start());
   ipcMain.handle("pi-console:write", (_event, input: unknown) => {
     if (typeof input !== "string") throw new Error("Invalid Pi Console input.");
@@ -1062,7 +1103,7 @@ function registerIpc(): void {
     const images = await agentImagesForAttachments(inspectedAttachments);
     const command = parsed.content.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     if (command !== null && command[1] !== "goal" && command[1] !== "plan") {
-      throw new Error(`Unknown command: /${command[1]}`);
+      throw new Error(`/${command[1]} is not available in chat. Extension slash commands run in Pi Console; in chat, describe what you need.`);
     }
 
     let task = parsed.taskId === null ? null : getStore().getTask(parsed.taskId);
@@ -1135,6 +1176,10 @@ function registerIpc(): void {
       }
       task = saveConversationModel(task.id, parsed);
       getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
+      const goal = command[2]?.trim();
+      if (goal) {
+        task = getStore().updateTaskGoal(task.id, goal);
+      }
       const plan = await generatePlan(
         task,
         await providerCredential(parsed.providerId),
@@ -1287,10 +1332,9 @@ function registerIpc(): void {
     } },
     label: { schema: labelSchema, list: (workspaceId: string) => getStore().listLabels(workspaceId) },
     source: { schema: sourceSchema, list: (workspaceId: string) => getStore().listSources(workspaceId) },
-    skill: { schema: skillSchema, list: (workspaceId: string) => getStore().listSkills(workspaceId) },
     automation: { schema: automationSchema, list: (workspaceId: string) => getStore().listAutomations(workspaceId) },
   } as const;
-  type DomainEntity = StatusDefinition | Label | Source | Skill | Automation;
+  type DomainEntity = StatusDefinition | Label | Source | Automation;
   for (const [name, definition] of Object.entries(domain)) {
     const domainName = name as keyof typeof domain;
     const schema = definition.schema as { parse(value: unknown): DomainEntity };

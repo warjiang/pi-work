@@ -18,6 +18,7 @@ export type IsolatedPiEnvironmentOptions = {
   userData: string;
   runtimeDirectory: string;
   baseEnvironment?: NodeJS.ProcessEnv;
+  nodeExecutable?: string;
   platform?: NodeJS.Platform;
 };
 
@@ -69,6 +70,7 @@ export function createIsolatedPiEnvironment({
   userData,
   runtimeDirectory,
   baseEnvironment = process.env,
+  nodeExecutable = process.execPath,
   platform = process.platform,
 }: IsolatedPiEnvironmentOptions): NodeJS.ProcessEnv {
   const agentDir = join(userData, "pi-agent");
@@ -112,6 +114,8 @@ export function createIsolatedPiEnvironment({
     XDG_CACHE_HOME: join(homeDir, ".cache"),
     PI_CODING_AGENT_DIR: agentDir,
     PI_PACKAGE_DIR: join(runtimeDirectory, "node_modules", "@earendil-works", "pi-coding-agent"),
+    PI_WORK_NODE_EXECUTABLE: nodeExecutable,
+    PI_WORK_NPM_CLI: join(runtimeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
     PATH: [join(runtimeDirectory, "node_modules", ".bin"), ...systemTools].join(pathSeparator),
   };
 }
@@ -162,6 +166,7 @@ export class PiConsole {
       const environment = createIsolatedPiEnvironment({
         userData: this.options.userData,
         runtimeDirectory: this.options.runtimeDirectory,
+        nodeExecutable: this.options.nodePath,
       });
       environment.ELECTRON_RUN_AS_NODE = "1";
       const launch = resolvePiConsoleLaunch(this.options.nodePath, this.options.cliPath);

@@ -113,7 +113,7 @@ declare global {
       status: DomainApi<StatusDefinition>;
       label: DomainApi<import("@pi-work/protocol").Label>;
       source: DomainApi<Source>;
-      skill: DomainApi<Skill>;
+      skill: SkillApi;
       automation: DomainApi<Automation>;
       browser: BrowserApi;
     };
@@ -125,6 +125,17 @@ type DomainApi<T> = {
   create(input: unknown): Promise<T>;
   update(input: unknown): Promise<T>;
   remove(id: string): Promise<void>;
+};
+
+type SkillApi = {
+  list(): Promise<Skill[]>;
+  scanSystem(): Promise<import("@pi-work/protocol").SystemSkill[]>;
+  create(input: unknown): Promise<Skill>;
+  update(input: unknown): Promise<Skill>;
+  remove(id: string): Promise<void>;
+  setEnabled(id: string, enabled: boolean): Promise<Skill>;
+  import(path: string): Promise<Skill>;
+  chooseImport(): Promise<string | null>;
 };
 
 type BrowserApi = {

@@ -102,7 +102,16 @@ const piWork = {
   status: domainApi("status"),
   label: domainApi("label"),
   source: domainApi("source"),
-  skill: domainApi("skill"),
+  skill: {
+    list: () => ipcRenderer.invoke("skill:list"),
+    scanSystem: () => ipcRenderer.invoke("skill:scan-system"),
+    create: (input: unknown) => ipcRenderer.invoke("skill:create", input),
+    update: (input: unknown) => ipcRenderer.invoke("skill:update", input),
+    remove: (id: string) => ipcRenderer.invoke("skill:remove", { id }),
+    setEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke("skill:set-enabled", { id, enabled }),
+    import: (path: string) => ipcRenderer.invoke("skill:import", { path }),
+    chooseImport: () => ipcRenderer.invoke("skill:choose-import"),
+  },
   automation: domainApi("automation"),
   browser: {
     open: (url: string) => ipcRenderer.invoke("browser:open", { url }),

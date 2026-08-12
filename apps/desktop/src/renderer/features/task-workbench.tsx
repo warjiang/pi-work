@@ -1363,7 +1363,7 @@ function turnLabel(t: T, turn: number): string {
 
 function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T }) {
   if (activities.length === 0) return null;
-  return <details className="thinking-block"><summary>{t("thoughtProcess")}</summary>{activities.map((activity) => <div className="thinking-content" key={activity.id}>{activity.detail}</div>)}</details>;
+  return <details className="thinking-block"><summary>{t("thoughtProcess")}</summary>{activities.map((activity) => <div className="thinking-content" key={activity.id}><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>)}</details>;
 }
 
 function HistoricalTools({ activities, t }: { activities: Activity[]; t: T }) {
@@ -1380,7 +1380,7 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
       {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
         <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
           <summary>{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</summary>
-          <div className="thinking-content">{thought.content}</div>
+          <div className="thinking-content"><MarkdownMessage compact content={thought.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
         </details>
       ))}
       {process.tools.map((tool) => <ToolProcessCard key={tool.toolCallId} tool={tool} t={t} />)}

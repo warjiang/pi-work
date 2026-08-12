@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { translator } from "../i18n.js";
 import { BrowserPage } from "./browser-page.js";
-import { SettingsPage } from "./settings-page.js";
+import { settingsNavigationGroups, SettingsPage } from "./settings-page.js";
 
 const settings: AppSettings = {
   onboardingSkipped: true,
@@ -39,6 +39,23 @@ const models: ModelCatalog = {
 };
 
 describe("SettingsPage", () => {
+  it("uses a distinct semantic icon for every settings navigation item", () => {
+    const icons = Object.fromEntries(settingsNavigationGroups.flatMap((group) => group.sections.map((section) => [section.id, section.icon])));
+
+    expect(icons).toMatchObject({
+      general: "sliders",
+      modelsCredentials: "models",
+      workFolders: "workspace",
+      permissions: "permissions",
+      skills: "skills",
+      extensions: "extensions",
+      browser: "browser",
+      about: "info",
+    });
+    expect(icons).not.toHaveProperty("appearance");
+    expect(icons).not.toHaveProperty("shortcuts");
+  });
+
   it("renders grouped navigation and full build information", () => {
     const html = renderToStaticMarkup(
       <SettingsPage
@@ -60,8 +77,10 @@ describe("SettingsPage", () => {
     );
 
     expect(html).toContain("Workspace");
+    expect(html).toContain("About");
     expect(html).toContain("Information");
     expect(html).toContain('aria-current="page"');
+    expect(html).toContain('type="button"');
     expect(html).toContain("feat/settings-shell");
     expect(html).toContain("1234567890abcdef");
     expect(html).not.toContain("Turn ");

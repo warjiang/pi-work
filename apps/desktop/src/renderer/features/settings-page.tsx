@@ -44,6 +44,7 @@ import { PiMark } from "../components/pi-mark.js";
 import type { MessageKey } from "../i18n.js";
 import type { SettingsSection } from "../store.js";
 import { BrowserPage } from "./browser-page.js";
+import { SkillsPage } from "./workspace-pages.js";
 import {
   extensionCatalog,
   isCatalogExtensionInstalled,
@@ -53,6 +54,40 @@ import {
 } from "./extension-catalog.js";
 
 type T = (key: MessageKey) => string;
+
+export const settingsNavigationGroups = [
+  {
+    label: "settingsGroupGeneral",
+    sections: [
+      { id: "general", icon: "sliders" },
+    ],
+  },
+  {
+    label: "settingsGroupWorkspace",
+    sections: [
+      { id: "modelsCredentials", icon: "models" },
+      { id: "workFolders", icon: "workspace" },
+      { id: "permissions", icon: "permissions" },
+    ],
+  },
+  {
+    label: "settingsGroupTools",
+    sections: [
+      { id: "skills", icon: "skills" },
+      { id: "extensions", icon: "extensions" },
+      { id: "browser", icon: "browser" },
+    ],
+  },
+  {
+    label: "settingsGroupInfo",
+    sections: [
+      { id: "about", icon: "info" },
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  label: MessageKey;
+  sections: ReadonlyArray<{ id: SettingsSection; icon: IconName }>;
+}>;
 
 export function SettingsPage(props: {
   section: SettingsSection;
@@ -75,41 +110,8 @@ export function SettingsPage(props: {
   onToggleConsole?(): void;
 }) {
   const consoleOpen = props.consoleOpen ?? false;
-  const groups: Array<{
-    label: MessageKey;
-    sections: Array<{ id: SettingsSection; icon: IconName }>;
-  }> = [
-    {
-      label: "settingsGroupGeneral",
-      sections: [
-        { id: "general", icon: "settings" },
-        { id: "appearance", icon: "eye" },
-      ],
-    },
-    {
-      label: "settingsGroupWorkspace",
-      sections: [
-        { id: "modelsCredentials", icon: "wand" },
-        { id: "workFolders", icon: "workspace" },
-        { id: "permissions", icon: "lock" },
-      ],
-    },
-    {
-      label: "settingsGroupTools",
-      sections: [
-        { id: "extensions", icon: "skills" },
-        { id: "browser", icon: "browser" },
-        { id: "shortcuts", icon: "command" },
-      ],
-    },
-    {
-      label: "settingsGroupInfo",
-      sections: [
-        { id: "about", icon: "info" },
-      ],
-    },
-  ];
-  const sectionTitle = props.t(props.section);
+  const activeSection = props.section === "appearance" || props.section === "shortcuts" ? "general" : props.section;
+  const sectionTitle = props.t(activeSection);
   return (
     <section className={`settings-shell${consoleOpen ? " pi-console-open" : ""}`} aria-label={props.t("settings")}>
       <header className="settings-titlebar">
@@ -136,19 +138,16 @@ export function SettingsPage(props: {
       </header>
       <div className="settings-layout">
         <nav className="settings-nav" aria-label={props.t("settings")}>
-          <div className="settings-nav-intro">
-            <span>{props.t("appName")}</span>
-            <strong>{props.t("settings")}</strong>
-          </div>
-          {groups.map((group) => (
+          {settingsNavigationGroups.map((group) => (
             <section className="settings-nav-group" key={group.label}>
               <header>{props.t(group.label)}</header>
               {group.sections.map(({ id, icon }) => (
                 <Button
+                  type="button"
                   variant="ghost"
-                  className={props.section === id ? "selected" : ""}
+                  className={activeSection === id ? "selected" : ""}
                   key={id}
-                  aria-current={props.section === id ? "page" : undefined}
+                  aria-current={activeSection === id ? "page" : undefined}
                   onClick={() => props.onSectionChange(id)}
                 >
                   <Icon name={icon} />
@@ -159,20 +158,22 @@ export function SettingsPage(props: {
           ))}
         </nav>
         <main className={`settings-content ${props.section === "browser" ? "browser-settings-content" : ""}`}>
-          {props.section === "browser" ? <BrowserPage t={props.t} /> : (
-            <div className="settings-content-inner">
+          {props.section === "browser" ? (
+            <div className="settings-content-inner settings-content-inner--browser">
+              <BrowserPage t={props.t} />
+            </div>
+          ) : (
+            <div className={`settings-content-inner settings-content-inner--${activeSection}`}>
               <header className="settings-page-heading">
-                <span>{props.t("appName")}</span>
                 <h1>{sectionTitle}</h1>
               </header>
-              {props.section === "general" ? <GeneralSettings {...props} /> : null}
-              {props.section === "modelsCredentials" ? <ModelSettings {...props} /> : null}
-              {props.section === "workFolders" ? <FolderSettings {...props} /> : null}
-              {props.section === "permissions" ? <PermissionSettings {...props} /> : null}
-              {props.section === "appearance" ? <AppearanceSettings {...props} /> : null}
-              {props.section === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} onOpenConsole={(command) => props.onOpenConsole?.(command)} /> : null}
-              {props.section === "shortcuts" ? <ShortcutSettings t={props.t} /> : null}
-              {props.section === "about" ? <AboutSettings buildInfo={props.buildInfo} t={props.t} /> : null}
+              {activeSection === "general" ? <GeneralSettings {...props} /> : null}
+              {activeSection === "modelsCredentials" ? <ModelSettings {...props} /> : null}
+              {activeSection === "workFolders" ? <FolderSettings {...props} /> : null}
+              {activeSection === "permissions" ? <PermissionSettings {...props} /> : null}
+              {activeSection === "skills" ? <SkillsPage embedded t={props.t} /> : null}
+              {activeSection === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} onOpenConsole={(command) => props.onOpenConsole?.(command)} /> : null}
+              {activeSection === "about" ? <AboutSettings buildInfo={props.buildInfo} t={props.t} /> : null}
             </div>
           )}
         </main>
@@ -195,21 +196,39 @@ type BaseProps = {
   onRestartOnboarding(): Promise<unknown>;
 };
 
-function SettingsSectionBlock(props: { className?: string; title: string; detail?: string; children: ReactNode }) {
-  return <section className={`settings-section${props.className ? ` ${props.className}` : ""}`}><header><h2>{props.title}</h2>{props.detail ? <p>{props.detail}</p> : null}</header><div>{props.children}</div></section>;
+function SettingsSectionBlock(props: { className?: string; title: string; detail?: string; showTitle?: boolean; children: ReactNode }) {
+  const showHeader = props.showTitle !== false || props.detail;
+  return <section className={`settings-section${props.className ? ` ${props.className}` : ""}`}>{showHeader ? <header>{props.showTitle !== false ? <h2>{props.title}</h2> : null}{props.detail ? <p>{props.detail}</p> : null}</header> : null}<div>{props.children}</div></section>;
 }
 
-function GeneralSettings(props: BaseProps) {
-  return <>
-    <SettingsSectionBlock title={props.t("general")}>
-      <FieldGroup>
-        <Field className="horizontal-field"><FieldLabel>{props.t("language")}</FieldLabel><Select value={props.settings.language} onValueChange={(value) => void props.onUpdate({ language: value as AppSettings["language"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="zh-CN">简体中文</SelectItem><SelectItem value="en">English</SelectItem></SelectGroup></SelectContent></Select></Field>
-      </FieldGroup>
-    </SettingsSectionBlock>
-    <SettingsSectionBlock title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
-      <Button variant="outline" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
-    </SettingsSectionBlock>
-  </>;
+function SettingsSubsection(props: { title?: string; detail?: string; children: ReactNode }) {
+  return <section className="settings-subsection">{props.title || props.detail ? <header>{props.title ? <h2>{props.title}</h2> : null}{props.detail ? <p>{props.detail}</p> : null}</header> : null}{props.children}</section>;
+}
+
+function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
+  return <SettingsSectionBlock className="settings-general" title={props.t("general")} showTitle={false}>
+    <div className="settings-general-layout">
+      <section className="settings-general-preferences">
+        <div className="settings-language-row">
+          <div>
+            <strong>{props.t("language")}</strong>
+            <small>English · 简体中文</small>
+          </div>
+          <div className="settings-choice-group" role="group" aria-label={props.t("language")}>
+            <Button type="button" variant="ghost" size="sm" className={props.settings.language === "en" ? "is-selected" : ""} aria-pressed={props.settings.language === "en"} onClick={() => void props.onUpdate({ language: "en" })}>English</Button>
+            <Button type="button" variant="ghost" size="sm" className={props.settings.language === "zh-CN" ? "is-selected" : ""} aria-pressed={props.settings.language === "zh-CN"} onClick={() => void props.onUpdate({ language: "zh-CN" })}>简体中文</Button>
+          </div>
+        </div>
+        <AppearanceSettings {...props} />
+      </section>
+      <aside className="settings-general-utilities">
+        <SettingsSubsection title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
+          <Button variant="outline" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
+        </SettingsSubsection>
+        <ShortcutSettings t={props.t} />
+      </aside>
+    </div>
+  </SettingsSectionBlock>;
 }
 
 function ModelSettings(props: BaseProps) {
@@ -276,7 +295,7 @@ function ModelSettings(props: BaseProps) {
     await props.onProvidersChanged();
   }
   return <>
-    <SettingsSectionBlock title={props.t("modelsCredentials")} detail={props.t("credentialDetail")}>
+    <SettingsSectionBlock title={props.t("modelsCredentials")} detail={props.t("credentialDetail")} showTitle={false}>
       <div className="model-connection-form">
         <div className="model-connection-copy">
           <span>{props.t("addProvider")}</span>
@@ -355,12 +374,12 @@ function ModelSettings(props: BaseProps) {
           {props.providers.length === 0 ? <p className="credential-empty-state">{props.t("noCredentials")}</p> : null}
         </div>
       </section>
-    </SettingsSectionBlock>
-    <SettingsSectionBlock title={props.t("defaultModel")} detail={props.t("defaultModelDetail")}>
-      <Select value={defaultModelKey} onValueChange={(value) => {
-        const model = modelOptions.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
-        if (model) void props.onUpdate({ providerId: model.providerId, modelId: model.modelId, thinkingLevel: model.thinkingLevels.includes(props.settings.thinkingLevel) ? props.settings.thinkingLevel : (model.thinkingLevels[0] ?? "off") });
-      }}><SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger><SelectContent><SelectGroup>{modelOptions.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent></Select>
+      <SettingsSubsection title={props.t("defaultModel")} detail={props.t("defaultModelDetail")}>
+        <Select value={defaultModelKey} onValueChange={(value) => {
+          const model = modelOptions.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
+          if (model) void props.onUpdate({ providerId: model.providerId, modelId: model.modelId, thinkingLevel: model.thinkingLevels.includes(props.settings.thinkingLevel) ? props.settings.thinkingLevel : (model.thinkingLevels[0] ?? "off") });
+        }}><SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger><SelectContent><SelectGroup>{modelOptions.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent></Select>
+      </SettingsSubsection>
     </SettingsSectionBlock>
     <AlertDialog open={removeProvider !== null} onOpenChange={(open) => { if (!open) setRemoveProvider(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{props.t("removeCredential")}</AlertDialogTitle><AlertDialogDescription>{removeProvider}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </>;
@@ -368,27 +387,48 @@ function ModelSettings(props: BaseProps) {
 
 function FolderSettings(props: BaseProps) {
   const folders = props.workspaces.filter(({ kind }) => kind === "folder");
-  return <SettingsSectionBlock title={props.t("workFolders")} detail={props.t("folderAccessDetail")}>
+  return <SettingsSectionBlock title={props.t("workFolders")} detail={props.t("folderAccessDetail")} showTitle={false}>
     <div className="folder-settings-list">{folders.map((workspace) => <div key={workspace.id}><Icon name="workspace" /><span><strong>{workspace.name}</strong><code>{workspace.rootPath}</code></span><Badge>{props.t("authorized")}</Badge></div>)}{folders.length === 0 ? <p>{props.t("noItems")}</p> : null}</div>
     <Button variant="outline" onClick={() => void props.onAddWorkspace()}><Icon name="folder-plus" />{props.t("addWorkFolder")}</Button>
   </SettingsSectionBlock>;
 }
 
 function PermissionSettings(props: BaseProps) {
-  return <SettingsSectionBlock title={props.t("permissions")} detail={props.t("permissionDetail")}>
+  return <SettingsSectionBlock title={props.t("permissions")} detail={props.t("permissionDetail")} showTitle={false}>
     <Alert className="permission-default"><Icon name="lock" /><AlertDescription><strong>{props.t("askEveryTime")}</strong><span>{props.t("permissionDefaultDetail")}</span></AlertDescription></Alert>
     <Alert className="risk-alert"><AlertDescription>{props.t("automaticRisk")}</AlertDescription></Alert>
   </SettingsSectionBlock>;
 }
 
 function AppearanceSettings(props: BaseProps) {
-  return <SettingsSectionBlock title={props.t("appearance")}>
-    <FieldGroup>
-      <Field className="horizontal-field"><FieldLabel>{props.t("theme")}</FieldLabel><Select value={props.settings.theme} onValueChange={(value) => void props.onUpdate({ theme: value as AppSettings["theme"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="system">{props.t("systemTheme")}</SelectItem><SelectItem value="light">{props.t("light")}</SelectItem><SelectItem value="dark">{props.t("dark")}</SelectItem></SelectGroup></SelectContent></Select></Field>
+  return <SettingsSubsection title={props.t("appearance")}>
+    <div className="settings-theme-row">
+      <div><strong>{props.t("theme")}</strong></div>
+      <div className="settings-theme-picker" role="group" aria-label={props.t("theme")}>
+        {([
+          ["system", props.t("systemTheme"), "system"],
+          ["light", props.t("light"), "light"],
+          ["dark", props.t("dark"), "dark"],
+        ] as const).map(([value, label, preview]) => (
+          <Button
+            type="button"
+            variant="ghost"
+            className={`settings-theme-choice${props.settings.theme === value ? " is-selected" : ""}`}
+            key={value}
+            aria-pressed={props.settings.theme === value}
+            onClick={() => void props.onUpdate({ theme: value })}
+          >
+            <span className={`settings-theme-preview is-${preview}`} aria-hidden="true"><i /><i /></span>
+            <span>{label}</span>
+          </Button>
+        ))}
+      </div>
+    </div>
+    <div className="settings-toggle-list">
       <label className="switch-row setting-switch"><span><strong>{props.t("focusMode")}</strong><small>{props.t("focusModeDetail")}</small></span><Switch checked={props.settings.focusMode} onCheckedChange={(focusMode) => void props.onUpdate({ focusMode })} /></label>
       <label className="switch-row setting-switch"><span><strong>{props.t("compactMode")}</strong><small>{props.t("compactModeDetail")}</small></span><Switch checked={props.settings.compactMode} onCheckedChange={(compactMode) => void props.onUpdate({ compactMode })} /></label>
-    </FieldGroup>
-  </SettingsSectionBlock>;
+    </div>
+  </SettingsSubsection>;
 }
 
 function ExtensionSettings({
@@ -470,7 +510,7 @@ function ExtensionSettings({
     && normalizeExtensionSource(install.variables ?? "") === normalizeExtensionSource(extensionSource);
 
   return <>
-    <SettingsSectionBlock className="extension-store-section" title={t("extensions")} detail={t("extensionStoreDetail")}>
+    <SettingsSectionBlock className="extension-store-section" title={t("extensions")} detail={t("extensionStoreDetail")} showTitle={false}>
       <div className="extension-store">
         <div className="extension-store-toolbar">
           <div className="extension-store-tabs" role="tablist" aria-label={t("extensions")}>
@@ -593,19 +633,21 @@ function ExtensionSettings({
 
     <Dialog open={selectedExtension !== null} onOpenChange={(open) => !open && setSelectedExtension(null)}>
       {selectedExtension ? <DialogContent className="extension-store-drawer">
-        <DialogHeader>
-          <div className="extension-drawer-heading">
-            <ExtensionIcon extension={selectedExtension} />
-            <div><small>{t(`extensionCategory${capitalize(selectedExtension.category)}` as MessageKey)}</small><DialogTitle>{selectedExtension.name[language]}</DialogTitle></div>
-          </div>
-          <DialogDescription>{selectedExtension.description[language]}</DialogDescription>
-        </DialogHeader>
-        <dl className="extension-drawer-meta">
-          <div><dt>{t("package")}</dt><dd><code>{selectedExtension.packageName}</code></dd></div>
-          <div><dt>{t("author")}</dt><dd>{selectedExtension.author}</dd></div>
-          <div><dt>{t("installSource")}</dt><dd><code>{selectedExtension.source}</code></dd></div>
-        </dl>
-        <div className="extension-security-note"><Icon name="alert" /><p>{t("extensionSecurityNote")}</p></div>
+        <div className="extension-drawer-body">
+          <DialogHeader>
+            <div className="extension-drawer-heading">
+              <ExtensionIcon extension={selectedExtension} />
+              <div><small>{t(`extensionCategory${capitalize(selectedExtension.category)}` as MessageKey)}</small><DialogTitle>{selectedExtension.name[language]}</DialogTitle></div>
+            </div>
+            <DialogDescription>{selectedExtension.description[language]}</DialogDescription>
+          </DialogHeader>
+          <dl className="extension-drawer-meta">
+            <div><dt>{t("package")}</dt><dd><code>{selectedExtension.packageName}</code></dd></div>
+            <div><dt>{t("author")}</dt><dd>{selectedExtension.author}</dd></div>
+            <div><dt>{t("installSource")}</dt><dd><code>{selectedExtension.source}</code></dd></div>
+          </dl>
+          <div className="extension-security-note"><Icon name="alert" /><p>{t("extensionSecurityNote")}</p></div>
+        </div>
         <DialogFooter className="extension-drawer-actions">
           <Button variant="link" onClick={() => void window.piWork.system.openExternal(selectedExtension.officialUrl)}><Icon name="external" />{t("viewOnPiDirectory")}</Button>
           <Button variant="outline" onClick={() => {
@@ -632,8 +674,12 @@ function ExtensionSettings({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
-          <AlertDialogAction asChild>
-            <Button disabled={install.isPending} onClick={() => pendingInstall && install.mutate(pendingInstall.source)}>{install.isPending ? <><Spinner />{t("installingExtension")}</> : t("installExtension")}</Button>
+          <AlertDialogAction
+            variant="default"
+            disabled={install.isPending}
+            onClick={() => pendingInstall && install.mutate(pendingInstall.source)}
+          >
+            {install.isPending ? <><Spinner />{t("installingExtension")}</> : t("installExtension")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -693,7 +739,7 @@ function capitalize(value: string): string {
 }
 
 function ShortcutSettings({ t }: { t: T }) {
-  return <SettingsSectionBlock title={t("shortcuts")} detail={t("keyboardNavigation")}><div className="shortcut-list"><span>{t("openSearch")}<kbd>⌘ K</kbd></span><span>{t("newTask")}<kbd>⌘ N</kbd></span><span>{t("toggleSidebar")}<kbd>⌘ B</kbd></span><span>{t("inspectorShortcut")}<kbd>⌘ I</kbd></span></div></SettingsSectionBlock>;
+  return <SettingsSubsection title={t("shortcuts")} detail={t("keyboardNavigation")}><div className="shortcut-list"><span>{t("openSearch")}<kbd>⌘ K</kbd></span><span>{t("newTask")}<kbd>⌘ N</kbd></span><span>{t("toggleSidebar")}<kbd>⌘ B</kbd></span><span>{t("inspectorShortcut")}<kbd>⌘ I</kbd></span></div></SettingsSubsection>;
 }
 
 function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {
@@ -710,7 +756,7 @@ function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {
     });
   };
   return (
-    <SettingsSectionBlock title={t("about")} detail={t("buildInformationDetail")}>
+    <SettingsSectionBlock title={t("about")} detail={t("buildInformationDetail")} showTitle={false}>
       <div className="about-heading">
         <PiMark className="about-mark" />
         <span><strong>{t("appName")}</strong><small>{t("aboutDetail")}</small></span>
