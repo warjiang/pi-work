@@ -218,7 +218,10 @@ function ModelSettings(props: BaseProps) {
   const [apiKey, setApiKey] = useState("");
   const [removeProvider, setRemoveProvider] = useState<string | null>(null);
   const [modelsRefreshed, setModelsRefreshed] = useState(false);
+  const [credentialSaved, setCredentialSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const refreshFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerOptions = useMemo(() => Array.from(new Map((props.models?.models ?? []).map((model) => [model.providerId, model.providerName])).entries()), [props.models]);
   const providerNames = useMemo(() => new Map(providerOptions), [providerOptions]);
   const modelOptions = (props.models?.models ?? []).filter((model) => props.providers.some((provider) => provider.providerId === model.providerId));
@@ -235,7 +238,18 @@ function ModelSettings(props: BaseProps) {
     mutationFn: () => window.piWork.provider.save({ providerId, apiKey }),
     onSuccess: async () => {
       setApiKey("");
+      setSaveError(null);
+      if (saveFeedbackTimer.current !== null) clearTimeout(saveFeedbackTimer.current);
+      setCredentialSaved(true);
+      saveFeedbackTimer.current = setTimeout(() => {
+        setCredentialSaved(false);
+        saveFeedbackTimer.current = null;
+      }, 2400);
       await props.onProvidersChanged();
+    },
+    onError: (cause: Error) => {
+      setCredentialSaved(false);
+      setSaveError(cause.message);
     },
   });
   const refreshModels = useMutation({
@@ -252,6 +266,7 @@ function ModelSettings(props: BaseProps) {
   });
   useEffect(() => () => {
     if (refreshFeedbackTimer.current !== null) clearTimeout(refreshFeedbackTimer.current);
+    if (saveFeedbackTimer.current !== null) clearTimeout(saveFeedbackTimer.current);
   }, []);
   async function remove() {
     if (removeProvider === null) return;
@@ -271,6 +286,8 @@ function ModelSettings(props: BaseProps) {
           <Field><FieldLabel>{props.t("provider")}</FieldLabel><Popover open={providerMenuOpen} onOpenChange={setProviderMenuOpen}><PopoverTrigger asChild><Button variant="outline" role="combobox" aria-expanded={providerMenuOpen} className="provider-combobox-trigger"><span>{providerId ? (providerNames.get(providerId) ?? providerId) : props.t("provider")}</span><Icon name="chevron-down" size={14} /></Button></PopoverTrigger><PopoverContent className="provider-combobox-content"><Command><CommandInput autoFocus placeholder={props.t("searchProviders")} /><CommandList><CommandEmpty>{props.t("noProvidersFound")}</CommandEmpty><CommandGroup>{providerOptions.map(([id, name]) => <CommandItem key={id} value={id} keywords={[name, id]} onSelect={() => { setProviderId(id); setProviderMenuOpen(false); }}><span>{name}</span>{providerId === id ? <Icon name="check" size={14} className="ml-auto" /> : null}</CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></Field>
           <Field><FieldLabel>{props.t("apiKey")}</FieldLabel><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></Field>
           <Button disabled={!providerId || !apiKey || save.isPending} onClick={() => save.mutate()}><Icon name="plus" />{save.isPending ? props.t("saving") : props.t("addProvider")}</Button>
+          {saveError !== null ? <Alert className="form-error credential-form-notice"><AlertDescription>{saveError}</AlertDescription></Alert> : null}
+          <p className="credential-saved" role="status" aria-live="polite">{credentialSaved ? <><Icon name="check" size={14} />{props.t("credentialSaved")}</> : null}</p>
         </FieldGroup>
       </div>
       <section className="connected-providers" aria-label={props.t("connectedProviders")}>

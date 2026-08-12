@@ -234,6 +234,7 @@ export function SourcesPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   return (
     <LibraryLayout
       title={t("sources")}
+      t={t}
       detail={t("notUsedForExecution")}
       icon="source"
       items={query.data ?? []}
@@ -282,6 +283,7 @@ export function SkillsPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   return (
     <LibraryLayout
       title={t("skills")}
+      t={t}
       detail={t("skillDraftDetail")}
       icon="skills"
       items={filtered}
@@ -334,6 +336,7 @@ export function AutomationsPage({ workspaceId, t }: { workspaceId: string; t: T 
   return (
     <LibraryLayout
       title={t("automations")}
+      t={t}
       detail={t("automationDetail")}
       icon="list-todo"
       items={query.data ?? []}
@@ -557,6 +560,7 @@ function automationTriggerSummary(automation: Automation, statuses: StatusDefini
 function LibraryLayout<T extends { id: string }>(props: {
   title: string;
   detail: string;
+  t: (key: MessageKey) => string;
   icon: IconName;
   items: T[];
   selectedId: string | null;
@@ -571,7 +575,7 @@ function LibraryLayout<T extends { id: string }>(props: {
 }) {
   return (
     <section className="page library-page">
-      <PageHeader eyebrow={props.detail} title={props.title} action={<Button onClick={props.onAdd}><Icon name="plus" />{props.addLabel}</Button>} />
+      <PageHeader title={props.title} detail={props.detail} action={<Button onClick={props.onAdd}><Icon name="plus" />{props.addLabel}</Button>} />
       <div className={`library-layout ${props.detailPane ? "has-detail" : ""}`}>
         <div className="library-list-pane">
           {props.filter}
@@ -582,7 +586,7 @@ function LibraryLayout<T extends { id: string }>(props: {
             </div>
           )}
         </div>
-        {props.detailPane ? <aside className="resource-detail-pane">{props.detailPane}</aside> : <div className="resource-detail-empty"><Icon name={props.icon} /><p>{props.detail}</p></div>}
+        {props.detailPane ? <aside className="resource-detail-pane">{props.detailPane}</aside> : <div className="resource-detail-empty"><Icon name={props.icon} /><p>{props.t("selectToView")}</p></div>}
       </div>
     </section>
   );
