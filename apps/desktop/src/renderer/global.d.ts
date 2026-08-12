@@ -49,6 +49,15 @@ declare global {
         remove(source: string): Promise<ExtensionPackage[]>;
         chooseLocal(kind: "file" | "directory"): Promise<string | null>;
       };
+      piConsole: {
+        start(): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
+        write(data: string): Promise<void>;
+        resize(dimensions: { cols: number; rows: number }): Promise<void>;
+        snapshot(): Promise<{ running: boolean; output: string }>;
+        restart(): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
+        close(): Promise<void>;
+        onEvent(listener: (event: PiConsoleEvent) => void): () => void;
+      };
       model: {
         list(): Promise<ModelCatalog>;
       };
@@ -139,5 +148,11 @@ type BrowserState = {
   canGoForward: boolean;
   loading: boolean;
 };
+
+type PiConsoleEvent =
+  | { type: "started" }
+  | { type: "data"; data: string }
+  | { type: "exit"; exitCode: number; signal?: number }
+  | { type: "error"; message: string };
 
 export {};

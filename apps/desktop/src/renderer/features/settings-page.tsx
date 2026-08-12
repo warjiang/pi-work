@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, Workspace } from "@pi-work/protocol";
@@ -67,8 +67,14 @@ export function SettingsPage(props: {
   onUpdate(value: Partial<AppSettings>): Promise<unknown>;
   onAddWorkspace(): Promise<Workspace | null>;
   onProvidersChanged(): Promise<unknown>;
+  onModelsRefresh(): Promise<unknown>;
   onRestartOnboarding(): Promise<unknown>;
+  consoleOpen?: boolean;
+  consolePanel?: ReactNode;
+  onOpenConsole?(command?: string | null): void;
+  onToggleConsole?(): void;
 }) {
+  const consoleOpen = props.consoleOpen ?? false;
   const groups: Array<{
     label: MessageKey;
     sections: Array<{ id: SettingsSection; icon: IconName }>;
@@ -105,7 +111,7 @@ export function SettingsPage(props: {
   ];
   const sectionTitle = props.t(props.section);
   return (
-    <section className="settings-shell" aria-label={props.t("settings")}>
+    <section className={`settings-shell${consoleOpen ? " pi-console-open" : ""}`} aria-label={props.t("settings")}>
       <header className="settings-titlebar">
         <Button variant="ghost" className="settings-back" onClick={props.onClose}>
           <Icon name="back" />
@@ -115,7 +121,18 @@ export function SettingsPage(props: {
           <strong>{props.t("appName")}</strong>
           <span>{props.t("settings")}</span>
         </div>
-        <span aria-hidden="true" />
+        <div className="settings-titlebar-actions">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`topbar-console-trigger${consoleOpen ? " is-active" : ""}`}
+            aria-label={props.t("piConsole")}
+            aria-pressed={consoleOpen}
+            onClick={props.onToggleConsole}
+          >
+            <Icon name="terminal" />
+          </Button>
+        </div>
       </header>
       <div className="settings-layout">
         <nav className="settings-nav" aria-label={props.t("settings")}>
@@ -153,12 +170,13 @@ export function SettingsPage(props: {
               {props.section === "workFolders" ? <FolderSettings {...props} /> : null}
               {props.section === "permissions" ? <PermissionSettings {...props} /> : null}
               {props.section === "appearance" ? <AppearanceSettings {...props} /> : null}
-              {props.section === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} /> : null}
+              {props.section === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} onOpenConsole={(command) => props.onOpenConsole?.(command)} /> : null}
               {props.section === "shortcuts" ? <ShortcutSettings t={props.t} /> : null}
               {props.section === "about" ? <AboutSettings buildInfo={props.buildInfo} t={props.t} /> : null}
             </div>
           )}
         </main>
+        {props.consolePanel}
       </div>
     </section>
   );
@@ -173,6 +191,7 @@ type BaseProps = {
   onUpdate(value: Partial<AppSettings>): Promise<unknown>;
   onAddWorkspace(): Promise<Workspace | null>;
   onProvidersChanged(): Promise<unknown>;
+  onModelsRefresh(): Promise<unknown>;
   onRestartOnboarding(): Promise<unknown>;
 };
 
@@ -198,6 +217,8 @@ function ModelSettings(props: BaseProps) {
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [removeProvider, setRemoveProvider] = useState<string | null>(null);
+  const [modelsRefreshed, setModelsRefreshed] = useState(false);
+  const refreshFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerOptions = useMemo(() => Array.from(new Map((props.models?.models ?? []).map((model) => [model.providerId, model.providerName])).entries()), [props.models]);
   const providerNames = useMemo(() => new Map(providerOptions), [providerOptions]);
   const modelOptions = (props.models?.models ?? []).filter((model) => props.providers.some((provider) => provider.providerId === model.providerId));
@@ -217,6 +238,21 @@ function ModelSettings(props: BaseProps) {
       await props.onProvidersChanged();
     },
   });
+  const refreshModels = useMutation({
+    mutationFn: props.onModelsRefresh,
+    onSuccess: () => {
+      if (refreshFeedbackTimer.current !== null) clearTimeout(refreshFeedbackTimer.current);
+      setModelsRefreshed(true);
+      refreshFeedbackTimer.current = setTimeout(() => {
+        setModelsRefreshed(false);
+        refreshFeedbackTimer.current = null;
+      }, 1400);
+    },
+    onError: () => setModelsRefreshed(false),
+  });
+  useEffect(() => () => {
+    if (refreshFeedbackTimer.current !== null) clearTimeout(refreshFeedbackTimer.current);
+  }, []);
   async function remove() {
     if (removeProvider === null) return;
     await window.piWork.provider.remove(removeProvider);
@@ -243,7 +279,35 @@ function ModelSettings(props: BaseProps) {
             <h3>{props.t("connectedProviders")}</h3>
             <p>{props.t("connectedProvidersDetail")}</p>
           </div>
-          <Badge>{props.providers.length}</Badge>
+          <div className="connected-provider-actions">
+            <Button
+              variant="outline"
+              size="sm"
+              className={`model-refresh-button${refreshModels.isPending ? " is-refreshing" : modelsRefreshed ? " is-complete" : ""}`}
+              disabled={refreshModels.isPending}
+              onClick={() => {
+                if (refreshFeedbackTimer.current !== null) {
+                  clearTimeout(refreshFeedbackTimer.current);
+                  refreshFeedbackTimer.current = null;
+                }
+                setModelsRefreshed(false);
+                refreshModels.mutate();
+              }}
+            >
+              <Icon
+                name={modelsRefreshed ? "check" : "refresh"}
+                className={refreshModels.isPending ? "is-spinning" : undefined}
+              />
+              <span
+                key={refreshModels.isPending ? "refreshing" : modelsRefreshed ? "complete" : "idle"}
+                className="model-refresh-label"
+                aria-live="polite"
+              >
+                {props.t(refreshModels.isPending ? "refreshingModels" : modelsRefreshed ? "modelsRefreshed" : "refreshModels")}
+              </span>
+            </Button>
+            <Badge>{props.providers.length}</Badge>
+          </div>
         </header>
         <div className="credential-list">
           {props.providers.map((provider) => {
@@ -310,7 +374,15 @@ function AppearanceSettings(props: BaseProps) {
   </SettingsSectionBlock>;
 }
 
-function ExtensionSettings({ language, t }: { language: AppSettings["language"]; t: T }) {
+function ExtensionSettings({
+  language,
+  t,
+  onOpenConsole,
+}: {
+  language: AppSettings["language"];
+  t: T;
+  onOpenConsole(command?: string | null): void;
+}) {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["extensions"], queryFn: () => window.piWork.extension.list() });
   const [source, setSource] = useState("");
@@ -388,7 +460,8 @@ function ExtensionSettings({ language, t }: { language: AppSettings["language"];
             <Button variant="ghost" className={view === "explore" ? "selected" : ""} onClick={() => setView("explore")} role="tab" aria-selected={view === "explore"}>{t("exploreExtensions")}</Button>
             <Button variant="ghost" className={view === "installed" ? "selected" : ""} onClick={() => setView("installed")} role="tab" aria-selected={view === "installed"}>{t("installedExtensions")}{query.data ? <span>{query.data.length}</span> : null}</Button>
           </div>
-          {view === "explore" ? <div className="extension-store-actions">
+          <div className="extension-store-actions">
+            {view === "explore" ? <>
             <label className="extension-store-search">
               <Icon name="search" />
               <span className="sr-only">{t("searchExtensions")}</span>
@@ -401,7 +474,8 @@ function ExtensionSettings({ language, t }: { language: AppSettings["language"];
               <Icon name="plus" />
               {t("manualExtensionInstall")}
             </Button>
-          </div> : null}
+            </> : null}
+          </div>
         </div>
 
         {view === "explore" ? <>
@@ -517,6 +591,11 @@ function ExtensionSettings({ language, t }: { language: AppSettings["language"];
         <div className="extension-security-note"><Icon name="alert" /><p>{t("extensionSecurityNote")}</p></div>
         <DialogFooter className="extension-drawer-actions">
           <Button variant="link" onClick={() => void window.piWork.system.openExternal(selectedExtension.officialUrl)}><Icon name="external" />{t("viewOnPiDirectory")}</Button>
+          <Button variant="outline" onClick={() => {
+            const command = selectedExtension.id.includes("newapi") ? "/newapi-provider-add " : null;
+            setSelectedExtension(null);
+            onOpenConsole(command);
+          }}><Icon name="terminal" />{t("setUpInPiConsole")}</Button>
           {isInstalled(selectedExtension)
             ? <Button variant="destructive" disabled={remove.isPending} onClick={() => {
               const installedSource = installedSourceFor(selectedExtension);
@@ -557,6 +636,7 @@ function ExtensionSettings({ language, t }: { language: AppSettings["language"];
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+
   </>;
 }
 

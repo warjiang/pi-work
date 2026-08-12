@@ -54,6 +54,7 @@ describe("SettingsPage", () => {
         onUpdate={async () => undefined}
         onAddWorkspace={async () => null}
         onProvidersChanged={async () => undefined}
+        onModelsRefresh={async () => undefined}
         onRestartOnboarding={async () => undefined}
       />,
     );
@@ -89,6 +90,7 @@ describe("SettingsPage", () => {
           onUpdate={async () => undefined}
           onAddWorkspace={async () => null}
           onProvidersChanged={async () => undefined}
+          onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
         />
       </QueryClientProvider>,
@@ -96,6 +98,8 @@ describe("SettingsPage", () => {
 
     expect(html).toContain("Available models");
     expect(html).toContain("Kimi K2.5");
+    expect(html).toContain("Refresh models");
+    expect(html).toContain("model-refresh-button");
   });
 
   it("renders the extension catalog and keeps manual installation available", () => {
@@ -114,6 +118,7 @@ describe("SettingsPage", () => {
           onUpdate={async () => undefined}
           onAddWorkspace={async () => null}
           onProvidersChanged={async () => undefined}
+          onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
         />
       </QueryClientProvider>,

@@ -33,7 +33,7 @@ describe("CredentialBroker", () => {
         apiKey: "secret",
       },
     })).toString("base64"));
-    const broker = new CredentialBroker(filename);
+    const broker = new CredentialBroker(join(directory, "pi-agent"), filename);
 
     await expect(broker.migrateLegacyDefault()).resolves.toEqual({
       providerId: "anthropic",
@@ -45,9 +45,13 @@ describe("CredentialBroker", () => {
       "openai",
     ]);
 
-    const stored = JSON.parse(Buffer.from(await readFile(filename, "utf8"), "base64").toString()) as {
+    const stored = JSON.parse(await readFile(join(directory, "pi-agent", "auth.json"), "utf8")) as {
       anthropic: Record<string, unknown>;
     };
-    expect(stored.anthropic.modelId).toBeUndefined();
+    expect(stored.anthropic).toEqual({ type: "api_key", key: "secret" });
+
+    await broker.remove("anthropic");
+    await expect(broker.migrateLegacyDefault()).resolves.toBeNull();
+    expect((await broker.list()).map(({ providerId }) => providerId)).toEqual(["openai"]);
   });
 });

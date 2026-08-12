@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session, Workspace } from "@pi-work/protocol";
 import { Alert, AlertDescription } from "./components/ui/alert.js";
@@ -15,6 +15,7 @@ import {
   resolveDefaultThinkingLevel,
 } from "./features/app-shell.js";
 import { SettingsPage } from "./features/settings-page.js";
+import { PiConsolePanel } from "./features/pi-console-panel.js";
 import { SessionEmptyState, TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
 import {
   AutomationsPage,
@@ -31,6 +32,11 @@ export function App() {
   const queryClient = useQueryClient();
   const ui = useWorkspaceUi();
   const [appError, setAppError] = useState<string | null>(null);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleMounted, setConsoleMounted] = useState(false);
+  const [consoleCommandRequest, setConsoleCommandRequest] = useState<{ id: number; value: string } | null>(null);
+  const consoleCommandIdRef = useRef(0);
+  const consoleCloseTimerRef = useRef<number | null>(null);
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.piWork.settings.get() });
   const buildInfo = useQuery({ queryKey: ["system-info"], queryFn: () => window.piWork.system.info() });
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: () => window.piWork.workspace.list() });
@@ -39,7 +45,7 @@ export function App() {
   const models = useQuery({ queryKey: ["models"], queryFn: () => window.piWork.model.list() });
   const toolApprovals = useQuery({ queryKey: ["tool-approvals"], queryFn: () => window.piWork.chat.toolApprovals() });
   const language = settings.data?.language ?? "en";
-  const t = translator(language);
+  const t = useMemo(() => translator(language), [language]);
 
   const workspaceById = useMemo(
     () => new Map((workspaces.data ?? []).map((workspace) => [workspace.id, workspace])),
@@ -124,6 +130,9 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.platform = /Mac/.test(navigator.platform) ? "darwin" : "other";
   }, []);
+  useEffect(() => () => {
+    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
+  }, []);
   useEffect(() => window.piWork.chat.onToolApproval(() => {
     void queryClient.invalidateQueries({ queryKey: ["tool-approvals"] });
   }), [queryClient]);
@@ -133,6 +142,10 @@ export function App() {
       if (command && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         ui.setCommandOpen(true);
+      }
+      if (command && event.key.toLocaleLowerCase() === "j") {
+        event.preventDefault();
+        toggleConsole();
       }
       if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
@@ -149,6 +162,8 @@ export function App() {
       if (event.key === "Escape") {
         if (ui.commandOpen) {
           ui.setCommandOpen(false);
+        } else if (consoleOpen) {
+          closeConsole();
         } else if (ui.settingsOpen) {
           ui.closeSettings();
         }
@@ -157,7 +172,36 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedSession, settings.data?.sidebarCollapsed, ui]);
+  }, [consoleOpen, selectedSession, settings.data?.sidebarCollapsed, ui]);
+
+  function openConsole(command: string | null = null) {
+    if (consoleCloseTimerRef.current !== null) {
+      window.clearTimeout(consoleCloseTimerRef.current);
+      consoleCloseTimerRef.current = null;
+    }
+    if (command !== null) {
+      consoleCommandIdRef.current += 1;
+      setConsoleCommandRequest({ id: consoleCommandIdRef.current, value: command });
+    }
+    setConsoleMounted(true);
+    window.requestAnimationFrame(() => setConsoleOpen(true));
+  }
+
+  function closeConsole() {
+    setConsoleOpen(false);
+    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
+    consoleCloseTimerRef.current = window.setTimeout(() => {
+      void window.piWork.piConsole.close();
+      setConsoleMounted(false);
+      setConsoleCommandRequest(null);
+      consoleCloseTimerRef.current = null;
+    }, 220);
+  }
+
+  function toggleConsole() {
+    if (consoleOpen) closeConsole();
+    else openConsole();
+  }
 
   async function refresh(): Promise<void> {
     await Promise.all([
@@ -300,9 +344,17 @@ export function App() {
   const resourceWorkspaceId = scopeWorkspace?.kind === "folder" ? scopeWorkspace.id : null;
   const appSettings = settings.data;
   const onboardingOpen = !appSettings.onboardingSkipped;
+  const consolePanel = consoleMounted ? (
+    <PiConsolePanel
+      commandRequest={consoleCommandRequest}
+      open={consoleOpen}
+      t={t}
+      onClose={closeConsole}
+    />
+  ) : null;
 
   return (
-    <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}${consoleOpen && !ui.settingsOpen ? " pi-console-open" : ""}`}>
       <div className="workspace-shell" inert={ui.settingsOpen ? true : undefined} aria-hidden={ui.settingsOpen || undefined}>
         <a className="skip-link" href="#main-content">{t("work")}</a>
         <TopBar
@@ -315,6 +367,8 @@ export function App() {
           onToggleSidebar={toggleSidebar}
           onOpenSearch={() => ui.setCommandOpen(true)}
           onNewTask={createNewItem}
+          consoleOpen={consoleOpen}
+          onToggleConsole={toggleConsole}
         />
         <Sidebar
           view={ui.view}
@@ -403,6 +457,7 @@ export function App() {
         {ui.view === "automations" && resourceWorkspaceId !== null ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
           {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
         </main>
+        {!ui.settingsOpen ? consolePanel : null}
       </div>
       {ui.settingsOpen ? (
         <SettingsPage
@@ -423,7 +478,17 @@ export function App() {
               queryClient.invalidateQueries({ queryKey: ["models"] }),
             ]);
           }}
+          onModelsRefresh={async () => {
+            await Promise.all([
+              providers.refetch(),
+              models.refetch(),
+            ]);
+          }}
           onRestartOnboarding={() => updateSettings({ onboardingSkipped: false })}
+          consoleOpen={consoleOpen}
+          consolePanel={consolePanel}
+          onOpenConsole={openConsole}
+          onToggleConsole={toggleConsole}
         />
       ) : null}
       <CommandPalette

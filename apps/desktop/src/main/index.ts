@@ -70,11 +70,19 @@ import {
 import { stageArtifact, publishArtifact } from "@pi-work/artifacts";
 import { PiWorkStore } from "@pi-work/storage";
 import { CredentialBroker } from "./credential-broker.js";
+import {
+  createIsolatedPiEnvironment,
+  PiConsole,
+  type PiConsoleEvent,
+  resolveBundledPiCli,
+  resolveBundledPiRuntime,
+} from "./pi-console.js";
 
 let mainWindow: BrowserWindow | null = null;
 let store: PiWorkStore;
 let agentProcess: UtilityProcess | null = null;
 let credentialBroker: CredentialBroker;
+let piConsole: PiConsole | null = null;
 let browserView: WebContentsView | null = null;
 const pendingAgentRequests = new Map<string, {
   resolve: (response: AgentResponse) => void;
@@ -339,9 +347,40 @@ function getStore(): PiWorkStore {
 
 function getCredentialBroker(): CredentialBroker {
   if (credentialBroker === undefined) {
-    credentialBroker = new CredentialBroker(join(app.getPath("userData"), "credentials.enc"));
+    credentialBroker = new CredentialBroker(
+      join(app.getPath("userData"), "pi-agent"),
+      join(app.getPath("userData"), "credentials.enc"),
+    );
   }
   return credentialBroker;
+}
+
+function sendPiConsoleEvent(event: PiConsoleEvent): void {
+  mainWindow?.webContents.send("pi-console:event", event);
+}
+
+function bundledPiRuntimeDirectory(): string {
+  return resolveBundledPiRuntime({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    mainDirectory: import.meta.dirname,
+  });
+}
+
+function getPiConsole(): PiConsole {
+  if (piConsole === null) {
+    console.info(`[Pi Console] Starting ${app.isPackaged ? "packaged" : "development"} bundled Pi runtime.`);
+    const runtimeDirectory = bundledPiRuntimeDirectory();
+    const cliPath = resolveBundledPiCli(runtimeDirectory);
+    piConsole = new PiConsole({
+      runtimeDirectory,
+      cliPath,
+      userData: app.getPath("userData"),
+      nodePath: process.execPath,
+      emit: sendPiConsoleEvent,
+    });
+  }
+  return piConsole;
 }
 
 function createWindow(): void {
@@ -432,7 +471,12 @@ function getAgentProcess(): UtilityProcess {
   const agentEntry = app.isPackaged
     ? join(process.resourcesPath, "pi-runtime", "agent-service.js")
     : join(import.meta.dirname, "agent-service.js");
-  agentProcess = utilityProcess.fork(agentEntry);
+  agentProcess = utilityProcess.fork(agentEntry, [], {
+    env: createIsolatedPiEnvironment({
+      userData: app.getPath("userData"),
+      runtimeDirectory: bundledPiRuntimeDirectory(),
+    }),
+  });
   agentProcess.on("message", (message) => {
     const parsed = agentResponseSchema.safeParse(message);
     if (!parsed.success) {
@@ -800,6 +844,23 @@ function registerIpc(): void {
       ? await dialog.showOpenDialog(pickerOptions)
       : await dialog.showOpenDialog(mainWindow, pickerOptions);
     return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+  ipcMain.handle("pi-console:start", () => getPiConsole().start());
+  ipcMain.handle("pi-console:write", (_event, input: unknown) => {
+    if (typeof input !== "string") throw new Error("Invalid Pi Console input.");
+    getPiConsole().write(input);
+  });
+  ipcMain.handle("pi-console:resize", (_event, input: unknown) => {
+    if (typeof input !== "object" || input === null) throw new Error("Invalid Pi Console dimensions.");
+    const { cols, rows } = input as { cols?: unknown; rows?: unknown };
+    if (typeof cols !== "number" || typeof rows !== "number") throw new Error("Invalid Pi Console dimensions.");
+    getPiConsole().resize(cols, rows);
+  });
+  ipcMain.handle("pi-console:snapshot", () => getPiConsole().snapshot());
+  ipcMain.handle("pi-console:restart", () => getPiConsole().restart());
+  ipcMain.handle("pi-console:close", () => {
+    piConsole?.close();
+    piConsole = null;
   });
   ipcMain.handle("model:list", () => listModels());
   ipcMain.handle("conversation:list", () => getStore().listManagedConversations());
@@ -1298,4 +1359,6 @@ app.on("before-quit", () => {
   closeBrowserView();
   store?.close();
   agentProcess?.kill();
+  piConsole?.close();
+  piConsole = null;
 });

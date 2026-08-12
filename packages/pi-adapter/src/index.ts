@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { getSupportedThinkingLevels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import type {
+  AuthOperationOptions,
+  Credential,
+  CredentialInfo,
+  CredentialStore,
+} from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
@@ -63,6 +69,71 @@ const generatedPlanSchema = z.object({
   sources: z.array(z.string().min(1)).max(100),
 });
 
+class PrivateAuthCredentialStore implements CredentialStore {
+  private chain = Promise.resolve();
+
+  constructor(private readonly authPath: string) {}
+
+  async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
+    options?.signal?.throwIfAborted();
+    return (await this.readAll())[providerId];
+  }
+
+  async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
+    options?.signal?.throwIfAborted();
+    return Object.entries(await this.readAll()).map(([providerId, credential]) => ({
+      providerId,
+      type: credential.type,
+    }));
+  }
+
+  modify(
+    providerId: string,
+    fn: (current: Credential | undefined) => Promise<Credential | undefined>,
+    options?: AuthOperationOptions,
+  ): Promise<Credential | undefined> {
+    const task = this.chain.then(async () => {
+      options?.signal?.throwIfAborted();
+      const records = await this.readAll();
+      const next = await fn(records[providerId]);
+      options?.signal?.throwIfAborted();
+      if (next !== undefined) {
+        records[providerId] = next;
+        await this.writeAll(records);
+      }
+      return next ?? records[providerId];
+    });
+    this.chain = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  delete(providerId: string, options?: AuthOperationOptions): Promise<void> {
+    const task = this.chain.then(async () => {
+      options?.signal?.throwIfAborted();
+      const records = await this.readAll();
+      delete records[providerId];
+      await this.writeAll(records);
+    });
+    this.chain = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  private async readAll(): Promise<Record<string, Credential>> {
+    try {
+      const parsed = JSON.parse(await readFile(this.authPath, "utf8")) as Record<string, Credential>;
+      return parsed ?? {};
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
+      throw error;
+    }
+  }
+
+  private async writeAll(records: Record<string, Credential>): Promise<void> {
+    await mkdir(dirname(this.authPath), { recursive: true });
+    await writeFile(this.authPath, `${JSON.stringify(records, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  }
+}
+
 export class PiAdapter {
   private readonly activeSessions = new Map<string, AgentSession>();
   private readonly cancelledSessions = new Set<string>();
@@ -85,8 +156,8 @@ export class PiAdapter {
       return this.createPlanningFallback(task);
     }
 
-    const credentials = new InMemoryCredentialStore();
-    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    const credentials = this.credentials(runtime);
+    const modelRuntime = await this.modelRuntime(runtime, credentials);
     const services = await createAgentSessionServices({
       cwd: runtime.cwd,
       agentDir: runtime.agentDir,
@@ -164,8 +235,8 @@ export class PiAdapter {
       };
     }
 
-    const credentials = new InMemoryCredentialStore();
-    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    const credentials = this.credentials(runtime);
+    const modelRuntime = await this.modelRuntime(runtime, credentials);
     const services = await createAgentSessionServices({
       cwd: runtime.cwd,
       agentDir: runtime.agentDir,
@@ -311,10 +382,7 @@ export class PiAdapter {
     models: ModelOption[];
     diagnostics: string[];
   }> {
-    const modelRuntime = await ModelRuntime.create({
-      credentials: new InMemoryCredentialStore(),
-      modelsPath: null,
-    });
+    const modelRuntime = await this.modelRuntime(runtime);
     const services = await createAgentSessionServices({
       cwd: runtime.cwd,
       agentDir: runtime.agentDir,
@@ -381,6 +449,20 @@ export class PiAdapter {
   private settingsManager(runtime: AgentRuntime): SettingsManager {
     return SettingsManager.create(runtime.cwd, runtime.agentDir, {
       projectTrusted: false,
+    });
+  }
+
+  private credentials(runtime: AgentRuntime): PrivateAuthCredentialStore {
+    return new PrivateAuthCredentialStore(join(runtime.agentDir, "auth.json"));
+  }
+
+  private modelRuntime(
+    runtime: AgentRuntime,
+    credentials = this.credentials(runtime),
+  ): Promise<ModelRuntime> {
+    return ModelRuntime.create({
+      credentials,
+      modelsPath: join(runtime.agentDir, "models.json"),
     });
   }
 }

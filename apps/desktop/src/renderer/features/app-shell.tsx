@@ -63,6 +63,8 @@ export function TopBar(props: {
   onToggleSidebar(): void;
   onOpenSearch(): void;
   onNewTask(): void;
+  consoleOpen: boolean;
+  onToggleConsole(): void;
 }) {
   const folder = props.workspaces.find(({ id }) => id === props.workspaceScope);
   const personal = props.workspaceScope === "personal";
@@ -106,6 +108,16 @@ export function TopBar(props: {
         <kbd>⌘K</kbd>
       </Button>
       <div className="topbar-trailing">
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`topbar-console-trigger${props.consoleOpen ? " is-active" : ""}`}
+          aria-label={props.t("piConsole")}
+          aria-pressed={props.consoleOpen}
+          onClick={props.onToggleConsole}
+        >
+          <Icon name="terminal" />
+        </Button>
         <Button className="topbar-new-task" onClick={props.onNewTask}><Icon name="plus" size={14} />{personal ? props.t("newSession") : props.t("newTask")}</Button>
       </div>
     </header>
