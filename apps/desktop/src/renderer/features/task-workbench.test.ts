@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isNearBottom, reduceLiveProcess, visibleAssistantContent } from "./task-workbench.js";
+import {
+  activeTurnIndex,
+  activeTurnDuringScroll,
+  conversationTurns,
+  isNearBottom,
+  reduceLiveProcess,
+  turnHoverDistance,
+  visibleAssistantContent,
+} from "./task-workbench.js";
 
 const t = (key: string) => key;
 const empty = { thoughts: [], tools: [], notice: null };
@@ -18,6 +26,77 @@ describe("live Pi process reducer", () => {
   it("only follows the message stream while the scroller remains near its end", () => {
     expect(isNearBottom({ scrollHeight: 1_000, scrollTop: 560, clientHeight: 400 })).toBe(true);
     expect(isNearBottom({ scrollHeight: 1_000, scrollTop: 400, clientHeight: 400 })).toBe(false);
+  });
+
+  it("builds one navigation indicator for every user turn", () => {
+    expect(conversationTurns([
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "user",
+        content: "First question",
+        createdAt: "2026-08-12T00:00:00.000Z",
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "assistant",
+        content: "First answer",
+        createdAt: "2026-08-12T00:00:01.000Z",
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000003",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "user",
+        content: "  Follow-up question  ",
+        createdAt: "2026-08-12T00:00:02.000Z",
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000004",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "assistant",
+        content: "Draft answer",
+        createdAt: "2026-08-12T00:00:03.000Z",
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000005",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "assistant",
+        content: "Final answer",
+        createdAt: "2026-08-12T00:00:04.000Z",
+      },
+    ])).toEqual([
+      {
+        messageId: "00000000-0000-4000-8000-000000000001",
+        targetId: "turn-00000000-0000-4000-8000-000000000001",
+        question: "First question",
+        answer: "First answer",
+      },
+      {
+        messageId: "00000000-0000-4000-8000-000000000003",
+        targetId: "turn-00000000-0000-4000-8000-000000000003",
+        question: "Follow-up question",
+        answer: "Final answer",
+      },
+    ]);
+  });
+
+  it("selects the latest turn above the reading threshold", () => {
+    expect(activeTurnIndex([120, 340, 680], 400)).toBe(1);
+    expect(activeTurnIndex([120, 340, 680], 80)).toBe(0);
+    expect(activeTurnIndex([], 400)).toBe(-1);
+  });
+
+  it("keeps the target active while smooth scrolling past intermediate turns", () => {
+    expect(activeTurnDuringScroll("turn-2", "turn-4")).toBe("turn-4");
+    expect(activeTurnDuringScroll("turn-4", null)).toBe("turn-4");
+  });
+
+  it("expands the hovered turn and nearby indicators by distance", () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map((index) => turnHoverDistance(index, 3)))
+      .toEqual([3, 2, 1, 0, 1, 2, 3]);
+    expect(turnHoverDistance(0, 4)).toBeNull();
+    expect(turnHoverDistance(0, -1)).toBeNull();
   });
 
   it("aggregates thinking separately from assistant text and completes it on end", () => {

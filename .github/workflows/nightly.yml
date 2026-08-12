@@ -19,6 +19,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - run: pnpm --filter @pi-work/desktop build
       - run: pnpm prepare:pi
       - run: pnpm --filter @pi-work/desktop exec electron-builder --dir --publish never
       - run: pnpm --filter @pi-work/desktop verify:pi-runtime

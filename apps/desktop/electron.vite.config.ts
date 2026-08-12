@@ -2,8 +2,10 @@ import { resolve } from "node:path";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { resolveBuildMetadata } from "./build-info.js";
 
 const workspaceRoot = resolve(import.meta.dirname, "../..");
+const buildMetadata = resolveBuildMetadata({ cwd: workspaceRoot });
 const workspaceAliases = {
   "@pi-work/artifacts": resolve(workspaceRoot, "packages/artifacts/src/index.ts"),
   "@pi-work/pi-adapter": resolve(workspaceRoot, "packages/pi-adapter/src/index.ts"),
@@ -14,6 +16,10 @@ const workspaceAliases = {
 
 export default defineConfig({
   main: {
+    define: {
+      __PI_WORK_GIT_BRANCH__: JSON.stringify(buildMetadata.branch),
+      __PI_WORK_GIT_COMMIT__: JSON.stringify(buildMetadata.commit),
+    },
     resolve: {
       alias: workspaceAliases,
     },

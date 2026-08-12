@@ -168,6 +168,56 @@ describe("PiAdapter", () => {
     expect(catalog.models.some((model) => model.providerId === "vercel-ai-gateway")).toBe(false);
   });
 
+  it("loads the same persisted model catalog as the Pi console", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-work-adapter-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "pi-agent");
+    const fixture = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "test-fixtures",
+      "provider-extension",
+    );
+    const adapter = new PiAdapter();
+    await adapter.installExtension({ cwd: root, agentDir }, fixture);
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(agentDir, "models-store.json"),
+      JSON.stringify({
+        "pi-work-fixture": {
+          models: [{
+            id: "console-model",
+            name: "Console Model",
+            api: "openai-completions",
+            provider: "pi-work-fixture",
+            baseUrl: "https://example.invalid/v1",
+            reasoning: true,
+            input: ["text"],
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+          }],
+          checkedAt: Date.now(),
+        },
+      }),
+    );
+
+    const catalog = await adapter.listModels({ cwd: root, agentDir });
+
+    expect(catalog.models).toContainEqual({
+      providerId: "pi-work-fixture",
+      providerName: "Pi Work Fixture",
+      modelId: "console-model",
+      modelName: "Console Model",
+      thinkingLevels: expect.any(Array),
+    });
+  });
+
   it("rejects traversal and symlink escapes while allowing new nested paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-work-root-"));
     const outside = await mkdtemp(join(tmpdir(), "pi-work-outside-"));

@@ -21,6 +21,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pi-work/desktop build
       - run: pnpm prepare:pi
       - run: pnpm --filter @pi-work/desktop exec electron-builder --mac dmg zip --publish never
         env:

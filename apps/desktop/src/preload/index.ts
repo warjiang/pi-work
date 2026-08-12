@@ -16,12 +16,26 @@ const piWork = {
   },
   system: {
     openExternal: (url: string) => ipcRenderer.invoke("system:open-external", { url }),
+    info: () => ipcRenderer.invoke("system:info"),
   },
   extension: {
     list: () => ipcRenderer.invoke("extension:list"),
     install: (source: string) => ipcRenderer.invoke("extension:install", source),
     remove: (source: string) => ipcRenderer.invoke("extension:remove", source),
     chooseLocal: (kind: "file" | "directory") => ipcRenderer.invoke("extension:choose-local", kind),
+  },
+  piConsole: {
+    start: () => ipcRenderer.invoke("pi-console:start"),
+    write: (data: string) => ipcRenderer.invoke("pi-console:write", data),
+    resize: (dimensions: { cols: number; rows: number }) => ipcRenderer.invoke("pi-console:resize", dimensions),
+    snapshot: () => ipcRenderer.invoke("pi-console:snapshot"),
+    restart: () => ipcRenderer.invoke("pi-console:restart"),
+    close: () => ipcRenderer.invoke("pi-console:close"),
+    onEvent: (listener: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown) => listener(value);
+      ipcRenderer.on("pi-console:event", handler);
+      return () => ipcRenderer.removeListener("pi-console:event", handler);
+    },
   },
   model: {
     list: () => ipcRenderer.invoke("model:list"),

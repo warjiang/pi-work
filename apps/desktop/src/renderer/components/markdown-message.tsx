@@ -11,6 +11,7 @@ type MarkdownMessageProps = {
   copyLabel: string;
   copiedLabel: string;
   streaming?: boolean;
+  compact?: boolean;
 };
 
 export function safeMarkdownUrl(value: string | undefined): string | null {
@@ -23,9 +24,20 @@ export function safeMarkdownUrl(value: string | undefined): string | null {
   }
 }
 
-export function MarkdownMessage({ content, copyLabel, copiedLabel, streaming = false }: MarkdownMessageProps) {
+export function MarkdownMessage({
+  content,
+  copyLabel,
+  copiedLabel,
+  streaming = false,
+  compact = false,
+}: MarkdownMessageProps) {
+  const classes = [
+    "markdown-message",
+    streaming ? "markdown-message-streaming" : "",
+    compact ? "markdown-message-compact" : "",
+  ].filter(Boolean).join(" ");
   return (
-    <div className={streaming ? "markdown-message markdown-message-streaming" : "markdown-message"}>
+    <div className={classes}>
       <ReactMarkdown
         rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}
         remarkPlugins={[remarkGfm]}
@@ -33,6 +45,7 @@ export function MarkdownMessage({ content, copyLabel, copiedLabel, streaming = f
         urlTransform={(url) => safeMarkdownUrl(url) ?? ""}
         components={{
           a: ({ href, children, ...props }) => {
+            if (compact) return <span>{children}</span>;
             const externalUrl = safeMarkdownUrl(href);
             if (externalUrl === null) return <span>{children}</span>;
             return (
@@ -50,11 +63,13 @@ export function MarkdownMessage({ content, copyLabel, copiedLabel, streaming = f
             );
           },
           img: ({ alt }) => <span>{alt ?? ""}</span>,
-          pre: ({ children }) => (
-            <CodeBlock copyLabel={copyLabel} copiedLabel={copiedLabel}>
-              {children}
-            </CodeBlock>
-          ),
+          pre: ({ children }) => compact
+            ? <pre className="markdown-preview-code">{children}</pre>
+            : (
+                <CodeBlock copyLabel={copyLabel} copiedLabel={copiedLabel}>
+                  {children}
+                </CodeBlock>
+              ),
         }}
       >
         {content}

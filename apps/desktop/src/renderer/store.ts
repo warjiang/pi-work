@@ -8,17 +8,27 @@ export type AppView =
   | "sources"
   | "skills"
   | "automations"
-  | "folder-settings"
-  | "browser"
-  | "settings";
+  | "folder-settings";
 
 export type InspectorTab = "task" | "plan" | "activity" | "output";
 export type WorkspaceScope = "personal" | string;
+export type SettingsSection =
+  | "general"
+  | "appearance"
+  | "modelsCredentials"
+  | "workFolders"
+  | "permissions"
+  | "extensions"
+  | "browser"
+  | "shortcuts"
+  | "about";
 
 type WorkspaceUiState = {
   view: AppView;
   workspaceScope: WorkspaceScope;
   selectedTaskId: string | null;
+  settingsOpen: boolean;
+  settingsSection: SettingsSection;
   sidebarCollapsed: boolean;
   sidebarDrawerOpen: boolean;
   inspectorOpen: boolean;
@@ -30,6 +40,9 @@ type WorkspaceUiState = {
   setWorkspaceScope(scope: WorkspaceScope): void;
   selectTask(taskId: string | null): void;
   openTask(taskId: string): void;
+  openSettings(section?: SettingsSection): void;
+  closeSettings(): void;
+  setSettingsSection(section: SettingsSection): void;
   toggleSidebar(): void;
   setSidebarCollapsed(collapsed: boolean): void;
   setSidebarDrawerOpen(open: boolean): void;
@@ -45,6 +58,8 @@ export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
   view: "inbox",
   workspaceScope: "personal",
   selectedTaskId: null,
+  settingsOpen: false,
+  settingsSection: "general",
   sidebarCollapsed: false,
   sidebarDrawerOpen: false,
   inspectorOpen: true,
@@ -64,6 +79,13 @@ export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
     view: "inbox",
     sidebarDrawerOpen: false,
   }),
+  openSettings: (section) => set((state) => ({
+    settingsOpen: true,
+    settingsSection: section ?? state.settingsSection,
+    sidebarDrawerOpen: false,
+  })),
+  closeSettings: () => set({ settingsOpen: false }),
+  setSettingsSection: (settingsSection) => set({ settingsSection }),
   toggleSidebar: () => set((state) => ({
     sidebarCollapsed: !state.sidebarCollapsed,
   })),

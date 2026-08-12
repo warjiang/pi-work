@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session, Workspace } from "@pi-work/protocol";
 import { Alert, AlertDescription } from "./components/ui/alert.js";
@@ -14,8 +14,8 @@ import {
   resolveDefaultModel,
   resolveDefaultThinkingLevel,
 } from "./features/app-shell.js";
-import { BrowserPage } from "./features/browser-page.js";
 import { SettingsPage } from "./features/settings-page.js";
+import { PiConsolePanel } from "./features/pi-console-panel.js";
 import { SessionEmptyState, TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
 import {
   AutomationsPage,
@@ -32,14 +32,20 @@ export function App() {
   const queryClient = useQueryClient();
   const ui = useWorkspaceUi();
   const [appError, setAppError] = useState<string | null>(null);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleMounted, setConsoleMounted] = useState(false);
+  const [consoleCommandRequest, setConsoleCommandRequest] = useState<{ id: number; value: string } | null>(null);
+  const consoleCommandIdRef = useRef(0);
+  const consoleCloseTimerRef = useRef<number | null>(null);
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.piWork.settings.get() });
+  const buildInfo = useQuery({ queryKey: ["system-info"], queryFn: () => window.piWork.system.info() });
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: () => window.piWork.workspace.list() });
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => window.piWork.session.list() });
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => window.piWork.provider.list() });
   const models = useQuery({ queryKey: ["models"], queryFn: () => window.piWork.model.list() });
   const toolApprovals = useQuery({ queryKey: ["tool-approvals"], queryFn: () => window.piWork.chat.toolApprovals() });
   const language = settings.data?.language ?? "en";
-  const t = translator(language);
+  const t = useMemo(() => translator(language), [language]);
 
   const workspaceById = useMemo(
     () => new Map((workspaces.data ?? []).map((workspace) => [workspace.id, workspace])),
@@ -124,6 +130,9 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.platform = /Mac/.test(navigator.platform) ? "darwin" : "other";
   }, []);
+  useEffect(() => () => {
+    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
+  }, []);
   useEffect(() => window.piWork.chat.onToolApproval(() => {
     void queryClient.invalidateQueries({ queryKey: ["tool-approvals"] });
   }), [queryClient]);
@@ -134,26 +143,65 @@ export function App() {
         event.preventDefault();
         ui.setCommandOpen(true);
       }
-      if (command && event.key.toLocaleLowerCase() === "n") {
+      if (command && event.key.toLocaleLowerCase() === "j") {
+        event.preventDefault();
+        toggleConsole();
+      }
+      if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
         createNewItem();
       }
-      if (command && event.key.toLocaleLowerCase() === "b") {
+      if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "b") {
         event.preventDefault();
         toggleSidebar();
       }
-      if (command && event.key.toLocaleLowerCase() === "i" && selectedSession !== null) {
+      if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "i" && selectedSession !== null) {
         event.preventDefault();
         ui.toggleInspector();
       }
       if (event.key === "Escape") {
-        ui.setCommandOpen(false);
+        if (ui.commandOpen) {
+          ui.setCommandOpen(false);
+        } else if (consoleOpen) {
+          closeConsole();
+        } else if (ui.settingsOpen) {
+          ui.closeSettings();
+        }
         ui.setSidebarDrawerOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedSession, settings.data?.sidebarCollapsed, ui]);
+  }, [consoleOpen, selectedSession, settings.data?.sidebarCollapsed, ui]);
+
+  function openConsole(command: string | null = null) {
+    if (consoleCloseTimerRef.current !== null) {
+      window.clearTimeout(consoleCloseTimerRef.current);
+      consoleCloseTimerRef.current = null;
+    }
+    if (command !== null) {
+      consoleCommandIdRef.current += 1;
+      setConsoleCommandRequest({ id: consoleCommandIdRef.current, value: command });
+    }
+    setConsoleMounted(true);
+    window.requestAnimationFrame(() => setConsoleOpen(true));
+  }
+
+  function closeConsole() {
+    setConsoleOpen(false);
+    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
+    consoleCloseTimerRef.current = window.setTimeout(() => {
+      void window.piWork.piConsole.close();
+      setConsoleMounted(false);
+      setConsoleCommandRequest(null);
+      consoleCloseTimerRef.current = null;
+    }, 220);
+  }
+
+  function toggleConsole() {
+    if (consoleOpen) closeConsole();
+    else openConsole();
+  }
 
   async function refresh(): Promise<void> {
     await Promise.all([
@@ -260,17 +308,19 @@ export function App() {
   }
 
   const baseLoading = settings.isLoading
+    || buildInfo.isLoading
     || workspaces.isLoading
     || sessions.isLoading
     || providers.isLoading
     || models.isLoading
     || toolApprovals.isLoading;
-  const baseError = settings.error ?? workspaces.error ?? sessions.error ?? providers.error ?? models.error ?? toolApprovals.error;
+  const baseError = settings.error ?? buildInfo.error ?? workspaces.error ?? sessions.error ?? providers.error ?? models.error ?? toolApprovals.error;
   if (baseLoading) return <AppLoading t={t} />;
   if (baseError !== null) {
     return <AppFailure t={t} detail={errorMessage(baseError)} onRetry={() => {
       void Promise.all([
         settings.refetch(),
+        buildInfo.refetch(),
         workspaces.refetch(),
         sessions.refetch(),
         providers.refetch(),
@@ -279,7 +329,7 @@ export function App() {
       ]);
     }} />;
   }
-  if (settings.data === undefined) {
+  if (settings.data === undefined || buildInfo.data === undefined) {
     return <AppLoading t={t} />;
   }
 
@@ -294,35 +344,48 @@ export function App() {
   const resourceWorkspaceId = scopeWorkspace?.kind === "folder" ? scopeWorkspace.id : null;
   const appSettings = settings.data;
   const onboardingOpen = !appSettings.onboardingSkipped;
+  const consolePanel = consoleMounted ? (
+    <PiConsolePanel
+      commandRequest={consoleCommandRequest}
+      open={consoleOpen}
+      t={t}
+      onClose={closeConsole}
+    />
+  ) : null;
 
   return (
-    <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <a className="skip-link" href="#main-content">{t("work")}</a>
-      <TopBar
-        workspaceScope={ui.workspaceScope}
-        workspaces={workspaces.data ?? []}
-        t={t}
-        onWorkspaceScope={ui.setWorkspaceScope}
-        onAddWorkspace={() => void addWorkspace()}
-        onManageWorkspaces={() => showView("settings")}
-        onToggleSidebar={toggleSidebar}
-        onOpenSearch={() => ui.setCommandOpen(true)}
-        onNewTask={createNewItem}
-      />
-      <Sidebar
-        view={ui.view}
-        sessions={scopedSessions}
-        selectedTaskId={ui.selectedTaskId}
-        attentionIds={attentionIds}
-        isFolder={scopeWorkspace?.kind === "folder"}
-        collapsed={ui.sidebarCollapsed}
-        drawerOpen={ui.sidebarDrawerOpen}
-        t={t}
-        onView={showView}
-        onOpenTask={openSession}
-        onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
-      />
-      <main className="app-main" id="main-content">
+    <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}${consoleOpen && !ui.settingsOpen ? " pi-console-open" : ""}`}>
+      <div className="workspace-shell" inert={ui.settingsOpen ? true : undefined} aria-hidden={ui.settingsOpen || undefined}>
+        <a className="skip-link" href="#main-content">{t("work")}</a>
+        <TopBar
+          workspaceScope={ui.workspaceScope}
+          workspaces={workspaces.data ?? []}
+          t={t}
+          onWorkspaceScope={ui.setWorkspaceScope}
+          onAddWorkspace={() => void addWorkspace()}
+          onManageWorkspaces={() => ui.openSettings("workFolders")}
+          onToggleSidebar={toggleSidebar}
+          onOpenSearch={() => ui.setCommandOpen(true)}
+          onNewTask={createNewItem}
+          consoleOpen={consoleOpen}
+          onToggleConsole={toggleConsole}
+        />
+        <Sidebar
+          view={ui.view}
+          buildInfo={buildInfo.data}
+          sessions={scopedSessions}
+          selectedTaskId={ui.selectedTaskId}
+          attentionIds={attentionIds}
+          isFolder={scopeWorkspace?.kind === "folder"}
+          collapsed={ui.sidebarCollapsed}
+          drawerOpen={ui.sidebarDrawerOpen}
+          t={t}
+          onView={showView}
+          onOpenSettings={() => ui.openSettings()}
+          onOpenTask={openSession}
+          onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
+        />
+        <main className="app-main" id="main-content">
         {appError === null ? null : (
           <Alert className="app-notice">
             <AlertDescription>{appError}</AlertDescription>
@@ -392,27 +455,42 @@ export function App() {
         {ui.view === "sources" && resourceWorkspaceId !== null ? <SourcesPage workspaceId={resourceWorkspaceId} t={t} /> : null}
         {ui.view === "skills" && resourceWorkspaceId !== null ? <SkillsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
         {ui.view === "automations" && resourceWorkspaceId !== null ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
-        {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
-        {ui.view === "browser" ? <BrowserPage t={t} /> : null}
-        {ui.view === "settings" ? (
-          <SettingsPage
-            settings={appSettings}
-            workspaces={workspaces.data ?? []}
-            providers={providers.data ?? []}
-            models={models.data}
-            t={t}
-            onUpdate={updateSettings}
-            onAddWorkspace={addWorkspace}
-            onProvidersChanged={async () => {
-              await Promise.all([
-                queryClient.invalidateQueries({ queryKey: ["providers"] }),
-                queryClient.invalidateQueries({ queryKey: ["models"] }),
-              ]);
-            }}
-            onRestartOnboarding={() => updateSettings({ onboardingSkipped: false })}
-          />
-        ) : null}
-      </main>
+          {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
+        </main>
+        {!ui.settingsOpen ? consolePanel : null}
+      </div>
+      {ui.settingsOpen ? (
+        <SettingsPage
+          section={ui.settingsSection}
+          settings={appSettings}
+          buildInfo={buildInfo.data}
+          workspaces={workspaces.data ?? []}
+          providers={providers.data ?? []}
+          models={models.data}
+          t={t}
+          onSectionChange={ui.setSettingsSection}
+          onClose={ui.closeSettings}
+          onUpdate={updateSettings}
+          onAddWorkspace={addWorkspace}
+          onProvidersChanged={async () => {
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["providers"] }),
+              queryClient.invalidateQueries({ queryKey: ["models"] }),
+            ]);
+          }}
+          onModelsRefresh={async () => {
+            await Promise.all([
+              providers.refetch(),
+              models.refetch(),
+            ]);
+          }}
+          onRestartOnboarding={() => updateSettings({ onboardingSkipped: false })}
+          consoleOpen={consoleOpen}
+          consolePanel={consolePanel}
+          onOpenConsole={openConsole}
+          onToggleConsole={toggleConsole}
+        />
+      ) : null}
       <CommandPalette
         open={ui.commandOpen}
         workspaces={workspaces.data ?? []}
@@ -421,8 +499,9 @@ export function App() {
         onOpenChange={ui.setCommandOpen}
         onOpenTask={openSession}
         onOpenContext={openContext}
+        onOpenSettings={ui.openSettings}
       />
-      {ui.workspaceScope !== "personal" ? (
+      {!ui.settingsOpen && ui.workspaceScope !== "personal" ? (
         <NewTaskDialog
           open={ui.newTaskOpen}
           scope={ui.workspaceScope}
@@ -440,20 +519,22 @@ export function App() {
           }}
         />
       ) : null}
-      <OnboardingDialog
-        open={onboardingOpen}
-        settings={appSettings}
-        models={models.data}
-        workspaces={workspaces.data ?? []}
-        t={t}
-        onUpdateSettings={updateSettings}
-        onSaveProvider={async (providerId, apiKey) => {
-          await window.piWork.provider.save({ providerId, apiKey });
-          await queryClient.invalidateQueries({ queryKey: ["providers"] });
-        }}
-        onAddWorkspace={addWorkspace}
-        onFinish={() => updateSettings({ onboardingSkipped: true })}
-      />
+      {!ui.settingsOpen ? (
+        <OnboardingDialog
+          open={onboardingOpen}
+          settings={appSettings}
+          models={models.data}
+          workspaces={workspaces.data ?? []}
+          t={t}
+          onUpdateSettings={updateSettings}
+          onSaveProvider={async (providerId, apiKey) => {
+            await window.piWork.provider.save({ providerId, apiKey });
+            await queryClient.invalidateQueries({ queryKey: ["providers"] });
+          }}
+          onAddWorkspace={addWorkspace}
+          onFinish={() => updateSettings({ onboardingSkipped: true })}
+        />
+      ) : null}
     </div>
   );
 }
