@@ -177,11 +177,7 @@ export function Sidebar(props: {
                   aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
                   onClick={() => props.onOpenTask(session.id)}
                 >
-                  <span className={`task-state-dot state-${session.status}`} />
-                  <span>
-                    <strong>{session.title}</strong>
-                    <small>{session.kind === "task" ? props.t("task") : props.t("quickQuestion")}</small>
-                  </span>
+                  <strong>{session.title}</strong>
                   {session.flagged ? <Icon name="flag" size={14} /> : null}
                 </Button>
               ))}

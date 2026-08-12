@@ -115,7 +115,7 @@ function attachmentDescription(attachment: AttachmentDraft): string {
   return `${subtype} · ${formatBytes(attachment.size)}`;
 }
 
-export function visibleAssistantContent(content: string): string {
+export function visibleMessageContent(content: string): string {
   return content
     .replace(
       /(^|\n)Attached files:\s*\n(?:[ \t]*[-*]\s+\/[^\n]*(?:\n|$))+/gi,
@@ -208,7 +208,7 @@ function ComposerPermissionMenu(props: {
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8} className="composer-permission-menu">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>{props.t("confirmation")}</DropdownMenuLabel>
+          <DropdownMenuLabel className="composer-permission-label">{props.t("confirmation")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={props.permissionMode} onValueChange={(value) => props.onPermissionChange(value as PermissionMode)}>
             <PermissionModeOption
               mode="ask"
@@ -1151,15 +1151,13 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
     <div className="messages">
       {messages.map((message) => {
         const startsTurn = message.role === "user";
-        const assistantContent = message.role === "assistant"
-          ? visibleAssistantContent(message.content)
-          : message.content;
+        const visibleContent = visibleMessageContent(message.content);
         return (
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><HistoricalTools activities={activities.filter((activity) => activity.kind === "tool_result" && activity.messageId === message.id)} t={t} />{assistantContent !== "" ? <MarkdownMessage content={assistantContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
-                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} /><div className="message-user-content">{message.content}</div></>}
+                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><HistoricalTools activities={activities.filter((activity) => activity.kind === "tool_result" && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <MarkdownMessage content={visibleContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
+                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <div className="message-user-content">{visibleContent}</div> : null}</>}
             </article>
           </div>
         );
@@ -1239,13 +1237,13 @@ export function conversationTurns(messages: ChatMessage[]): ConversationTurn[] {
       turns.push({
         messageId: message.id,
         targetId: turnTargetId(message.id),
-        question: message.content.trim(),
+        question: visibleMessageContent(message.content).trim(),
         answer: null,
       });
       continue;
     }
     if (message.role !== "assistant" || turns.length === 0) continue;
-    const answer = visibleAssistantContent(message.content).trim();
+    const answer = visibleMessageContent(message.content).trim();
     if (answer !== "") turns[turns.length - 1]!.answer = answer;
   }
   return turns;
@@ -1363,7 +1361,17 @@ function turnLabel(t: T, turn: number): string {
 
 function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T }) {
   if (activities.length === 0) return null;
-  return <details className="thinking-block"><summary>{t("thoughtProcess")}</summary>{activities.map((activity) => <div className="thinking-content" key={activity.id}><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>)}</details>;
+  const preview = summarizeProcessValue(activities.at(-1)?.detail);
+  return (
+    <details className="thinking-block">
+      <summary>
+        <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
+        <span className="thinking-label">{t("thoughtProcess")}</span>
+        {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
+      </summary>
+      {activities.map((activity) => <div className="thinking-content" key={activity.id}><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>)}
+    </details>
+  );
 }
 
 function HistoricalTools({ activities, t }: { activities: Activity[]; t: T }) {
@@ -1379,7 +1387,11 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
     <div className="live-process">
       {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
         <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
-          <summary>{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</summary>
+          <summary>
+            <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
+            <span className="thinking-label">{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</span>
+            <span className="thinking-preview" title={summarizeProcessValue(thought.content)}>{summarizeProcessValue(thought.content)}</span>
+          </summary>
           <div className="thinking-content"><MarkdownMessage compact content={thought.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
         </details>
       ))}
@@ -1394,7 +1406,7 @@ function ToolProcessCard({ tool, t }: { tool: LiveTool; t: T }) {
   return (
     <details className={`tool-status ${tool.complete ? "is-complete" : "is-running"}${tool.failed ? " is-failed" : ""}`}>
       <summary>
-        <span className="tool-status-icon"><Icon name={toolIcon(tool.toolName)} size={14} /></span>
+        <span className="tool-status-icon"><Icon name={toolIcon(tool.toolName)} size={14} /><Icon name="chevron-down" size={14} className="tool-status-chevron" /></span>
         <span className="tool-status-copy">
           <span className="tool-status-heading">
             <code>{tool.toolName}</code>
@@ -1405,7 +1417,6 @@ function ToolProcessCard({ tool, t }: { tool: LiveTool; t: T }) {
           </span>
           {tool.detail ? <span className="tool-status-detail" title={tool.detail}>{tool.detail}</span> : null}
         </span>
-        <Icon name="chevron-down" size={14} className="tool-status-chevron" />
       </summary>
       <div className="tool-status-expanded">
         <ToolProcessSection label={t("activityToolCall")} value={tool.arguments} />

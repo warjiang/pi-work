@@ -9,21 +9,21 @@ import {
   toolFromActivity,
   toolPreview,
   turnHoverDistance,
-  visibleAssistantContent,
+  visibleMessageContent,
 } from "./task-workbench.js";
 
 const t = (key: string) => key;
 const empty = { thoughts: [], tools: [], notice: null };
 
 describe("live Pi process reducer", () => {
-  it("hides internal attached-file manifests from assistant content", () => {
-    expect(visibleAssistantContent(
+  it("hides internal attached-file manifests from conversation content", () => {
+    expect(visibleMessageContent(
       "Attached files:\n- /Users/me/clipboard-attachments/a.png\n\nI reviewed the image.",
     )).toBe("I reviewed the image.");
   });
 
   it("keeps regular assistant content untouched", () => {
-    expect(visibleAssistantContent("I reviewed the image.")).toBe("I reviewed the image.");
+    expect(visibleMessageContent("I reviewed the image.")).toBe("I reviewed the image.");
   });
 
   it("only follows the message stream while the scroller remains near its end", () => {
