@@ -30,7 +30,7 @@ export function SelectContent({ className, children, position = "popper", ...pro
       <SelectPrimitive.Content
         position={position}
         className={cn(
-          "z-50 max-h-72 min-w-[8rem] overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "z-[70] max-h-72 min-w-[8rem] overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           position === "popper" && "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
           className,
         )}

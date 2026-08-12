@@ -16,6 +16,7 @@ const piWork = {
   },
   system: {
     openExternal: (url: string) => ipcRenderer.invoke("system:open-external", { url }),
+    info: () => ipcRenderer.invoke("system:info"),
   },
   extension: {
     list: () => ipcRenderer.invoke("extension:list"),

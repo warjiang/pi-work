@@ -236,6 +236,13 @@ export const browserNavigateInputSchema = z.object({
   url: z.string().trim().min(1).max(8_192),
 });
 
+export const buildInfoSchema = z.object({
+  version: z.string(),
+  branch: z.string().nullable(),
+  commit: z.string().nullable(),
+});
+export type BuildInfo = z.infer<typeof buildInfoSchema>;
+
 export const externalUrlInputSchema = z.object({
   url: z.url({ protocol: /^https?$/ }).max(8_192),
 });

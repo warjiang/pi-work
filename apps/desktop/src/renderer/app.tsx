@@ -14,7 +14,6 @@ import {
   resolveDefaultModel,
   resolveDefaultThinkingLevel,
 } from "./features/app-shell.js";
-import { BrowserPage } from "./features/browser-page.js";
 import { SettingsPage } from "./features/settings-page.js";
 import { SessionEmptyState, TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
 import {
@@ -33,6 +32,7 @@ export function App() {
   const ui = useWorkspaceUi();
   const [appError, setAppError] = useState<string | null>(null);
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.piWork.settings.get() });
+  const buildInfo = useQuery({ queryKey: ["system-info"], queryFn: () => window.piWork.system.info() });
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: () => window.piWork.workspace.list() });
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => window.piWork.session.list() });
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => window.piWork.provider.list() });
@@ -134,20 +134,24 @@ export function App() {
         event.preventDefault();
         ui.setCommandOpen(true);
       }
-      if (command && event.key.toLocaleLowerCase() === "n") {
+      if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
         createNewItem();
       }
-      if (command && event.key.toLocaleLowerCase() === "b") {
+      if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "b") {
         event.preventDefault();
         toggleSidebar();
       }
-      if (command && event.key.toLocaleLowerCase() === "i" && selectedSession !== null) {
+      if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "i" && selectedSession !== null) {
         event.preventDefault();
         ui.toggleInspector();
       }
       if (event.key === "Escape") {
-        ui.setCommandOpen(false);
+        if (ui.commandOpen) {
+          ui.setCommandOpen(false);
+        } else if (ui.settingsOpen) {
+          ui.closeSettings();
+        }
         ui.setSidebarDrawerOpen(false);
       }
     };
@@ -260,17 +264,19 @@ export function App() {
   }
 
   const baseLoading = settings.isLoading
+    || buildInfo.isLoading
     || workspaces.isLoading
     || sessions.isLoading
     || providers.isLoading
     || models.isLoading
     || toolApprovals.isLoading;
-  const baseError = settings.error ?? workspaces.error ?? sessions.error ?? providers.error ?? models.error ?? toolApprovals.error;
+  const baseError = settings.error ?? buildInfo.error ?? workspaces.error ?? sessions.error ?? providers.error ?? models.error ?? toolApprovals.error;
   if (baseLoading) return <AppLoading t={t} />;
   if (baseError !== null) {
     return <AppFailure t={t} detail={errorMessage(baseError)} onRetry={() => {
       void Promise.all([
         settings.refetch(),
+        buildInfo.refetch(),
         workspaces.refetch(),
         sessions.refetch(),
         providers.refetch(),
@@ -279,7 +285,7 @@ export function App() {
       ]);
     }} />;
   }
-  if (settings.data === undefined) {
+  if (settings.data === undefined || buildInfo.data === undefined) {
     return <AppLoading t={t} />;
   }
 
@@ -297,32 +303,35 @@ export function App() {
 
   return (
     <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <a className="skip-link" href="#main-content">{t("work")}</a>
-      <TopBar
-        workspaceScope={ui.workspaceScope}
-        workspaces={workspaces.data ?? []}
-        t={t}
-        onWorkspaceScope={ui.setWorkspaceScope}
-        onAddWorkspace={() => void addWorkspace()}
-        onManageWorkspaces={() => showView("settings")}
-        onToggleSidebar={toggleSidebar}
-        onOpenSearch={() => ui.setCommandOpen(true)}
-        onNewTask={createNewItem}
-      />
-      <Sidebar
-        view={ui.view}
-        sessions={scopedSessions}
-        selectedTaskId={ui.selectedTaskId}
-        attentionIds={attentionIds}
-        isFolder={scopeWorkspace?.kind === "folder"}
-        collapsed={ui.sidebarCollapsed}
-        drawerOpen={ui.sidebarDrawerOpen}
-        t={t}
-        onView={showView}
-        onOpenTask={openSession}
-        onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
-      />
-      <main className="app-main" id="main-content">
+      <div className="workspace-shell" inert={ui.settingsOpen ? true : undefined} aria-hidden={ui.settingsOpen || undefined}>
+        <a className="skip-link" href="#main-content">{t("work")}</a>
+        <TopBar
+          workspaceScope={ui.workspaceScope}
+          workspaces={workspaces.data ?? []}
+          t={t}
+          onWorkspaceScope={ui.setWorkspaceScope}
+          onAddWorkspace={() => void addWorkspace()}
+          onManageWorkspaces={() => ui.openSettings("workFolders")}
+          onToggleSidebar={toggleSidebar}
+          onOpenSearch={() => ui.setCommandOpen(true)}
+          onNewTask={createNewItem}
+        />
+        <Sidebar
+          view={ui.view}
+          buildInfo={buildInfo.data}
+          sessions={scopedSessions}
+          selectedTaskId={ui.selectedTaskId}
+          attentionIds={attentionIds}
+          isFolder={scopeWorkspace?.kind === "folder"}
+          collapsed={ui.sidebarCollapsed}
+          drawerOpen={ui.sidebarDrawerOpen}
+          t={t}
+          onView={showView}
+          onOpenSettings={() => ui.openSettings()}
+          onOpenTask={openSession}
+          onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
+        />
+        <main className="app-main" id="main-content">
         {appError === null ? null : (
           <Alert className="app-notice">
             <AlertDescription>{appError}</AlertDescription>
@@ -392,27 +401,31 @@ export function App() {
         {ui.view === "sources" && resourceWorkspaceId !== null ? <SourcesPage workspaceId={resourceWorkspaceId} t={t} /> : null}
         {ui.view === "skills" && resourceWorkspaceId !== null ? <SkillsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
         {ui.view === "automations" && resourceWorkspaceId !== null ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
-        {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
-        {ui.view === "browser" ? <BrowserPage t={t} /> : null}
-        {ui.view === "settings" ? (
-          <SettingsPage
-            settings={appSettings}
-            workspaces={workspaces.data ?? []}
-            providers={providers.data ?? []}
-            models={models.data}
-            t={t}
-            onUpdate={updateSettings}
-            onAddWorkspace={addWorkspace}
-            onProvidersChanged={async () => {
-              await Promise.all([
-                queryClient.invalidateQueries({ queryKey: ["providers"] }),
-                queryClient.invalidateQueries({ queryKey: ["models"] }),
-              ]);
-            }}
-            onRestartOnboarding={() => updateSettings({ onboardingSkipped: false })}
-          />
-        ) : null}
-      </main>
+          {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
+        </main>
+      </div>
+      {ui.settingsOpen ? (
+        <SettingsPage
+          section={ui.settingsSection}
+          settings={appSettings}
+          buildInfo={buildInfo.data}
+          workspaces={workspaces.data ?? []}
+          providers={providers.data ?? []}
+          models={models.data}
+          t={t}
+          onSectionChange={ui.setSettingsSection}
+          onClose={ui.closeSettings}
+          onUpdate={updateSettings}
+          onAddWorkspace={addWorkspace}
+          onProvidersChanged={async () => {
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["providers"] }),
+              queryClient.invalidateQueries({ queryKey: ["models"] }),
+            ]);
+          }}
+          onRestartOnboarding={() => updateSettings({ onboardingSkipped: false })}
+        />
+      ) : null}
       <CommandPalette
         open={ui.commandOpen}
         workspaces={workspaces.data ?? []}
@@ -421,8 +434,9 @@ export function App() {
         onOpenChange={ui.setCommandOpen}
         onOpenTask={openSession}
         onOpenContext={openContext}
+        onOpenSettings={ui.openSettings}
       />
-      {ui.workspaceScope !== "personal" ? (
+      {!ui.settingsOpen && ui.workspaceScope !== "personal" ? (
         <NewTaskDialog
           open={ui.newTaskOpen}
           scope={ui.workspaceScope}
@@ -440,20 +454,22 @@ export function App() {
           }}
         />
       ) : null}
-      <OnboardingDialog
-        open={onboardingOpen}
-        settings={appSettings}
-        models={models.data}
-        workspaces={workspaces.data ?? []}
-        t={t}
-        onUpdateSettings={updateSettings}
-        onSaveProvider={async (providerId, apiKey) => {
-          await window.piWork.provider.save({ providerId, apiKey });
-          await queryClient.invalidateQueries({ queryKey: ["providers"] });
-        }}
-        onAddWorkspace={addWorkspace}
-        onFinish={() => updateSettings({ onboardingSkipped: true })}
-      />
+      {!ui.settingsOpen ? (
+        <OnboardingDialog
+          open={onboardingOpen}
+          settings={appSettings}
+          models={models.data}
+          workspaces={workspaces.data ?? []}
+          t={t}
+          onUpdateSettings={updateSettings}
+          onSaveProvider={async (providerId, apiKey) => {
+            await window.piWork.provider.save({ providerId, apiKey });
+            await queryClient.invalidateQueries({ queryKey: ["providers"] });
+          }}
+          onAddWorkspace={addWorkspace}
+          onFinish={() => updateSettings({ onboardingSkipped: true })}
+        />
+      ) : null}
     </div>
   );
 }

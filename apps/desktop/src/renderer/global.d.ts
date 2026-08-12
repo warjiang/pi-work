@@ -6,6 +6,7 @@ import type {
   AttachmentDraft,
   Automation,
   AgentMessage,
+  BuildInfo,
   ChatMessage,
   Conversation,
   ExtensionPackage,
@@ -40,6 +41,7 @@ declare global {
       };
       system: {
         openExternal(url: string): Promise<void>;
+        info(): Promise<BuildInfo>;
       };
       extension: {
         list(): Promise<ExtensionPackage[]>;

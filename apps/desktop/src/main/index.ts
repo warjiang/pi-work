@@ -38,6 +38,7 @@ import {
   automationSchema,
   browserBoundsInputSchema,
   browserNavigateInputSchema,
+  buildInfoSchema,
   createDomainEntityInputSchema,
   generatePlanInputSchema,
   completeTaskInputSchema,
@@ -1185,6 +1186,11 @@ function registerIpc(): void {
     const { url } = externalUrlInputSchema.parse(input);
     return shell.openExternal(url);
   });
+  ipcMain.handle("system:info", () => buildInfoSchema.parse({
+    version: app.getVersion(),
+    branch: __PI_WORK_GIT_BRANCH__,
+    commit: __PI_WORK_GIT_COMMIT__,
+  }));
   ipcMain.handle("browser:open", async (_event, input: unknown) => {
     const { url } = browserNavigateInputSchema.parse(input);
     const normalized = normalizeBrowserUrl(url);

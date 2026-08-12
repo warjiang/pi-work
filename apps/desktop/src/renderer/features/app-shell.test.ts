@@ -1,6 +1,7 @@
 import type { AppSettings, ModelCatalog, ModelOption, ProviderConfig } from "@pi-work/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  commandSettingItems,
   createNewSessionInput,
   resolveDefaultModel,
   resolveDefaultThinkingLevel,
@@ -76,5 +77,21 @@ describe("new session defaults", () => {
       modelId: "gpt-5",
       thinkingLevel: "medium",
     });
+  });
+});
+
+describe("command settings", () => {
+  it("links each search result to its exact settings section", () => {
+    expect(commandSettingItems.map(({ section }) => section)).toEqual([
+      "general",
+      "appearance",
+      "modelsCredentials",
+      "workFolders",
+      "permissions",
+      "extensions",
+      "browser",
+      "shortcuts",
+      "about",
+    ]);
   });
 });

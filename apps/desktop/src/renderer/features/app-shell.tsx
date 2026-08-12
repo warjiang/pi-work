@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import type {
   AppSettings,
+  BuildInfo,
   ModelCatalog,
   ModelOption,
   PermissionMode,
@@ -48,7 +49,7 @@ import { Switch } from "../components/ui/switch.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { thinkingLevelLabel } from "../i18n.js";
 import type { MessageKey } from "../i18n.js";
-import type { AppView, WorkspaceScope } from "../store.js";
+import type { AppView, SettingsSection, WorkspaceScope } from "../store.js";
 
 type T = (key: MessageKey) => string;
 
@@ -113,6 +114,7 @@ export function TopBar(props: {
 
 export function Sidebar(props: {
   view: AppView;
+  buildInfo: BuildInfo;
   sessions: Session[];
   selectedTaskId: string | null;
   attentionIds: Set<string>;
@@ -121,56 +123,69 @@ export function Sidebar(props: {
   drawerOpen: boolean;
   t: T;
   onView(view: AppView): void;
+  onOpenSettings(): void;
   onOpenTask(taskId: string): void;
   onCloseDrawer(): void;
 }) {
   const recent = props.sessions.filter(({ archived }) => !archived).slice(0, 14);
   const attentionCount = props.sessions.filter(({ id }) => props.attentionIds.has(id)).length;
   const completedCount = props.sessions.filter(({ status, archived }) => status === "completed" && !archived).length;
+  const version = props.buildInfo.version.startsWith("v") ? props.buildInfo.version : `v${props.buildInfo.version}`;
+  const buildSummary = props.buildInfo.commit?.slice(0, 7);
   return (
     <>
       {props.drawerOpen ? <Button variant="ghost" className="sidebar-backdrop" aria-label={props.t("close")} onClick={props.onCloseDrawer} /> : null}
       <aside className={`sidebar ${props.collapsed ? "is-collapsed" : ""} ${props.drawerOpen ? "is-open" : ""}`}>
-        <div className="sidebar-brand"><PiMark /><strong>{props.t("appName")}</strong></div>
-        <SidebarSection title={props.t("work")}>
-          <SidebarNavButton active={props.view === "inbox"} icon="inbox" label={props.t("inbox")} onClick={() => props.onView("inbox")} />
-          <SidebarNavButton active={props.view === "attention"} icon="alert" label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
-          <SidebarNavButton active={props.view === "completed"} icon="check-circle" label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
-          {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon="folder-kanban" label={props.t("board")} onClick={() => props.onView("board")} /> : null}
-        </SidebarSection>
-        <SidebarSection className="recent-section" title={props.t("recentTasks")} count={recent.length}>
-          <div className="recent-task-list">
-            {recent.map((session) => (
-              <Button
-                variant="ghost"
-                className={`recent-task ${props.view === "inbox" && props.selectedTaskId === session.id ? "selected" : ""}`}
-                key={session.id}
-                aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
-                onClick={() => props.onOpenTask(session.id)}
-              >
-                <span className={`task-state-dot state-${session.status}`} />
-                <span>
-                  <strong>{session.title}</strong>
-                  <small>{session.kind === "task" ? props.t("task") : props.t("quickQuestion")}</small>
-                </span>
-                {session.flagged ? <Icon name="flag" size={14} /> : null}
-              </Button>
-            ))}
-            {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
-          </div>
-        </SidebarSection>
-        {props.isFolder ? (
-          <SidebarSection title={props.t("library")}>
-            <SidebarNavButton active={props.view === "sources"} icon="source" label={props.t("sources")} onClick={() => props.onView("sources")} />
-            <SidebarNavButton active={props.view === "skills"} icon="skills" label={props.t("skills")} onClick={() => props.onView("skills")} />
-            <SidebarNavButton active={props.view === "automations"} icon="list-todo" label={props.t("automations")} onClick={() => props.onView("automations")} />
-            <SidebarNavButton active={props.view === "folder-settings"} icon="settings" label={props.t("folderSettings")} onClick={() => props.onView("folder-settings")} />
+        <div className="sidebar-body">
+          <div className="sidebar-brand"><PiMark /><strong>{props.t("appName")}</strong></div>
+          <SidebarSection title={props.t("work")}>
+            <SidebarNavButton active={props.view === "inbox"} icon="inbox" label={props.t("inbox")} onClick={() => props.onView("inbox")} />
+            <SidebarNavButton active={props.view === "attention"} icon="alert" label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
+            <SidebarNavButton active={props.view === "completed"} icon="check-circle" label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
+            {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon="folder-kanban" label={props.t("board")} onClick={() => props.onView("board")} /> : null}
           </SidebarSection>
-        ) : null}
-        <SidebarSection title={props.t("tools")}>
-          <SidebarNavButton active={props.view === "browser"} icon="browser" label={props.t("browser")} onClick={() => props.onView("browser")} />
-          <SidebarNavButton active={props.view === "settings"} icon="settings" label={props.t("settings")} onClick={() => props.onView("settings")} />
-        </SidebarSection>
+          <SidebarSection className="recent-section" title={props.t("recentTasks")} count={recent.length}>
+            <div className="recent-task-list">
+              {recent.map((session) => (
+                <Button
+                  variant="ghost"
+                  className={`recent-task ${props.view === "inbox" && props.selectedTaskId === session.id ? "selected" : ""}`}
+                  key={session.id}
+                  aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
+                  onClick={() => props.onOpenTask(session.id)}
+                >
+                  <span className={`task-state-dot state-${session.status}`} />
+                  <span>
+                    <strong>{session.title}</strong>
+                    <small>{session.kind === "task" ? props.t("task") : props.t("quickQuestion")}</small>
+                  </span>
+                  {session.flagged ? <Icon name="flag" size={14} /> : null}
+                </Button>
+              ))}
+              {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
+            </div>
+          </SidebarSection>
+          {props.isFolder ? (
+            <SidebarSection title={props.t("library")}>
+              <SidebarNavButton active={props.view === "sources"} icon="source" label={props.t("sources")} onClick={() => props.onView("sources")} />
+              <SidebarNavButton active={props.view === "skills"} icon="skills" label={props.t("skills")} onClick={() => props.onView("skills")} />
+              <SidebarNavButton active={props.view === "automations"} icon="list-todo" label={props.t("automations")} onClick={() => props.onView("automations")} />
+              <SidebarNavButton active={props.view === "folder-settings"} icon="settings" label={props.t("folderSettings")} onClick={() => props.onView("folder-settings")} />
+            </SidebarSection>
+          ) : null}
+        </div>
+        <footer className="sidebar-footer">
+          <Button variant="ghost" className="sidebar-settings-button" onClick={props.onOpenSettings}>
+            <Icon name="settings" />
+            <strong>{props.t("settings")}</strong>
+            <span
+              className="sidebar-settings-version"
+              title={buildSummary ? `${version} · ${props.buildInfo.commit}` : version}
+            >
+              {buildSummary ? `${version} · ${buildSummary}` : version}
+            </span>
+          </Button>
+        </footer>
       </aside>
     </>
   );
@@ -204,6 +219,18 @@ type SearchItem = {
   action(): void;
 };
 
+export const commandSettingItems: ReadonlyArray<{ section: SettingsSection; key: MessageKey }> = [
+  { section: "general", key: "general" },
+  { section: "appearance", key: "appearance" },
+  { section: "modelsCredentials", key: "modelsCredentials" },
+  { section: "workFolders", key: "workFolders" },
+  { section: "permissions", key: "permissions" },
+  { section: "extensions", key: "extensions" },
+  { section: "browser", key: "browser" },
+  { section: "shortcuts", key: "shortcuts" },
+  { section: "about", key: "about" },
+];
+
 export function CommandPalette(props: {
   open: boolean;
   workspaces: Workspace[];
@@ -212,6 +239,7 @@ export function CommandPalette(props: {
   onOpenChange(open: boolean): void;
   onOpenTask(taskId: string): void;
   onOpenContext(scope: WorkspaceScope, view: AppView): void;
+  onOpenSettings(section: SettingsSection): void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -269,23 +297,15 @@ export function CommandPalette(props: {
       (sourceQueries[index]?.data ?? []).forEach((source) => addResource(source, workspace, "sources"));
       (skillQueries[index]?.data ?? []).forEach((skill) => addResource(skill, workspace, "skills"));
     });
-    const settings = [
-      ["modelsCredentials", "settings"] as const,
-      ["workFolders", "settings"] as const,
-      ["permissions", "settings"] as const,
-      ["appearance", "settings"] as const,
-      ["extensions", "settings"] as const,
-      ["shortcuts", "settings"] as const,
-    ];
-    settings.forEach(([key]) => {
+    commandSettingItems.forEach(({ section, key }) => {
       if (normalized === "" || !props.t(key).toLocaleLowerCase().includes(normalized)) return;
       result.push({
-        id: `settings:${key}`,
+        id: `settings:${section}`,
         group: "settings",
         title: props.t(key),
         detail: props.t("settings"),
         icon: "settings",
-        action: () => props.onOpenContext("personal", "settings"),
+        action: () => props.onOpenSettings(section),
       });
     });
     return result.slice(0, 28);
