@@ -4417,6 +4417,10 @@ details pre {
   width: min(540px, calc(100% - 40px));
 }
 
+.onboarding-dialog :is(h2, label, button, strong) {
+  font-weight: 400;
+}
+
 .onboarding-progress {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
