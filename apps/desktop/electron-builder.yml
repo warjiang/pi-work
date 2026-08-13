@@ -25,6 +25,11 @@ extraResources:
       - "**/*"
 mac:
   icon: icons/generated/mac/icon.icns
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  notarize: true
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
   target:
     - dmg
     - zip
