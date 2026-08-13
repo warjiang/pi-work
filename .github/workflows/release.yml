@@ -11,6 +11,11 @@ on:
         required: true
         default: true
         type: boolean
+      publish:
+        description: Create the GitHub Release after signed verification
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -121,7 +126,17 @@ jobs:
           hdiutil verify "$dmg_path"
           unzip -tq "$zip_path"
           pnpm --filter @pi-work/desktop verify:pi-runtime
+      - name: Upload signed dry-run artifacts
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-work-signed-macos
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+          if-no-files-found: error
       - name: Resolve release tag
+        if: github.event_name == 'push' || inputs.publish
         id: release
         shell: bash
         run: |
@@ -132,6 +147,7 @@ jobs:
             echo "tag=v$version" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish GitHub release
+        if: github.event_name == 'push' || inputs.publish
         run: gh release create "${{ steps.release.outputs.tag }}" apps/desktop/release/*.{dmg,zip} --target "$GITHUB_SHA" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
