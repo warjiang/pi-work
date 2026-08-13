@@ -5,6 +5,7 @@ import {
   conversationTurns,
   isNearBottom,
   orderedProcessActivities,
+  processSummary,
   reduceLiveProcess,
   summarizeProcessValue,
   toolFromActivity,
@@ -158,6 +159,21 @@ describe("live Pi process reducer", () => {
       "00000000-0000-4000-8000-000000000002",
       "00000000-0000-4000-8000-000000000001",
     ]);
+  });
+
+  it("summarizes completed process activity without competing with the result", () => {
+    const summaryT = (key: string) => ({
+      toolCall: "tool call",
+      toolCalls: "tool calls",
+      thoughtSegment: "thought",
+      thoughtSegments: "thoughts",
+      processSummarySeparator: ", ",
+    })[key] ?? key;
+    expect(processSummary(4, 2, summaryT)).toBe("4 tool calls, 2 thoughts");
+    expect(processSummary(1, 1, summaryT)).toBe("1 tool call, 1 thought");
+    expect(processSummary(1, 2, summaryT)).toBe("1 tool call, 2 thoughts");
+    expect(processSummary(2, 1, summaryT)).toBe("2 tool calls, 1 thought");
+    expect(processSummary(3, 0, summaryT)).toBe("3 tool calls");
   });
 
   it("does not create a thinking block when no thinking events arrive", () => {
