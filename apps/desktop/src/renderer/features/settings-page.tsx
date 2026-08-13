@@ -632,42 +632,54 @@ function ExtensionSettings({
     </Dialog>
 
     <Dialog open={selectedExtension !== null} onOpenChange={(open) => !open && setSelectedExtension(null)}>
-      {selectedExtension ? <DialogContent className="extension-store-drawer">
-        <div className="extension-drawer-body">
+      {selectedExtension ? <DialogContent className="extension-detail-dialog">
+        <div className="extension-detail-body">
           <DialogHeader>
-            <div className="extension-drawer-heading">
-              <ExtensionIcon extension={selectedExtension} />
-              <div><small>{t(`extensionCategory${capitalize(selectedExtension.category)}` as MessageKey)}</small><DialogTitle>{selectedExtension.name[language]}</DialogTitle></div>
+            <div className="extension-detail-topline">
+              <div className="extension-detail-heading">
+                <ExtensionIcon extension={selectedExtension} />
+                <div><small>{t(`extensionCategory${capitalize(selectedExtension.category)}` as MessageKey)}</small><DialogTitle>{selectedExtension.name[language]}</DialogTitle></div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="extension-directory-link"
+                aria-label={t("viewOnPiDirectory")}
+                title={t("viewOnPiDirectory")}
+                onClick={() => void window.piWork.system.openExternal(selectedExtension.officialUrl)}
+              >
+                <Icon name="external" />
+              </Button>
             </div>
             <DialogDescription>{selectedExtension.description[language]}</DialogDescription>
           </DialogHeader>
-          <dl className="extension-drawer-meta">
+          <dl className="extension-detail-meta">
             <div><dt>{t("package")}</dt><dd><code>{selectedExtension.packageName}</code></dd></div>
             <div><dt>{t("author")}</dt><dd>{selectedExtension.author}</dd></div>
             <div><dt>{t("installSource")}</dt><dd><code>{selectedExtension.source}</code></dd></div>
           </dl>
           <div className="extension-security-note"><Icon name="alert" /><p>{t("extensionSecurityNote")}</p></div>
         </div>
-        <DialogFooter className="extension-drawer-actions">
-          <Button variant="link" onClick={() => void window.piWork.system.openExternal(selectedExtension.officialUrl)}><Icon name="external" />{t("viewOnPiDirectory")}</Button>
-          <Button variant="outline" onClick={() => {
-            const command = selectedExtension.id.includes("newapi") ? "/newapi-provider-add " : null;
-            setSelectedExtension(null);
-            onOpenConsole(command);
-          }}><Icon name="terminal" />{t("setUpInPiConsole")}</Button>
-          {isInstalled(selectedExtension)
-            ? <Button variant="destructive" disabled={remove.isPending} onClick={() => {
-              const installedSource = installedSourceFor(selectedExtension);
-              if (installedSource) requestRemove(installedSource);
-            }}>{remove.isPending ? <><Spinner />{t("uninstallingExtension")}</> : <><Icon name="trash" size={14} />{t("removeExtension")}</>}</Button>
-            : <Button disabled={install.isPending} onClick={() => requestInstall(selectedExtension)}>{isInstalling(selectedExtension.source) ? <><Spinner />{t("installingExtension")}</> : t("installExtension")}</Button>}
-          <DialogClose asChild><Button variant="ghost">{t("close")}</Button></DialogClose>
+        <DialogFooter className="extension-detail-actions">
+          <div className="extension-detail-primary-actions">
+            <Button variant="outline" size="sm" onClick={() => {
+              const command = selectedExtension.id.includes("newapi") ? "/newapi-provider-add " : null;
+              setSelectedExtension(null);
+              onOpenConsole(command);
+            }}><Icon name="terminal" />{t("setUpInPiConsole")}</Button>
+            {isInstalled(selectedExtension)
+              ? <Button variant="destructive" size="sm" disabled={remove.isPending} onClick={() => {
+                const installedSource = installedSourceFor(selectedExtension);
+                if (installedSource) requestRemove(installedSource);
+              }}>{remove.isPending ? <><Spinner />{t("uninstallingExtension")}</> : <><Icon name="trash" size={14} />{t("removeExtension")}</>}</Button>
+              : <Button size="sm" disabled={install.isPending} onClick={() => requestInstall(selectedExtension)}>{isInstalling(selectedExtension.source) ? <><Spinner />{t("installingExtension")}</> : t("installExtension")}</Button>}
+          </div>
         </DialogFooter>
       </DialogContent> : null}
     </Dialog>
 
     <AlertDialog open={pendingInstall !== null} onOpenChange={(open) => !open && setPendingInstall(null)}>
-      <AlertDialogContent>
+      <AlertDialogContent className="settings-confirm-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle>{t("installExtensionConfirmTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("installExtensionConfirmDetail")}</AlertDialogDescription>

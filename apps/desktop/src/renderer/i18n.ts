@@ -133,7 +133,7 @@ const messages = {
     activityError: "Error",
     activityNotice: "Notice",
     thinkingInProgress: "Thinking",
-    thoughtProcess: "Thought process",
+    thoughtProcess: "Thinking",
     responseStreaming: "Writing response",
     responseComplete: "Response complete",
     runCancelled: "Run cancelled",

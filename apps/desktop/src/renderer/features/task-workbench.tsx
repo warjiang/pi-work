@@ -78,7 +78,7 @@ import type { MessageKey } from "../i18n.js";
 import type { InspectorTab } from "../store.js";
 
 type T = (key: MessageKey) => string;
-type LiveThought = { contentIndex: number; content: string; complete: boolean };
+type LiveThought = { segmentId: number; contentIndex: number; content: string; complete: boolean };
 type LiveTool = {
   toolCallId: string;
   toolName: string;
@@ -88,7 +88,15 @@ type LiveTool = {
   complete: boolean;
   failed: boolean;
 };
-type LiveProcess = { thoughts: LiveThought[]; tools: LiveTool[]; notice: string | null };
+type LiveProcessItem =
+  | { kind: "thinking"; segmentId: number }
+  | { kind: "tool"; toolCallId: string };
+type LiveProcess = {
+  thoughts: LiveThought[];
+  tools: LiveTool[];
+  timeline: LiveProcessItem[];
+  notice: string | null;
+};
 type ConversationTurn = {
   messageId: string;
   targetId: string;
@@ -456,7 +464,7 @@ export function TaskWorkbench(props: {
   const [input, setInput] = useState(() => localStorage.getItem(draftKey) ?? "");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [streamed, setStreamed] = useState("");
-  const [liveProcess, setLiveProcess] = useState<LiveProcess>({ thoughts: [], tools: [], notice: null });
+  const [liveProcess, setLiveProcess] = useState<LiveProcess>({ thoughts: [], tools: [], timeline: [], notice: null });
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -591,7 +599,7 @@ export function TaskWorkbench(props: {
     mutationFn: (content: string) => {
       clearStream();
       setRunNotice(null);
-      setLiveProcess({ thoughts: [], tools: [], notice: null });
+      setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
       if (providerId === "" || modelId === "") throw new Error(props.t("configureModel"));
       return window.piWork.chat.send({
         workspaceId: props.workspace?.id ?? null,
@@ -619,7 +627,7 @@ export function TaskWorkbench(props: {
     onError: (cause: Error) => {
       setPendingPrompt(null);
       clearStream();
-      setLiveProcess({ thoughts: [], tools: [], notice: null });
+      setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
       setError(cause.message);
     },
   });
@@ -1156,7 +1164,7 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} /><HistoricalTools activities={activities.filter((activity) => activity.kind === "tool_result" && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <MarkdownMessage content={visibleContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
+                ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <MarkdownMessage content={visibleContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
                 : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <div className="message-user-content">{visibleContent}</div> : null}</>}
             </article>
           </div>
@@ -1359,43 +1367,66 @@ function turnLabel(t: T, turn: number): string {
   return t("turn") === "第" ? `第 ${turn} 轮` : `${t("turn")} ${turn}`;
 }
 
-function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T }) {
-  if (activities.length === 0) return null;
-  const preview = summarizeProcessValue(activities.at(-1)?.detail);
+export function orderedProcessActivities(activities: Activity[]): Activity[] {
+  return [...activities].sort((left, right) => {
+    const leftSequence = typeof left.metadata.sequence === "number" ? left.metadata.sequence : null;
+    const rightSequence = typeof right.metadata.sequence === "number" ? right.metadata.sequence : null;
+    if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) return leftSequence - rightSequence;
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+}
+
+function HistoricalProcess({ activities, t }: { activities: Activity[]; t: T }) {
   return (
-    <details className="thinking-block">
-      <summary>
-        <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
-        <span className="thinking-label">{t("thoughtProcess")}</span>
-        {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
-      </summary>
-      {activities.map((activity) => <div className="thinking-content" key={activity.id}><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>)}
-    </details>
+    <>
+      {orderedProcessActivities(activities).map((activity) => (
+        activity.kind === "thinking"
+          ? <ThoughtProcessCard activity={activity} key={activity.id} t={t} />
+          : <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />
+      ))}
+    </>
   );
 }
 
-function HistoricalTools({ activities, t }: { activities: Activity[]; t: T }) {
+function ThoughtProcessCard({ activity, t, open = false, label }: {
+  activity: Pick<Activity, "id" | "detail">;
+  t: T;
+  open?: boolean;
+  label?: string;
+}) {
+  const preview = summarizeProcessValue(activity.detail);
   return (
-    <>
-      {activities.map((activity) => <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />)}
-    </>
+    <details className="thinking-block" open={open}>
+      <summary>
+        <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
+        <span className="thinking-label">{label ?? t("thoughtProcess")}</span>
+        {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
+      </summary>
+      <div className="thinking-content"><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
+    </details>
   );
 }
 
 function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
   return (
     <div className="live-process">
-      {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
-        <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
-          <summary>
-            <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
-            <span className="thinking-label">{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</span>
-            <span className="thinking-preview" title={summarizeProcessValue(thought.content)}>{summarizeProcessValue(thought.content)}</span>
-          </summary>
-          <div className="thinking-content"><MarkdownMessage compact content={thought.content} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
-        </details>
-      ))}
-      {process.tools.map((tool) => <ToolProcessCard key={tool.toolCallId} tool={tool} t={t} />)}
+      {process.timeline.map((item) => {
+        if (item.kind === "thinking") {
+          const thought = process.thoughts.find(({ segmentId }) => segmentId === item.segmentId);
+          if (thought === undefined || thought.content.trim() === "") return null;
+          return (
+            <ThoughtProcessCard
+              activity={{ id: String(thought.segmentId), detail: thought.content }}
+              key={`thinking-${thought.segmentId}`}
+              t={t}
+              open={!thought.complete}
+              label={thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}
+            />
+          );
+        }
+        const tool = process.tools.find(({ toolCallId }) => toolCallId === item.toolCallId);
+        return tool === undefined ? null : <ToolProcessCard key={`tool-${tool.toolCallId}`} tool={tool} t={t} />;
+      })}
       {process.notice ? <div className="process-notice">{process.notice}</div> : null}
     </div>
   );
@@ -1452,20 +1483,46 @@ export function toolFromActivity(activity: Pick<Activity, "id" | "title" | "deta
 export function reduceLiveProcess(current: LiveProcess, kind: string, payload: Record<string, unknown>, t: T): LiveProcess {
   if (kind === "thinking") {
     const contentIndex = typeof payload.contentIndex === "number" ? payload.contentIndex : 0;
-    const thought = current.thoughts.find((item) => item.contentIndex === contentIndex);
-    if (payload.phase === "start") return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { contentIndex, content: "", complete: false }] };
+    const thought = current.thoughts.findLast((item) => item.contentIndex === contentIndex && !item.complete);
+    if (payload.phase === "start") {
+      const segmentId = nextThoughtSegmentId(current.thoughts);
+      return {
+        ...current,
+        timeline: [...current.timeline, { kind: "thinking", segmentId }],
+        thoughts: [...current.thoughts, { segmentId, contentIndex, content: "", complete: false }],
+      };
+    }
     if (payload.phase === "delta" && typeof payload.delta === "string") {
-      const next = thought ?? { contentIndex, content: "", complete: false };
-      return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { ...next, content: `${next.content}${payload.delta}` }] };
+      const next = thought ?? {
+        segmentId: nextThoughtSegmentId(current.thoughts),
+        contentIndex,
+        content: "",
+        complete: false,
+      };
+      return {
+        ...current,
+        timeline: thought === undefined ? [...current.timeline, { kind: "thinking", segmentId: next.segmentId }] : current.timeline,
+        thoughts: [...current.thoughts.filter((item) => item.segmentId !== next.segmentId), { ...next, content: `${next.content}${payload.delta}` }],
+      };
     }
     if (payload.phase === "end") {
-      const next = thought ?? { contentIndex, content: "", complete: false };
+      const next = thought ?? {
+        segmentId: nextThoughtSegmentId(current.thoughts),
+        contentIndex,
+        content: "",
+        complete: false,
+      };
       const content = typeof payload.content === "string" ? payload.content : next.content;
-      return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { ...next, content, complete: true }] };
+      return {
+        ...current,
+        timeline: thought === undefined ? [...current.timeline, { kind: "thinking", segmentId: next.segmentId }] : current.timeline,
+        thoughts: [...current.thoughts.filter((item) => item.segmentId !== next.segmentId), { ...next, content, complete: true }],
+      };
     }
   }
   if (kind === "tool_call" && typeof payload.toolCallId === "string") return {
     ...current,
+    timeline: appendLiveProcessItem(current.timeline, { kind: "tool", toolCallId: payload.toolCallId }),
     tools: [...current.tools.filter((tool) => tool.toolCallId !== payload.toolCallId), {
       toolCallId: payload.toolCallId,
       toolName: String(payload.toolName ?? "tool"),
@@ -1491,6 +1548,7 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
     const detail = summarizeProcessValue(output);
     return {
       ...current,
+      timeline: appendLiveProcessItem(current.timeline, { kind: "tool", toolCallId: payload.toolCallId }),
       tools: [...current.tools.filter((item) => item.toolCallId !== payload.toolCallId), {
         ...tool,
         toolName: String(payload.toolName ?? tool.toolName),
@@ -1516,6 +1574,23 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
     return notice === null ? current : { ...current, notice };
   }
   return current;
+}
+
+function appendLiveProcessItem(items: LiveProcessItem[], next: LiveProcessItem): LiveProcessItem[] {
+  const exists = items.some((item) => {
+    if (item.kind === "thinking" && next.kind === "thinking") {
+      return item.segmentId === next.segmentId;
+    }
+    if (item.kind === "tool" && next.kind === "tool") {
+      return item.toolCallId === next.toolCallId;
+    }
+    return false;
+  });
+  return exists ? items : [...items, next];
+}
+
+function nextThoughtSegmentId(thoughts: LiveThought[]): number {
+  return thoughts.reduce((highest, thought) => Math.max(highest, thought.segmentId), -1) + 1;
 }
 
 function toolIcon(toolName: string) {
