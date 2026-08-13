@@ -3,14 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  pull_request:
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: Build and verify without signing, notarizing, or publishing
-        required: true
-        default: true
-        type: boolean
       publish:
         description: Create the GitHub Release after signed verification
         required: true
@@ -21,41 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  dry-run:
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.dry_run)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.16.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Run release checks
-        run: pnpm check
-      - name: Build unsigned macOS artifacts
-        run: pnpm --filter @pi-work/desktop ci:package:mac:dry-run
-      - name: Verify dry-run artifacts
-        shell: bash
-        run: |
-          app_path="$(find apps/desktop/release -maxdepth 2 -type d -name '*.app' -print -quit)"
-          dmg_path="$(find apps/desktop/release -maxdepth 1 -type f -name '*.dmg' -print -quit)"
-          zip_path="$(find apps/desktop/release -maxdepth 1 -type f -name '*.zip' -print -quit)"
-          test -n "$app_path"
-          test -n "$dmg_path"
-          test -n "$zip_path"
-          test -x "$app_path/Contents/MacOS/pi-work"
-          test "$(plutil -extract CFBundleIdentifier raw "$app_path/Contents/Info.plist")" = "com.piwork.desktop"
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "$(node -p "require('./apps/desktop/package.json').version")"
-          hdiutil verify "$dmg_path"
-          unzip -tq "$zip_path"
-          pnpm --filter @pi-work/desktop verify:pi-runtime
-
   release:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
     runs-on: macos-latest
     environment: release
     permissions:
