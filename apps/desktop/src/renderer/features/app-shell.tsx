@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import type {
@@ -25,14 +25,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.js";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
 import { Icon } from "@/components/ui/icon.js";
 import type { IconName } from "@/components/ui/icon.js";
@@ -49,6 +41,12 @@ import { Switch } from "@/components/ui/switch.js";
 import { Textarea } from "@/components/ui/textarea.js";
 import { thinkingLevelLabel } from "@/i18n.js";
 import type { MessageKey } from "@/i18n.js";
+import {
+  clampSidebarWidth,
+  defaultSidebarWidth,
+  maximumSidebarWidth,
+  minimumSidebarWidth,
+} from "@/sidebar-layout.js";
 import type { AppView, SettingsSection, WorkspaceScope } from "@/store.js";
 
 type T = (key: MessageKey) => string;
@@ -67,13 +65,9 @@ export const workspaceSidebarIcons = {
 export function TopBar(props: {
   workspaceScope: WorkspaceScope;
   workspaces: Workspace[];
+  sessionTitle?: string;
   t: T;
-  onWorkspaceScope(scope: WorkspaceScope): void;
-  onAddWorkspace(): void;
-  onManageWorkspaces(): void;
   onToggleSidebar(): void;
-  onOpenSearch(): void;
-  onNewTask(): void;
   consoleOpen: boolean;
   onToggleConsole(): void;
 }) {
@@ -86,42 +80,18 @@ export function TopBar(props: {
         <Button variant="ghost" size="icon" className="topbar-menu" aria-label={props.t("toggleSidebar")} onClick={props.onToggleSidebar}>
           <Icon name="panel" />
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="workspace-switcher">
-              <span>{scopeLabel}</span>
-              <Icon name="chevron-down" size={14} />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="workspace-menu">
-            <DropdownMenuGroup>
-              <DropdownMenuItem onSelect={() => props.onWorkspaceScope("personal")}><Icon name="lock" />{props.t("personal")}</DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <div className="menu-label">{props.t("authorizedFolders")}</div>
-            <DropdownMenuGroup>
-              {props.workspaces.filter(({ kind }) => kind === "folder").map((workspace) => (
-                <DropdownMenuItem key={workspace.id} onSelect={() => props.onWorkspaceScope(workspace.id)}>
-                  <Icon name="workspace" />
-                  <span className="menu-item-copy">{workspace.name}</span>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuItem onSelect={props.onAddWorkspace}><Icon name="folder-plus" />{props.t("addWorkFolder")}</DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={props.onManageWorkspaces}><Icon name="settings" />{props.t("manageWorkspaces")}</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
-      <Button variant="outline" className="search-trigger" onClick={props.onOpenSearch}>
-        <Icon name="search" />
-        <span>{props.t("globalSearch")}</span>
-        <span className="search-shortcut" aria-hidden="true">
-          <kbd>⌘</kbd>
-          <span>+</span>
-          <kbd>K</kbd>
-        </span>
-      </Button>
+      <div className="topbar-context">
+        {props.sessionTitle !== undefined ? (
+          <>
+            {!personal ? <Icon name="workspace" size={14} /> : null}
+            <h1 title={props.sessionTitle}>{props.sessionTitle}</h1>
+          </>
+        ) : !personal ? (
+          <div className="workspace-switcher"><span>{scopeLabel}</span></div>
+        ) : null}
+        <div className="topbar-task-actions" id="topbar-task-actions" />
+      </div>
       <div className="topbar-trailing">
         <Button
           variant="ghost"
@@ -133,7 +103,6 @@ export function TopBar(props: {
         >
           <Icon name="terminal" />
         </Button>
-        <Button className="topbar-new-task" onClick={props.onNewTask}><Icon name="plus" size={14} />{personal ? props.t("newSession") : props.t("newTask")}</Button>
       </div>
     </header>
   );
@@ -151,13 +120,23 @@ export function Sidebar(props: {
   isFolder: boolean;
   collapsed: boolean;
   drawerOpen: boolean;
+  width: number;
   t: T;
+  onNewTask(): void;
   onView(view: AppView): void;
   onWorkspaceScope(scope: WorkspaceScope): void;
   onOpenSettings(): void;
   onOpenTask(taskId: string): void;
   onCloseDrawer(): void;
+  onResize(width: number, commit: boolean): void;
 }) {
+  const resizeState = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    latestWidth: number;
+  } | null>(null);
+  const [resizing, setResizing] = useState(false);
   const recent = props.sessions.filter(({ archived }) => !archived).slice(0, 14);
   const personalRecent = props.personalSessions.filter(({ archived }) => !archived).slice(0, 14);
   const folders = props.workspaces.filter(({ kind }) => kind === "folder");
@@ -165,12 +144,31 @@ export function Sidebar(props: {
   const completedCount = props.sessions.filter(({ status, archived }) => status === "completed" && !archived).length;
   const version = props.buildInfo.version.startsWith("v") ? props.buildInfo.version : `v${props.buildInfo.version}`;
   const buildSummary = props.buildInfo.commit?.slice(0, 7);
+  useEffect(() => {
+    document.documentElement.dataset.sidebarResizing = String(resizing);
+    return () => {
+      delete document.documentElement.dataset.sidebarResizing;
+    };
+  }, [resizing]);
+
+  const finishResize = (pointerId: number): void => {
+    const state = resizeState.current;
+    if (state === null || state.pointerId !== pointerId) return;
+    resizeState.current = null;
+    setResizing(false);
+    props.onResize(state.latestWidth, true);
+  };
+
   return (
     <>
       {props.drawerOpen ? <Button variant="ghost" className="sidebar-backdrop" aria-label={props.t("close")} onClick={props.onCloseDrawer} /> : null}
       <aside className={`sidebar ${props.collapsed ? "is-collapsed" : ""} ${props.drawerOpen ? "is-open" : ""}`}>
         <div className="sidebar-body">
           <div className="sidebar-brand"><PiMark /><strong>{props.t("appName")}</strong></div>
+          <Button className="sidebar-new-task" onClick={props.onNewTask}>
+            <Icon name="plus" size={14} />
+            {props.workspaceScope === "personal" ? props.t("newSession") : props.t("newTask")}
+          </Button>
           <SidebarSection className="workspace-list-section" title={props.t("allWorkspaces")}>
             {folders.map((workspace) => (
               <SidebarNavButton
@@ -194,7 +192,7 @@ export function Sidebar(props: {
                   aria-current={props.selectedTaskId === session.id ? "page" : undefined}
                   onClick={() => props.onOpenTask(session.id)}
                 >
-                  <strong>{session.title}</strong>
+                  <span>{session.title}</span>
                   {session.flagged ? <Icon name="flag" size={14} /> : null}
                 </Button>
               ))}
@@ -217,7 +215,7 @@ export function Sidebar(props: {
                   aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
                   onClick={() => props.onOpenTask(session.id)}
                 >
-                  <strong>{session.title}</strong>
+                  <span>{session.title}</span>
                   {session.flagged ? <Icon name="flag" size={14} /> : null}
                 </Button>
               ))}
@@ -244,6 +242,48 @@ export function Sidebar(props: {
             </span>
           </Button>
         </footer>
+        <div
+          className="sidebar-resize-handle"
+          role="separator"
+          aria-label={props.t("resizeSidebar")}
+          aria-orientation="vertical"
+          aria-valuemin={minimumSidebarWidth}
+          aria-valuemax={maximumSidebarWidth}
+          aria-valuenow={props.width}
+          tabIndex={0}
+          onDoubleClick={() => props.onResize(defaultSidebarWidth, true)}
+          onKeyDown={(event) => {
+            let nextWidth = props.width;
+            if (event.key === "ArrowLeft") nextWidth -= 16;
+            else if (event.key === "ArrowRight") nextWidth += 16;
+            else if (event.key === "Home") nextWidth = minimumSidebarWidth;
+            else if (event.key === "End") nextWidth = maximumSidebarWidth;
+            else return;
+            event.preventDefault();
+            props.onResize(clampSidebarWidth(nextWidth), true);
+          }}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resizeState.current = {
+              pointerId: event.pointerId,
+              startX: event.clientX,
+              startWidth: props.width,
+              latestWidth: props.width,
+            };
+            setResizing(true);
+          }}
+          onPointerMove={(event) => {
+            const state = resizeState.current;
+            if (state === null || state.pointerId !== event.pointerId) return;
+            const width = clampSidebarWidth(state.startWidth + event.clientX - state.startX);
+            state.latestWidth = width;
+            props.onResize(width, false);
+          }}
+          onPointerUp={(event) => finishResize(event.pointerId)}
+          onPointerCancel={(event) => finishResize(event.pointerId)}
+          onLostPointerCapture={(event) => finishResize(event.pointerId)}
+        />
       </aside>
     </>
   );

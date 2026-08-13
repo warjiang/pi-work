@@ -426,8 +426,63 @@ export type SetProviderCredentialInput = z.infer<typeof setProviderCredentialInp
 export const agentRuntimeSchema = z.object({
   cwd: z.string().min(1),
   agentDir: z.string().min(1),
+  environment: z.record(z.string().min(1), z.string()).optional(),
 });
 export type AgentRuntime = z.infer<typeof agentRuntimeSchema>;
+
+export const managedCliPackageSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+  installedPath: z.string().min(1),
+  bins: z.array(z.string().min(1)),
+});
+export type ManagedCliPackage = z.infer<typeof managedCliPackageSchema>;
+
+export const installManagedCliInputSchema = z.object({
+  packageSpec: z.string().trim().min(1).max(1_024),
+});
+
+export const updateManagedCliInputSchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  version: z.string().trim().min(1).max(240).optional(),
+});
+
+export const removeManagedCliInputSchema = z.object({
+  name: z.string().trim().min(1).max(240),
+});
+
+const runtimeEnvironmentSchema = z.record(z.string().min(1).max(256), z.string().max(100_000))
+  .refine((environment) => Object.keys(environment).length <= 200, "Too many environment variables.");
+
+export const executeManagedCliInputSchema = z.object({
+  command: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
+  args: z.array(z.string().max(100_000)).max(1_000).default([]),
+  cwd: z.string().min(1).optional(),
+  sessionId: z.uuid().optional(),
+  env: runtimeEnvironmentSchema.optional(),
+  timeoutMs: z.number().int().positive().max(10 * 60 * 1_000).optional(),
+});
+
+export const managedCliExecutionResultSchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()),
+  cwd: z.string().min(1),
+  exitCode: z.number().int().nullable(),
+  signal: z.string().nullable(),
+  stdout: z.string(),
+  stderr: z.string(),
+  timedOut: z.boolean(),
+});
+export type ManagedCliExecutionResult = z.infer<typeof managedCliExecutionResultSchema>;
+
+export const setSessionEnvironmentInputSchema = z.object({
+  sessionId: z.uuid(),
+  environment: runtimeEnvironmentSchema,
+});
+
+export const sessionEnvironmentInputSchema = z.object({
+  sessionId: z.uuid(),
+});
 
 export const extensionPackageSchema = z.object({
   source: z.string().min(1),

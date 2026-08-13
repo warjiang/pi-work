@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
+    "@gsap/react": "^2.1.2",
     "@pi-work/artifacts": "workspace:*",
     "@pi-work/pi-adapter": "workspace:*",
     "@pi-work/protocol": "workspace:*",
@@ -43,6 +44,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "gsap": "^3.15.0",
     "lucide-react": "^1.31.0",
     "node-pty": "^1.1.0",
     "npm": "11.6.2",

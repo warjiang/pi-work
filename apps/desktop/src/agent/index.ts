@@ -145,20 +145,21 @@ process.parentPort?.on("message", async (event) => {
         } finally {
           activeRuns.delete(sessionId);
         }
-        if (result.cancelled || run.cancelled) {
+        const cancelled = result.cancelled || run.cancelled;
+        process.parentPort?.postMessage(agentResponseSchema.parse({
+          type: "chat",
+          requestId,
+          sessionId,
+          content: result.content,
+          cancelled,
+        }));
+        if (cancelled) {
           if (!run.cancellationEmitted) {
             streamEvent(requestId, sessionId, run.nextSequence(), "cancelled", {});
           }
         } else {
           streamEvent(requestId, sessionId, run.nextSequence(), "completed", {});
         }
-        process.parentPort?.postMessage(agentResponseSchema.parse({
-          type: "chat",
-          requestId,
-          sessionId,
-          content: result.content,
-          cancelled: result.cancelled || run.cancelled,
-        }));
         break;
       }
       case "extension.list":

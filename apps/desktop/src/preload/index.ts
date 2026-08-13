@@ -39,6 +39,18 @@ const piWork = {
       return () => ipcRenderer.removeListener("pi-console:event", handler);
     },
   },
+  managedCli: {
+    list: () => ipcRenderer.invoke("managed-cli:list"),
+    install: (input: unknown) => ipcRenderer.invoke("managed-cli:install", input),
+    update: (input: unknown) => ipcRenderer.invoke("managed-cli:update", input),
+    remove: (input: unknown) => ipcRenderer.invoke("managed-cli:remove", input),
+    execute: (input: unknown) => ipcRenderer.invoke("managed-cli:execute", input),
+  },
+  runtimeEnvironment: {
+    setSession: (input: unknown) => ipcRenderer.invoke("runtime-environment:set-session", input),
+    clearSession: (input: unknown) => ipcRenderer.invoke("runtime-environment:clear-session", input),
+    listSessionKeys: (input: unknown) => ipcRenderer.invoke("runtime-environment:list-session-keys", input),
+  },
   model: {
     list: () => ipcRenderer.invoke("model:list"),
   },

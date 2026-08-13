@@ -2,6 +2,7 @@ import { exec } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
+import { ManagedCliRuntime } from "./managed-cli.js";
 
 export type PiConsoleEvent =
   | { type: "started" }
@@ -333,10 +334,8 @@ export class PiConsole {
 
   constructor(
     private readonly options: {
-      runtimeDirectory: string;
-      userData: string;
+      managedCliRuntime: ManagedCliRuntime;
       workingDirectory: string;
-      nodePath: string;
       emit: (event: PiConsoleEvent) => void;
     },
   ) {
@@ -344,27 +343,15 @@ export class PiConsole {
   }
 
   private prepareEnvironment(baseEnvironment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    const npmCli = resolveBundledNpmCli(this.options.runtimeDirectory);
-    if (!existsSync(npmCli) || !existsSync(this.options.nodePath)) {
-      throw new Error("Pi Work bundled Node/npm runtime is unavailable.");
-    }
-    const commandShimDirectory = join(this.options.userData, "pi-terminal", "bin");
-    createTerminalCommandShims({
-      directory: commandShimDirectory,
-      nodeExecutable: this.options.nodePath,
-      npmCli,
-    });
-    const environment = createPiConsoleEnvironment({
-      runtimeDirectory: this.options.runtimeDirectory,
-      commandShimDirectory,
-      baseEnvironment,
-    });
+    this.options.managedCliRuntime.initialize();
+    const environment = this.options.managedCliRuntime.terminalEnvironment(baseEnvironment);
     const pathPrefix = [
-      commandShimDirectory,
-      join(this.options.runtimeDirectory, "node_modules", ".bin"),
+      this.options.managedCliRuntime.runtimeBinDirectory,
+      this.options.managedCliRuntime.binDirectory,
+      this.options.managedCliRuntime.npmGlobalBinDirectory,
     ].join(process.platform === "win32" ? ";" : delimiter);
     const bootstrap = createTerminalShellBootstrap({
-      directory: join(this.options.userData, "pi-terminal", "shell"),
+      directory: join(this.options.managedCliRuntime.rootDirectory, "terminal-shell"),
       pathPrefix,
       baseEnvironment,
     });

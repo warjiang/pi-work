@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { useGSAP } from "@gsap/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session, Workspace } from "@pi-work/protocol";
+import { gsap } from "gsap";
 import { Alert, AlertDescription } from "./components/ui/alert.js";
 import { Button } from "./components/ui/button.js";
 import { Disclosure, DisclosureContent, DisclosureTrigger } from "./components/ui/disclosure.js";
@@ -25,8 +28,11 @@ import {
   SourcesPage,
 } from "./features/workspace-pages.js";
 import { translator } from "./i18n.js";
+import { parseSidebarWidth, sidebarWidthStorageKey } from "./sidebar-layout.js";
 import type { AppView, WorkspaceScope } from "./store.js";
 import { useWorkspaceUi } from "./store.js";
+
+gsap.registerPlugin(useGSAP);
 
 export function App() {
   const queryClient = useQueryClient();
@@ -34,9 +40,31 @@ export function App() {
   const [appError, setAppError] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleMounted, setConsoleMounted] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      return parseSidebarWidth(window.localStorage.getItem(sidebarWidthStorageKey));
+    } catch {
+      return parseSidebarWidth(null);
+    }
+  });
   const [consoleCommandRequest, setConsoleCommandRequest] = useState<{ id: number; value: string } | null>(null);
   const consoleCommandIdRef = useRef(0);
-  const consoleCloseTimerRef = useRef<number | null>(null);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  const sidebarAnimationReadyRef = useRef(false);
+  const initialSidebarCollapsedRef = useRef(ui.sidebarCollapsed);
+  const isDarwin = document.documentElement.dataset.platform === "darwin";
+  const initialSidebarLayoutWidthRef = useRef(
+    initialSidebarCollapsedRef.current ? "0px" : `${sidebarWidth}px`,
+  );
+  const initialTopbarContextPaddingRef = useRef(
+    initialSidebarCollapsedRef.current ? `${isDarwin ? 128 : 64}px` : "20px",
+  );
+  const initialSidebarInlinePaddingRef = useRef(
+    initialSidebarCollapsedRef.current ? "0px" : "11px",
+  );
+  const initialSidebarBorderWidthRef = useRef(
+    initialSidebarCollapsedRef.current ? "0px" : "1px",
+  );
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.piWork.settings.get() });
   const buildInfo = useQuery({ queryKey: ["system-info"], queryFn: () => window.piWork.system.info() });
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: () => window.piWork.workspace.list() });
@@ -130,9 +158,6 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.platform = /Mac/.test(navigator.platform) ? "darwin" : "other";
   }, []);
-  useEffect(() => () => {
-    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
-  }, []);
   useEffect(() => window.piWork.chat.onToolApproval(() => {
     void queryClient.invalidateQueries({ queryKey: ["tool-approvals"] });
   }), [queryClient]);
@@ -175,27 +200,23 @@ export function App() {
   }, [consoleOpen, selectedSession, settings.data?.sidebarCollapsed, ui]);
 
   function openConsole(command: string | null = null) {
-    if (consoleCloseTimerRef.current !== null) {
-      window.clearTimeout(consoleCloseTimerRef.current);
-      consoleCloseTimerRef.current = null;
-    }
     if (command !== null) {
       consoleCommandIdRef.current += 1;
       setConsoleCommandRequest({ id: consoleCommandIdRef.current, value: command });
     }
     setConsoleMounted(true);
-    window.requestAnimationFrame(() => setConsoleOpen(true));
+    setConsoleOpen(true);
   }
 
   function closeConsole() {
     setConsoleOpen(false);
-    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
-    consoleCloseTimerRef.current = window.setTimeout(() => {
-      void window.piWork.piConsole.close();
-      setConsoleMounted(false);
-      setConsoleCommandRequest(null);
-      consoleCloseTimerRef.current = null;
-    }, 220);
+  }
+
+  function finishClosingConsole() {
+    if (consoleOpen) return;
+    void window.piWork.piConsole.close();
+    setConsoleMounted(false);
+    setConsoleCommandRequest(null);
   }
 
   function toggleConsole() {
@@ -254,6 +275,19 @@ export function App() {
     void window.piWork.settings.update({ sidebarCollapsed: next }).then(() => (
       queryClient.invalidateQueries({ queryKey: ["settings"] })
     )).catch((cause: unknown) => setAppError(errorMessage(cause)));
+  }
+
+  function resizeSidebar(width: number, commit: boolean): void {
+    setSidebarWidth(width);
+    if (!ui.sidebarCollapsed) {
+      appShellRef.current?.style.setProperty("--sidebar-layout-width", `${width}px`);
+    }
+    if (!commit) return;
+    try {
+      window.localStorage.setItem(sidebarWidthStorageKey, String(width));
+    } catch {
+      // A private or restricted renderer may not expose persistent storage.
+    }
   }
 
   function showView(view: AppView) {
@@ -318,6 +352,83 @@ export function App() {
     ui.setNewTaskOpen(true);
   }
 
+  useGSAP(() => {
+    const root = appShellRef.current;
+    if (root === null) return;
+
+    const sidebarContent = root.querySelectorAll(
+      ".sidebar-body, .sidebar-footer, .sidebar-resize-handle",
+    );
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const targetWidth = ui.sidebarCollapsed ? "0px" : `${sidebarWidth}px`;
+    const targetContextPadding = ui.sidebarCollapsed ? `${isDarwin ? 128 : 64}px` : "20px";
+    const targetSidebarPadding = ui.sidebarCollapsed ? "0px" : "11px";
+    const targetSidebarBorderWidth = ui.sidebarCollapsed ? "0px" : "1px";
+
+    if (!sidebarAnimationReadyRef.current) {
+      gsap.set(root, {
+        "--sidebar-layout-width": targetWidth,
+        "--topbar-context-padding": targetContextPadding,
+        "--sidebar-inline-padding": targetSidebarPadding,
+        "--sidebar-border-width": targetSidebarBorderWidth,
+      });
+      gsap.set(sidebarContent, {
+        autoAlpha: ui.sidebarCollapsed ? 0 : 1,
+        x: ui.sidebarCollapsed ? -8 : 0,
+      });
+      sidebarAnimationReadyRef.current = true;
+      return;
+    }
+
+    gsap.killTweensOf([root, ...sidebarContent]);
+    const timeline = gsap.timeline({
+      defaults: {
+        overwrite: "auto",
+      },
+    });
+
+    timeline.to(root, {
+      "--sidebar-layout-width": targetWidth,
+      "--topbar-context-padding": targetContextPadding,
+      "--sidebar-inline-padding": targetSidebarPadding,
+      "--sidebar-border-width": targetSidebarBorderWidth,
+      duration: reduceMotion ? 0 : 0.28,
+      ease: "power3.inOut",
+    }, 0);
+
+    timeline.to(sidebarContent, {
+      autoAlpha: ui.sidebarCollapsed ? 0 : 1,
+      x: ui.sidebarCollapsed ? -8 : 0,
+      duration: reduceMotion ? 0 : (ui.sidebarCollapsed ? 0.14 : 0.2),
+      ease: ui.sidebarCollapsed ? "power2.in" : "power2.out",
+      stagger: reduceMotion || ui.sidebarCollapsed ? 0 : 0.015,
+    }, reduceMotion || ui.sidebarCollapsed ? 0 : 0.08);
+  }, {
+    scope: appShellRef,
+    dependencies: [ui.sidebarCollapsed],
+  });
+
+  useGSAP(() => {
+    const root = appShellRef.current;
+    if (root === null) return;
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const panelHeight = consoleOpen
+      ? Math.min(420, Math.max(240, window.innerHeight * 0.38))
+      : 0;
+
+    gsap.killTweensOf(root, "--console-panel-height");
+    gsap.to(root, {
+      "--console-panel-height": `${panelHeight}px`,
+      duration: reduceMotion ? 0 : (consoleOpen ? 0.32 : 0.24),
+      ease: consoleOpen ? "power3.out" : "power2.inOut",
+      overwrite: "auto",
+    });
+  }, {
+    scope: appShellRef,
+    dependencies: [consoleOpen],
+  });
+
   const baseLoading = settings.isLoading
     || buildInfo.isLoading
     || workspaces.isLoading
@@ -365,23 +476,31 @@ export function App() {
       open={consoleOpen}
       t={t}
       onClose={closeConsole}
+      onClosed={finishClosingConsole}
     />
   ) : null;
 
   return (
-    <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}${consoleOpen && !ui.settingsOpen ? " pi-console-open" : ""}`}>
+    <div
+      ref={appShellRef}
+      className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}${consoleOpen && !ui.settingsOpen ? " pi-console-open" : ""}`}
+      style={{
+        "--sidebar-width": `${sidebarWidth}px`,
+        "--sidebar-layout-width": initialSidebarLayoutWidthRef.current,
+        "--topbar-context-padding": initialTopbarContextPaddingRef.current,
+        "--sidebar-inline-padding": initialSidebarInlinePaddingRef.current,
+        "--sidebar-border-width": initialSidebarBorderWidthRef.current,
+        "--console-panel-height": "0px",
+      } as CSSProperties}
+    >
       <div className="workspace-shell" inert={ui.settingsOpen ? true : undefined} aria-hidden={ui.settingsOpen || undefined}>
         <a className="skip-link" href="#main-content">{t("work")}</a>
         <TopBar
           workspaceScope={ui.workspaceScope}
           workspaces={workspaces.data ?? []}
+          {...(ui.view === "inbox" && selectedSession !== null ? { sessionTitle: selectedSession.title } : {})}
           t={t}
-          onWorkspaceScope={ui.setWorkspaceScope}
-          onAddWorkspace={() => void addWorkspace()}
-          onManageWorkspaces={() => ui.openSettings("workFolders")}
           onToggleSidebar={toggleSidebar}
-          onOpenSearch={() => ui.setCommandOpen(true)}
-          onNewTask={createNewItem}
           consoleOpen={consoleOpen}
           onToggleConsole={toggleConsole}
         />
@@ -399,12 +518,18 @@ export function App() {
           isFolder={scopeWorkspace?.kind === "folder"}
           collapsed={ui.sidebarCollapsed}
           drawerOpen={ui.sidebarDrawerOpen}
+          width={sidebarWidth}
           t={t}
+          onNewTask={() => {
+            createNewItem();
+            ui.setSidebarDrawerOpen(false);
+          }}
           onView={showView}
           onWorkspaceScope={ui.setWorkspaceScope}
           onOpenSettings={() => ui.openSettings()}
           onOpenTask={openSession}
           onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
+          onResize={resizeSidebar}
         />
         <main className="app-main" id="main-content">
         {appError === null ? null : (
