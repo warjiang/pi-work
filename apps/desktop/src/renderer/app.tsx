@@ -49,7 +49,6 @@ export function App() {
   });
   const [consoleCommandRequest, setConsoleCommandRequest] = useState<{ id: number; value: string } | null>(null);
   const consoleCommandIdRef = useRef(0);
-  const consoleCloseTimerRef = useRef<number | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarAnimationReadyRef = useRef(false);
   const initialSidebarCollapsedRef = useRef(ui.sidebarCollapsed);
@@ -159,9 +158,6 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.platform = /Mac/.test(navigator.platform) ? "darwin" : "other";
   }, []);
-  useEffect(() => () => {
-    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
-  }, []);
   useEffect(() => window.piWork.chat.onToolApproval(() => {
     void queryClient.invalidateQueries({ queryKey: ["tool-approvals"] });
   }), [queryClient]);
@@ -204,27 +200,23 @@ export function App() {
   }, [consoleOpen, selectedSession, settings.data?.sidebarCollapsed, ui]);
 
   function openConsole(command: string | null = null) {
-    if (consoleCloseTimerRef.current !== null) {
-      window.clearTimeout(consoleCloseTimerRef.current);
-      consoleCloseTimerRef.current = null;
-    }
     if (command !== null) {
       consoleCommandIdRef.current += 1;
       setConsoleCommandRequest({ id: consoleCommandIdRef.current, value: command });
     }
     setConsoleMounted(true);
-    window.requestAnimationFrame(() => setConsoleOpen(true));
+    setConsoleOpen(true);
   }
 
   function closeConsole() {
     setConsoleOpen(false);
-    if (consoleCloseTimerRef.current !== null) window.clearTimeout(consoleCloseTimerRef.current);
-    consoleCloseTimerRef.current = window.setTimeout(() => {
-      void window.piWork.piConsole.close();
-      setConsoleMounted(false);
-      setConsoleCommandRequest(null);
-      consoleCloseTimerRef.current = null;
-    }, 300);
+  }
+
+  function finishClosingConsole() {
+    if (consoleOpen) return;
+    void window.piWork.piConsole.close();
+    setConsoleMounted(false);
+    setConsoleCommandRequest(null);
   }
 
   function toggleConsole() {
@@ -484,6 +476,7 @@ export function App() {
       open={consoleOpen}
       t={t}
       onClose={closeConsole}
+      onClosed={finishClosingConsole}
     />
   ) : null;
 

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useGSAP } from "@gsap/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { gsap } from "gsap";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button.js";
 import { Icon } from "@/components/ui/icon.js";
@@ -15,24 +17,31 @@ export function PiConsolePanel({
   open,
   t,
   onClose,
+  onClosed,
 }: {
   commandRequest: { id: number; value: string } | null;
   cwd?: string;
   open: boolean;
   t: T;
   onClose(): void;
+  onClosed(): void;
 }) {
   const queryClient = useQueryClient();
+  const panelRef = useRef<HTMLElement>(null);
   const [terminalElement, setTerminalElement] = useState<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const receivedProcessDataRef = useRef(false);
   const commandRequestRef = useRef(commandRequest);
   const handledCommandIdRef = useRef<number | null>(null);
   const translationRef = useRef(t);
+  const openRef = useRef(open);
+  const onClosedRef = useRef(onClosed);
   const [status, setStatus] = useState<"starting" | "connected" | "stopped" | "error">("starting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   translationRef.current = t;
   commandRequestRef.current = commandRequest;
+  openRef.current = open;
+  onClosedRef.current = onClosed;
 
   const writePendingCommand = () => {
     const request = commandRequestRef.current;
@@ -70,22 +79,39 @@ export function PiConsolePanel({
       terminalRef.current = terminal;
       receivedProcessDataRef.current = false;
       let resizeFrame: number | null = null;
+      let resizeTimer: number | null = null;
       let lastSize = { cols: 0, rows: 0 };
-      const resize = () => {
+      const fitTerminal = () => {
         if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
         resizeFrame = window.requestAnimationFrame(() => {
           resizeFrame = null;
           const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
           const dimensions = fit.proposeDimensions();
           if (dimensions === undefined) return;
-          terminal.resize(dimensions.cols, Math.max(1, dimensions.rows - 1));
+          const nextSize = {
+            cols: dimensions.cols,
+            rows: Math.max(1, dimensions.rows - 1),
+          };
+          if (nextSize.cols === lastSize.cols && nextSize.rows === lastSize.rows) return;
+          terminal.resize(nextSize.cols, nextSize.rows);
           if (wasAtBottom) terminal.scrollToBottom();
-          if (terminal.cols === lastSize.cols && terminal.rows === lastSize.rows) return;
-          lastSize = { cols: terminal.cols, rows: terminal.rows };
+          lastSize = nextSize;
           void window.piWork.piConsole.resize(lastSize);
         });
       };
-      const observer = new ResizeObserver(resize);
+      const scheduleResize = (immediate = false) => {
+        if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+        if (immediate) {
+          resizeTimer = null;
+          fitTerminal();
+          return;
+        }
+        resizeTimer = window.setTimeout(() => {
+          resizeTimer = null;
+          fitTerminal();
+        }, 80);
+      };
+      const observer = new ResizeObserver(() => scheduleResize());
       observer.observe(terminalElement);
       const unsubscribe = window.piWork.piConsole.onEvent((event) => {
         if (event.type === "data") {
@@ -94,7 +120,7 @@ export function PiConsolePanel({
         }
         if (event.type === "started") {
           setStatus("connected");
-          resize();
+          scheduleResize(true);
           writePendingCommand();
         }
         if (event.type === "exit") {
@@ -142,11 +168,12 @@ export function PiConsolePanel({
         window.setTimeout(recoverState, 250),
         window.setTimeout(recoverState, 1_500),
       ];
-      requestAnimationFrame(resize);
+      scheduleResize(true);
       requestAnimationFrame(() => terminal.focus());
 
       return () => {
         for (const timer of recoveryTimers) window.clearTimeout(timer);
+        if (resizeTimer !== null) window.clearTimeout(resizeTimer);
         if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
         observer.disconnect();
         dataDisposable.dispose();
@@ -166,12 +193,46 @@ export function PiConsolePanel({
     requestAnimationFrame(() => terminalRef.current?.focus());
   }, [open]);
 
+  useGSAP(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    gsap.killTweensOf(panel);
+
+    if (open) {
+      gsap.to(panel, {
+        autoAlpha: 1,
+        y: 0,
+        duration: reduceMotion ? 0 : 0.26,
+        ease: "power3.out",
+        overwrite: "auto",
+      });
+      return;
+    }
+
+    gsap.to(panel, {
+      autoAlpha: 0,
+      y: 14,
+      duration: reduceMotion ? 0 : 0.2,
+      ease: "power2.in",
+      overwrite: "auto",
+      onComplete: () => {
+        if (!openRef.current) onClosedRef.current();
+      },
+    });
+  }, {
+    scope: panelRef,
+    dependencies: [open],
+  });
+
   useEffect(() => {
     if (status === "connected") writePendingCommand();
   }, [commandRequest, status]);
 
   return (
     <section
+      ref={panelRef}
       className={`pi-console-panel ${open ? "is-open" : "is-closing"}`}
       aria-label={t("piConsole")}
       aria-hidden={!open}
