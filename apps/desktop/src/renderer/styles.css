@@ -252,14 +252,20 @@ kbd {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--muted) 44%, transparent);
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--muted) 24%, transparent);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
   background-clip: padding-box;
 }
 
