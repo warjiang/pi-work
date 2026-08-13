@@ -34,6 +34,7 @@ export const workspaceSchema = z.object({
   id: z.uuid(),
   name: z.string().min(1),
   rootPath: z.string().min(1),
+  directories: z.array(z.string().min(1)).min(1),
   outputPath: z.string().min(1),
   kind: workspaceKindSchema,
   createdAt: z.string().datetime(),
@@ -323,6 +324,10 @@ export type Artifact = z.infer<typeof artifactSchema>;
 export const createWorkspaceInputSchema = z.object({
   name: z.string().trim().min(1).max(80),
   rootPath: z.string().min(1),
+});
+
+export const addWorkspaceDirectoryInputSchema = z.object({
+  workspaceId: z.uuid(),
 });
 
 export const createTaskInputSchema = z.object({

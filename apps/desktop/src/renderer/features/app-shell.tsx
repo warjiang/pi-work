@@ -143,6 +143,9 @@ export function Sidebar(props: {
   view: AppView;
   buildInfo: BuildInfo;
   sessions: Session[];
+  personalSessions: Session[];
+  workspaces: Workspace[];
+  workspaceScope: WorkspaceScope;
   selectedTaskId: string | null;
   attentionIds: Set<string>;
   isFolder: boolean;
@@ -150,11 +153,14 @@ export function Sidebar(props: {
   drawerOpen: boolean;
   t: T;
   onView(view: AppView): void;
+  onWorkspaceScope(scope: WorkspaceScope): void;
   onOpenSettings(): void;
   onOpenTask(taskId: string): void;
   onCloseDrawer(): void;
 }) {
   const recent = props.sessions.filter(({ archived }) => !archived).slice(0, 14);
+  const personalRecent = props.personalSessions.filter(({ archived }) => !archived).slice(0, 14);
+  const folders = props.workspaces.filter(({ kind }) => kind === "folder");
   const attentionCount = props.sessions.filter(({ id }) => props.attentionIds.has(id)).length;
   const completedCount = props.sessions.filter(({ status, archived }) => status === "completed" && !archived).length;
   const version = props.buildInfo.version.startsWith("v") ? props.buildInfo.version : `v${props.buildInfo.version}`;
@@ -165,13 +171,43 @@ export function Sidebar(props: {
       <aside className={`sidebar ${props.collapsed ? "is-collapsed" : ""} ${props.drawerOpen ? "is-open" : ""}`}>
         <div className="sidebar-body">
           <div className="sidebar-brand"><PiMark /><strong>{props.t("appName")}</strong></div>
+          <SidebarSection className="workspace-list-section" title={props.t("allWorkspaces")}>
+            {folders.map((workspace) => (
+              <SidebarNavButton
+                key={workspace.id}
+                active={props.workspaceScope === workspace.id}
+                icon="workspace"
+                label={workspace.name}
+                {...(workspace.directories.length > 1 ? { badge: workspace.directories.length } : {})}
+                onClick={() => props.onWorkspaceScope(workspace.id)}
+              />
+            ))}
+            {folders.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
+          </SidebarSection>
+          <SidebarSection className="recent-section personal-recent-section" title={props.t("personalSessions")} count={personalRecent.length}>
+            <div className="recent-task-list">
+              {personalRecent.map((session) => (
+                <Button
+                  variant="ghost"
+                  className={`recent-task ${props.selectedTaskId === session.id ? "selected" : ""}`}
+                  key={session.id}
+                  aria-current={props.selectedTaskId === session.id ? "page" : undefined}
+                  onClick={() => props.onOpenTask(session.id)}
+                >
+                  <strong>{session.title}</strong>
+                  {session.flagged ? <Icon name="flag" size={14} /> : null}
+                </Button>
+              ))}
+              {personalRecent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
+            </div>
+          </SidebarSection>
           <SidebarSection title={props.t("work")}>
             <SidebarNavButton active={props.view === "inbox"} icon={workspaceSidebarIcons.inbox} label={props.t("inbox")} onClick={() => props.onView("inbox")} />
             <SidebarNavButton active={props.view === "attention"} icon={workspaceSidebarIcons.attention} label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
             <SidebarNavButton active={props.view === "completed"} icon={workspaceSidebarIcons.completed} label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
             {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon={workspaceSidebarIcons.board} label={props.t("board")} onClick={() => props.onView("board")} /> : null}
           </SidebarSection>
-          <SidebarSection className="recent-section" title={props.t("recentTasks")} count={recent.length}>
+          {props.isFolder ? <SidebarSection className="recent-section workspace-task-section" title={props.t("folderTasks")} count={recent.length}>
             <div className="recent-task-list">
               {recent.map((session) => (
                 <Button
@@ -187,7 +223,7 @@ export function Sidebar(props: {
               ))}
               {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
             </div>
-          </SidebarSection>
+          </SidebarSection> : null}
           {props.isFolder ? (
             <SidebarSection title={props.t("library")}>
               <SidebarNavButton active={props.view === "sources"} icon={workspaceSidebarIcons.sources} label={props.t("sources")} onClick={() => props.onView("sources")} />
@@ -481,6 +517,7 @@ export function NewTaskDialog(props: {
   const [advanced, setAdvanced] = useState(false);
   const [modelKey, setModelKey] = useState(defaultModel ? `${defaultModel.providerId}/${defaultModel.modelId}` : "");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.settings?.thinkingLevel ?? "off");
+  const [workingDirectory, setWorkingDirectory] = useState(workspace?.rootPath ?? "");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -491,6 +528,7 @@ export function NewTaskDialog(props: {
         : (defaultModel.thinkingLevels[0] ?? "off"));
     }
   }, [defaultModel, modelKey, props.settings?.thinkingLevel]);
+  useEffect(() => setWorkingDirectory(workspace?.rootPath ?? ""), [workspace?.id, workspace?.rootPath]);
 
   const selectedModel = availableModels.find((model) => `${model.providerId}/${model.modelId}` === modelKey);
   const create = useMutation({
@@ -509,7 +547,7 @@ export function NewTaskDialog(props: {
         thinkingLevel,
         permissionMode,
         planMode,
-        workingDirectory: workspace.rootPath,
+        workingDirectory: workingDirectory || workspace.rootPath,
       });
     },
     onSuccess: (session) => {
@@ -556,6 +594,15 @@ export function NewTaskDialog(props: {
         </Button>
         {advanced ? (
           <FieldGroup className="advanced-fields">
+            <Field>
+              <FieldLabel>{props.t("currentFolder")}</FieldLabel>
+              <Select value={workingDirectory} onValueChange={setWorkingDirectory}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectGroup>{workspace?.directories.map((directory) => (
+                  <SelectItem key={directory} value={directory}>{directory}</SelectItem>
+                ))}</SelectGroup></SelectContent>
+              </Select>
+            </Field>
             <Field>
               <FieldLabel>{props.t("model")}</FieldLabel>
               <Select value={modelKey} onValueChange={(value) => {

@@ -329,6 +329,7 @@ export function resolvePiConsoleLaunch(
 export class PiConsole {
   private process: pty.IPty | null = null;
   private outputBuffer = "";
+  private workingDirectory: string;
 
   constructor(
     private readonly options: {
@@ -338,7 +339,9 @@ export class PiConsole {
       nodePath: string;
       emit: (event: PiConsoleEvent) => void;
     },
-  ) {}
+  ) {
+    this.workingDirectory = resolve(options.workingDirectory);
+  }
 
   private prepareEnvironment(baseEnvironment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const npmCli = resolveBundledNpmCli(this.options.runtimeDirectory);
@@ -371,10 +374,17 @@ export class PiConsole {
     return environment;
   }
 
-  start(): PiConsoleStartResult {
+  start(workingDirectory = this.options.workingDirectory): PiConsoleStartResult {
+    const cwd = resolve(workingDirectory);
     if (this.process !== null) {
-      return { started: true, reused: true, output: this.outputBuffer };
+      if (cwd !== this.workingDirectory) {
+        this.close();
+      } else {
+        return { started: true, reused: true, output: this.outputBuffer };
+      }
     }
+
+    this.workingDirectory = cwd;
 
     try {
       const environment = this.prepareEnvironment();
@@ -383,7 +393,7 @@ export class PiConsole {
         name: "xterm-256color",
         cols: 100,
         rows: 30,
-        cwd: this.options.workingDirectory,
+        cwd: this.workingDirectory,
         env: environment as Record<string, string>,
       });
       this.process = terminal;
@@ -415,7 +425,7 @@ export class PiConsole {
     if (command.length === 0) {
       return Promise.reject(new Error("Terminal command cannot be empty."));
     }
-    const cwd = input.cwd === undefined ? this.options.workingDirectory : resolve(input.cwd);
+    const cwd = input.cwd === undefined ? this.workingDirectory : resolve(input.cwd);
     const environment = this.prepareEnvironment({
       ...process.env,
       ...input.env,
@@ -483,8 +493,8 @@ export class PiConsole {
     if (terminal !== null) terminal.kill();
   }
 
-  restart(): PiConsoleStartResult {
+  restart(workingDirectory = this.workingDirectory): PiConsoleStartResult {
     this.close();
-    return this.start();
+    return this.start(workingDirectory);
   }
 }

@@ -27,6 +27,7 @@ declare global {
       workspace: {
         choose(): Promise<Workspace | null>;
         list(): Promise<Workspace[]>;
+        addDirectory(workspaceId: string): Promise<Workspace | null>;
       };
       provider: {
         list(): Promise<import("@pi-work/protocol").ProviderConfig[]>;
@@ -48,12 +49,12 @@ declare global {
         chooseLocal(kind: "file" | "directory"): Promise<string | null>;
       };
       piConsole: {
-        start(): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
+        start(input?: { cwd?: string }): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
         write(data: string): Promise<void>;
         resize(dimensions: { cols: number; rows: number }): Promise<void>;
         snapshot(): Promise<{ running: boolean; output: string }>;
         execute(input: PiConsoleExecuteInput): Promise<PiConsoleExecuteResult>;
-        restart(): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
+        restart(input?: { cwd?: string }): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
         close(): Promise<void>;
         onEvent(listener: (event: PiConsoleEvent) => void): () => void;
       };

@@ -4,6 +4,7 @@ export const workspaces = sqliteTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   rootPath: text("root_path").notNull(),
+  directories: text("directories").notNull(),
   outputPath: text("output_path").notNull(),
   kind: text("kind").notNull(),
   createdAt: text("created_at").notNull(),

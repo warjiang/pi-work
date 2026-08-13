@@ -34,6 +34,7 @@ import {
   createPersonalSessionInputSchema,
   createTaskInputSchema,
   createWorkspaceInputSchema,
+  addWorkspaceDirectoryInputSchema,
   automationSchema,
   browserBoundsInputSchema,
   browserNavigateInputSchema,
@@ -388,6 +389,23 @@ function getPiConsole(): PiConsole {
     });
   }
   return piConsole;
+}
+
+async function terminalWorkingDirectory(input: unknown): Promise<string> {
+  const value = input === undefined || input === null ? {} : input;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid terminal start request.");
+  }
+  const requested = (value as { cwd?: unknown }).cwd;
+  if (requested !== undefined && typeof requested !== "string") {
+    throw new Error("Invalid terminal working directory.");
+  }
+  const cwd = requested === undefined ? app.getPath("home") : resolve(requested);
+  const details = await stat(cwd).catch(() => null);
+  if (details === null || !details.isDirectory()) {
+    throw new Error("Terminal working directory does not exist.");
+  }
+  return cwd;
 }
 
 function createWindow(): void {
@@ -785,6 +803,10 @@ function registerIpc(): void {
     if (rootPath === undefined) {
       return null;
     }
+    const existing = getStore().listWorkspaces().find((workspace) => (
+      workspace.kind === "folder" && workspace.directories.includes(rootPath)
+    ));
+    if (existing !== undefined) return workspaceSchema.parse(existing);
     const workspace = createWorkspaceInputSchema.parse({
       name: basename(rootPath),
       rootPath,
@@ -794,6 +816,25 @@ function registerIpc(): void {
     const created = workspaceSchema.parse(getStore().createWorkspace({ ...workspace, outputPath }));
     ensureDefaultStatuses(created.id);
     return created;
+  });
+
+  ipcMain.handle("workspace:add-directory", async (_event, input: unknown) => {
+    const { workspaceId } = addWorkspaceDirectoryInputSchema.parse(input);
+    const workspace = requireFolderWorkspace(workspaceId);
+    const result = await dialog.showOpenDialog({
+      title: `Add a folder to ${workspace.name}`,
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled) return null;
+    const directory = result.filePaths[0];
+    if (directory === undefined) return null;
+    const owner = getStore().listWorkspaces().find((candidate) => (
+      candidate.kind === "folder" && candidate.directories.includes(directory)
+    ));
+    if (owner !== undefined && owner.id !== workspace.id) {
+      throw new Error(`This folder is already associated with ${owner.name}.`);
+    }
+    return workspaceSchema.parse(getStore().addWorkspaceDirectory(workspace.id, directory));
   });
 
   ipcMain.handle("workspace:list", () => getStore().listWorkspaces().map((workspace) => workspaceSchema.parse(workspace)));
@@ -888,7 +929,10 @@ function registerIpc(): void {
       : await dialog.showOpenDialog(mainWindow, pickerOptions);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
-  ipcMain.handle("pi-console:start", () => getPiConsole().start());
+  ipcMain.handle("pi-console:start", async (_event, input: unknown) => {
+    const cwd = await terminalWorkingDirectory(input);
+    return getPiConsole().start(cwd);
+  });
   ipcMain.handle("pi-console:write", (_event, input: unknown) => {
     if (typeof input !== "string") throw new Error("Invalid Pi Console input.");
     getPiConsole().write(input);
@@ -931,7 +975,10 @@ function registerIpc(): void {
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
   });
-  ipcMain.handle("pi-console:restart", () => getPiConsole().restart());
+  ipcMain.handle("pi-console:restart", async (_event, input: unknown) => {
+    const cwd = await terminalWorkingDirectory(input);
+    return getPiConsole().restart(cwd);
+  });
   ipcMain.handle("pi-console:close", () => {
     piConsole?.close();
     piConsole = null;
@@ -1071,17 +1118,17 @@ function registerIpc(): void {
   });
   ipcMain.handle("session:create", async (_event, input: unknown) => {
     const parsed = createPersonalSessionInputSchema.parse(input);
-    const conversationId = randomUUID();
-    const rootPath = join(app.getPath("userData"), "chats", conversationId);
+    const sessionId = randomUUID();
+    const rootPath = join(app.getPath("userData"), "chats", sessionId);
     await mkdir(rootPath, { recursive: true });
     const workspace = getStore().createWorkspace({
-      id: conversationId,
       name: "New session",
       rootPath,
       outputPath: join(rootPath, "Pi Work"),
       kind: "managed",
     });
     return taskSchema.parse(getStore().createTask({
+      id: sessionId,
       workspaceId: workspace.id,
       title: "New session",
       goal: "New session",
@@ -1110,7 +1157,7 @@ function registerIpc(): void {
       await providerCredential(task.providerId),
       task.modelId,
       task.thinkingLevel,
-      agentRuntime(workspace.rootPath),
+      agentRuntime(task.workingDirectory ?? workspace.rootPath),
     );
     getStore().savePlan(plan);
     getStore().addMessage({
@@ -1147,6 +1194,7 @@ function registerIpc(): void {
       throw new Error("Send a message or set /goal before requesting /plan.");
     }
 
+    let managedSessionId: string | null = null;
     let workspace = task === null
       ? (parsed.workspaceId === null ? null : getStore().getWorkspace(parsed.workspaceId))
       : getStore().getWorkspace(task.workspaceId);
@@ -1157,11 +1205,10 @@ function registerIpc(): void {
       if (task !== null || parsed.workspaceId !== null) {
         throw new Error("Work folder not found.");
       }
-      const conversationId = randomUUID();
-      const rootPath = join(app.getPath("userData"), "chats", conversationId);
+      managedSessionId = randomUUID();
+      const rootPath = join(app.getPath("userData"), "chats", managedSessionId);
       await mkdir(rootPath, { recursive: true });
       workspace = getStore().createWorkspace({
-        id: conversationId,
         name: "New chat",
         rootPath,
         outputPath: join(rootPath, "Pi Work"),
@@ -1181,6 +1228,7 @@ function registerIpc(): void {
         throw new Error("Usage: /goal <what you want to accomplish>");
       }
       task ??= getStore().createTask({
+        ...(managedSessionId === null ? {} : { id: managedSessionId }),
         workspaceId: workspace.id,
         title: taskTitle(goal),
         goal,
@@ -1218,7 +1266,7 @@ function registerIpc(): void {
         await providerCredential(parsed.providerId),
         parsed.modelId,
         parsed.thinkingLevel,
-        agentRuntime(workspace.rootPath),
+        agentRuntime(task.workingDirectory ?? workspace.rootPath),
       );
       getStore().savePlan(plan);
       getStore().addMessage({
@@ -1230,6 +1278,7 @@ function registerIpc(): void {
     }
 
     task ??= getStore().createTask({
+      ...(managedSessionId === null ? {} : { id: managedSessionId }),
       workspaceId: workspace.id,
       title: taskTitle(parsed.content),
       goal: parsed.content,
@@ -1265,7 +1314,7 @@ function registerIpc(): void {
       providerId: parsed.providerId,
       modelId: parsed.modelId,
       thinkingLevel: parsed.thinkingLevel,
-      runtime: agentRuntime(workspace.rootPath),
+      runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath),
       permissionMode: parsed.permissionMode ?? task.permissionMode,
       images,
     });
