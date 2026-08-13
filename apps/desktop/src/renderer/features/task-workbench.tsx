@@ -835,7 +835,7 @@ export function TaskWorkbench(props: {
               <article className="message user pending"><div>{pendingPrompt}</div></article>
             ) : null}
             {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
-              <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
+              <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}</article>
             ) : null}
             {!personal && props.session.status === "awaiting_plan_approval" && plan.data !== null && plan.data !== undefined ? (
               <PlanApprovalCard
@@ -1164,7 +1164,7 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <MarkdownMessage content={visibleContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
+                ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <AssistantResult content={visibleContent} t={t} /> : null}</>
                 : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <div className="message-user-content">{visibleContent}</div> : null}</>}
             </article>
           </div>
@@ -1377,14 +1377,47 @@ export function orderedProcessActivities(activities: Activity[]): Activity[] {
 }
 
 function HistoricalProcess({ activities, t }: { activities: Activity[]; t: T }) {
+  const ordered = orderedProcessActivities(activities);
+  if (ordered.length === 0) return null;
+  const thoughts = ordered.filter(({ kind }) => kind === "thinking").length;
+  const tools = ordered.length - thoughts;
   return (
-    <>
-      {orderedProcessActivities(activities).map((activity) => (
-        activity.kind === "thinking"
-          ? <ThoughtProcessCard activity={activity} key={activity.id} t={t} />
-          : <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />
-      ))}
-    </>
+    <details className="process-group">
+      <summary>
+        <Icon name="chevron-down" size={14} className="process-group-chevron" />
+        <span>{processSummary(tools, thoughts, t)}</span>
+      </summary>
+      <div className="process-group-content">
+        {ordered.map((activity) => (
+          activity.kind === "thinking"
+            ? <ThoughtProcessCard activity={activity} key={activity.id} t={t} />
+            : <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+export function processSummary(tools: number, thoughts: number, t: T): string {
+  const parts = [];
+  if (tools > 0) parts.push(`${tools} ${t(tools === 1 ? "toolCall" : "toolCalls")}`);
+  if (thoughts > 0) parts.push(`${thoughts} ${t(thoughts === 1 ? "thoughtSegment" : "thoughtSegments")}`);
+  return parts.join(t("processSummarySeparator"));
+}
+
+function AssistantResult({ content, t, streaming = false }: { content: string; t: T; streaming?: boolean }) {
+  return (
+    <section className={`assistant-result${streaming ? " is-streaming" : ""}`} aria-label={streaming ? t("responseStreaming") : t("result")}>
+      {streaming ? (
+        <header>
+          <span className="assistant-result-icon" aria-hidden="true">
+            <Icon name="status" size={14} />
+          </span>
+          <span>{t("responseStreaming")}</span>
+        </header>
+      ) : null}
+      <MarkdownMessage streaming={streaming} content={content} copyLabel={t("copyCode")} copiedLabel={t("copied")} />
+    </section>
   );
 }
 
