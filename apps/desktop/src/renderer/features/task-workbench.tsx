@@ -19,8 +19,8 @@ import type {
   ToolApproval,
   Workspace,
 } from "@pi-work/protocol";
-import { MarkdownMessage } from "../components/markdown-message.js";
-import { PiMark } from "../components/pi-mark.js";
+import { MarkdownMessage } from "@/components/markdown-message.js";
+import { PiMark } from "@/components/pi-mark.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,8 +30,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "../components/ui/alert-dialog.js";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
+} from "@/components/ui/alert-dialog.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
 import {
   Attachment,
   AttachmentAction,
@@ -41,9 +41,9 @@ import {
   AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
-} from "../components/ui/attachment.js";
-import { Badge } from "../components/ui/badge.js";
-import { Button } from "../components/ui/button.js";
+} from "@/components/ui/attachment.js";
+import { Badge } from "@/components/ui/badge.js";
+import { Button } from "@/components/ui/button.js";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -58,11 +58,11 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.js";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
-import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog.js";
+} from "@/components/ui/dropdown-menu.js";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog.js";
 import {
   Select,
   SelectContent,
@@ -70,12 +70,12 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.js";
-import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
-import { Textarea } from "../components/ui/textarea.js";
-import { thinkingLevelLabel } from "../i18n.js";
-import type { MessageKey } from "../i18n.js";
-import type { InspectorTab } from "../store.js";
+} from "@/components/ui/select.js";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
+import { Textarea } from "@/components/ui/textarea.js";
+import { thinkingLevelLabel } from "@/i18n.js";
+import type { MessageKey } from "@/i18n.js";
+import type { InspectorTab } from "@/store.js";
 
 type T = (key: MessageKey) => string;
 type LiveThought = { segmentId: number; contentIndex: number; content: string; complete: boolean };

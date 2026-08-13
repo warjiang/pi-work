@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function Empty({ className, ...props }: ComponentProps<"div">) {
   return <div className={cn("flex flex-col items-center justify-center gap-2 rounded-[var(--radius-overlay)] border border-dashed border-border p-12 text-center", className)} {...props} />;

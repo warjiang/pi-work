@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function Card({ className, ...props }: ComponentProps<"div">) {
   return <div className={cn("rounded-[var(--radius-surface)] bg-secondary text-card-foreground", className)} {...props} />;

@@ -14,9 +14,9 @@ import type {
   ThinkingLevel,
   Workspace,
 } from "@pi-work/protocol";
-import { PiMark } from "../components/pi-mark.js";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
-import { Button } from "../components/ui/button.js";
+import { PiMark } from "@/components/pi-mark.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
+import { Button } from "@/components/ui/button.js";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +24,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog.js";
+} from "@/components/ui/dialog.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,11 +32,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.js";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import type { IconName } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
+} from "@/components/ui/dropdown-menu.js";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import type { IconName } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
 import {
   Select,
   SelectContent,
@@ -44,12 +44,12 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.js";
-import { Switch } from "../components/ui/switch.js";
-import { Textarea } from "../components/ui/textarea.js";
-import { thinkingLevelLabel } from "../i18n.js";
-import type { MessageKey } from "../i18n.js";
-import type { AppView, SettingsSection, WorkspaceScope } from "../store.js";
+} from "@/components/ui/select.js";
+import { Switch } from "@/components/ui/switch.js";
+import { Textarea } from "@/components/ui/textarea.js";
+import { thinkingLevelLabel } from "@/i18n.js";
+import type { MessageKey } from "@/i18n.js";
+import type { AppView, SettingsSection, WorkspaceScope } from "@/store.js";
 
 type T = (key: MessageKey) => string;
 

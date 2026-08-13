@@ -17,17 +17,17 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "../components/ui/alert-dialog.js";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
-import { Badge } from "../components/ui/badge.js";
-import { Button } from "../components/ui/button.js";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../components/ui/command.js";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import type { IconName } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
-import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover.js";
-import { Spinner } from "../components/ui/spinner.js";
+} from "@/components/ui/alert-dialog.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
+import { Badge } from "@/components/ui/badge.js";
+import { Button } from "@/components/ui/button.js";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command.js";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import type { IconName } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
+import { Spinner } from "@/components/ui/spinner.js";
 import {
   Select,
   SelectContent,
@@ -35,8 +35,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.js";
-import { Switch } from "../components/ui/switch.js";
+} from "@/components/ui/select.js";
+import { Switch } from "@/components/ui/switch.js";
 import {
   Dialog,
   DialogClose,
@@ -45,10 +45,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog.js";
-import { PiMark } from "../components/pi-mark.js";
-import type { MessageKey } from "../i18n.js";
-import type { SettingsSection } from "../store.js";
+} from "@/components/ui/dialog.js";
+import { PiMark } from "@/components/pi-mark.js";
+import type { MessageKey } from "@/i18n.js";
+import type { SettingsSection } from "@/store.js";
 import { BrowserPage } from "./browser-page.js";
 import { SkillsPage } from "./workspace-pages.js";
 import {

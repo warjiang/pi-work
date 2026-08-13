@@ -60,7 +60,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon, LucideProps } from "lucide-react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 const icons = {
   appearance: Palette,

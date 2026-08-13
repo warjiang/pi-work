@@ -6,8 +6,9 @@
     "types": ["node", "vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/renderer/*"]
+      "@/*": ["./src/renderer/*"],
+      "@resources/*": ["./resources/*"]
     }
   },
-  "include": ["src", "electron.vite.config.ts", "scripts"]
+  "include": ["src", "electron.vite.config.ts", "vitest.config.ts", "scripts"]
 }

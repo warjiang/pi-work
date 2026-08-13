@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig } from "@pi-work/protocol";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { translator } from "../i18n.js";
+import { translator } from "@/i18n.js";
 import { BrowserPage } from "./browser-page.js";
 import { settingsNavigationGroups, SettingsPage } from "./settings-page.js";
 

@@ -20,10 +20,10 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "../components/ui/alert-dialog.js";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
-import { Badge } from "../components/ui/badge.js";
-import { Button } from "../components/ui/button.js";
+} from "@/components/ui/alert-dialog.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
+import { Badge } from "@/components/ui/badge.js";
+import { Button } from "@/components/ui/button.js";
 import {
   Dialog,
   DialogContent,
@@ -31,11 +31,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog.js";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import type { IconName } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
+} from "@/components/ui/dialog.js";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import type { IconName } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
 import {
   Select,
   SelectContent,
@@ -43,12 +43,12 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.js";
-import { Textarea } from "../components/ui/textarea.js";
-import { Switch } from "../components/ui/switch.js";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.js";
-import { sessionsByStage, sessionsForBoard } from "../board.js";
-import type { MessageKey } from "../i18n.js";
+} from "@/components/ui/select.js";
+import { Textarea } from "@/components/ui/textarea.js";
+import { Switch } from "@/components/ui/switch.js";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group.js";
+import { sessionsByStage, sessionsForBoard } from "@/board.js";
+import type { MessageKey } from "@/i18n.js";
 
 type T = (key: MessageKey) => string;
 type SkillFolderEntry = { name: string; path: string; type: "directory" | "file" };

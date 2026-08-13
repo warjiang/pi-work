@@ -1,6 +1,6 @@
 import * as TogglePrimitive from "@radix-ui/react-toggle";
 import type { ComponentProps } from "react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function Toggle({ className, ...props }: ComponentProps<typeof TogglePrimitive.Root>) {
   return (

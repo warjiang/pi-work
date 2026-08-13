@@ -1,6 +1,6 @@
 import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import type { ComponentProps } from "react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function ToggleGroup({ className, ...props }: ComponentProps<typeof ToggleGroupPrimitive.Root>) {
   return <ToggleGroupPrimitive.Root className={cn("inline-flex items-center gap-1 rounded-full bg-secondary p-1", className)} {...props} />;

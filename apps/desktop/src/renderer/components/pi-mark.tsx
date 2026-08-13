@@ -1,6 +1,5 @@
-import { cn } from "../lib/utils.js";
-
-const appIconUrl = new URL("../../../resources/icons/source/app-icon.svg", import.meta.url).href;
+import appIconUrl from "@resources/icons/source/app-icon.svg?url";
+import { cn } from "@/lib/utils.js";
 
 export function PiMark({
   className,

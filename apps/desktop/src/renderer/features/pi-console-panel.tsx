@@ -3,9 +3,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Button } from "../components/ui/button.js";
-import { Icon } from "../components/ui/icon.js";
-import type { MessageKey } from "../i18n.js";
+import { Button } from "@/components/ui/button.js";
+import { Icon } from "@/components/ui/icon.js";
+import type { MessageKey } from "@/i18n.js";
 
 type T = (key: MessageKey) => string;
 
