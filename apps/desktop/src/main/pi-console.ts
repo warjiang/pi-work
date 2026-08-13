@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { exec } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
 
 export type PiConsoleEvent =
@@ -25,6 +26,23 @@ export type IsolatedPiEnvironmentOptions = {
 export type PiConsoleLaunch = {
   executable: string;
   arguments_: string[];
+};
+
+export type PiConsoleExecuteInput = {
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+};
+
+export type PiConsoleExecuteResult = {
+  command: string;
+  cwd: string;
+  exitCode: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
 };
 
 export type PiConsoleStartResult =
@@ -62,6 +80,14 @@ export function resolveBundledPiCli(runtimeDirectory: string): string {
   );
   if (!isPathInside(runtimeDirectory, cliPath)) {
     throw new Error("The bundled Pi CLI path is outside the Pi runtime.");
+  }
+  return cliPath;
+}
+
+export function resolveBundledNpmCli(runtimeDirectory: string): string {
+  const cliPath = resolve(runtimeDirectory, "node_modules", "npm", "bin", "npm-cli.js");
+  if (!isPathInside(runtimeDirectory, cliPath)) {
+    throw new Error("The bundled npm CLI path is outside the Pi runtime.");
   }
   return cliPath;
 }
@@ -120,23 +146,183 @@ export function createIsolatedPiEnvironment({
   };
 }
 
-/**
- * node-pty's direct macOS spawn path cannot reliably launch an Electron .app
- * executable with ELECTRON_RUN_AS_NODE. The fixed shell wrapper immediately
- * execs the already-validated bundled CLI, so it never exposes a shell
- * session or accepts renderer-controlled arguments.
- */
+function quotePosix(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+export function createTerminalCommandShims({
+  directory,
+  nodeExecutable,
+  npmCli,
+  platform = process.platform,
+}: {
+  directory: string;
+  nodeExecutable: string;
+  npmCli: string;
+  platform?: NodeJS.Platform;
+}): void {
+  mkdirSync(directory, { recursive: true });
+  const cleanupPath = join(directory, "cleanup-electron-node.cjs");
+  writeFileSync(
+    cleanupPath,
+    [
+      "delete process.env.ELECTRON_RUN_AS_NODE;",
+      "const originalNodeOptions = process.env.PI_WORK_ORIGINAL_NODE_OPTIONS;",
+      "delete process.env.PI_WORK_ORIGINAL_NODE_OPTIONS;",
+      "delete process.env.PI_WORK_NODE_CLEANUP;",
+      "if (originalNodeOptions) process.env.NODE_OPTIONS = originalNodeOptions;",
+      "else delete process.env.NODE_OPTIONS;",
+      "",
+    ].join("\n"),
+  );
+  if (platform === "win32") {
+    const environment = [
+      "@echo off",
+      "set \"PI_WORK_ORIGINAL_NODE_OPTIONS=%NODE_OPTIONS%\"",
+      `set "PI_WORK_NODE_CLEANUP=${cleanupPath}"`,
+      "set \"NODE_OPTIONS=--require \\\"%PI_WORK_NODE_CLEANUP%\\\" %NODE_OPTIONS%\"",
+      "set ELECTRON_RUN_AS_NODE=1",
+    ].join("\r\n");
+    writeFileSync(join(directory, "node.cmd"), `${environment}\r\n"${nodeExecutable}" %*\r\n`);
+    writeFileSync(join(directory, "npm.cmd"), `${environment}\r\n"${nodeExecutable}" "${npmCli}" %*\r\n`);
+    return;
+  }
+
+  const environment = [
+    `export PI_WORK_NODE_CLEANUP=${quotePosix(cleanupPath)}`,
+    "export PI_WORK_ORIGINAL_NODE_OPTIONS=\"${NODE_OPTIONS-}\"",
+    "export NODE_OPTIONS=\"--require \\\"$PI_WORK_NODE_CLEANUP\\\"${NODE_OPTIONS:+ $NODE_OPTIONS}\"",
+    "export ELECTRON_RUN_AS_NODE=1",
+  ].join("\n");
+  writeFileSync(
+    join(directory, "node"),
+    `#!/bin/sh\n${environment}\nexec ${quotePosix(nodeExecutable)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(directory, "npm"),
+    `#!/bin/sh\n${environment}\nexec ${quotePosix(nodeExecutable)} ${quotePosix(npmCli)} "$@"\n`,
+    { mode: 0o755 },
+  );
+}
+
+export function createPiConsoleEnvironment({
+  runtimeDirectory,
+  commandShimDirectory,
+  baseEnvironment = process.env,
+  platform = process.platform,
+}: {
+  runtimeDirectory: string;
+  commandShimDirectory: string;
+  baseEnvironment?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): NodeJS.ProcessEnv {
+  const pathSeparator = platform === "win32" ? ";" : delimiter;
+  const inheritedEnvironment = Object.fromEntries(
+    Object.entries(baseEnvironment).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+  const inheritedPathEntry = Object.entries(inheritedEnvironment)
+    .find(([key]) => key.toUpperCase() === "PATH");
+  const inheritedPath = inheritedPathEntry?.[1];
+  for (const key of Object.keys(inheritedEnvironment)) {
+    if (key.toUpperCase() === "PATH") delete inheritedEnvironment[key];
+  }
+  delete inheritedEnvironment.ELECTRON_RUN_AS_NODE;
+
+  return {
+    ...inheritedEnvironment,
+    PATH: [
+      commandShimDirectory,
+      join(runtimeDirectory, "node_modules", ".bin"),
+      inheritedPath,
+    ].filter(Boolean).join(pathSeparator),
+  };
+}
+
+export function createTerminalShellBootstrap({
+  directory,
+  pathPrefix,
+  baseEnvironment = process.env,
+}: {
+  directory: string;
+  pathPrefix: string;
+  baseEnvironment?: NodeJS.ProcessEnv;
+}): {
+  zshDirectory: string;
+  bashRc: string;
+} {
+  const zshDirectory = join(directory, "zsh");
+  const bashRc = join(directory, "bashrc");
+  mkdirSync(zshDirectory, { recursive: true });
+
+  const userZdotDir = baseEnvironment.ZDOTDIR || baseEnvironment.HOME;
+  const userZshRc = userZdotDir === undefined ? null : join(userZdotDir, ".zshrc");
+  const userBashRc = baseEnvironment.HOME === undefined ? null : join(baseEnvironment.HOME, ".bashrc");
+  writeFileSync(join(zshDirectory, ".zshrc"), [
+    ...(userZshRc === null
+      ? []
+      : [
+          `if [ -f ${quotePosix(userZshRc)} ]; then`,
+          `  export ZDOTDIR=${quotePosix(userZdotDir ?? "")}`,
+          `  source ${quotePosix(userZshRc)}`,
+          `  export ZDOTDIR=${quotePosix(zshDirectory)}`,
+          "fi",
+        ]),
+    `export PATH=${quotePosix(pathPrefix)}:"$PATH"`,
+    "",
+  ].join("\n"));
+  writeFileSync(bashRc, [
+    ...(userBashRc === null
+      ? []
+      : [
+          `if [ -f ${quotePosix(userBashRc)} ]; then`,
+          `  source ${quotePosix(userBashRc)}`,
+          "fi",
+        ]),
+    `export PATH=${quotePosix(pathPrefix)}:"$PATH"`,
+    "",
+  ].join("\n"));
+
+  return { zshDirectory, bashRc };
+}
+
 export function resolvePiConsoleLaunch(
-  nodePath: string,
-  cliPath: string,
+  environment: NodeJS.ProcessEnv,
   platform = process.platform,
 ): PiConsoleLaunch {
-  if (platform !== "darwin") {
-    return { executable: nodePath, arguments_: [cliPath] };
+  if (platform === "win32") {
+    return {
+      executable: environment.ComSpec ?? environment.COMSPEC ?? "cmd.exe",
+      arguments_: [],
+    };
+  }
+
+  const configuredShell = environment.SHELL;
+  const executable = configuredShell !== undefined && isAbsolute(configuredShell)
+    ? configuredShell
+    : platform === "darwin"
+      ? "/bin/zsh"
+      : "/bin/sh";
+  const shellName = basename(executable);
+  if (shellName === "bash" && environment.PI_WORK_TERMINAL_BASH_RC !== undefined) {
+    return {
+      executable,
+      arguments_: ["--rcfile", environment.PI_WORK_TERMINAL_BASH_RC, "-i"],
+    };
+  }
+  if (shellName === "fish" && environment.PI_WORK_TERMINAL_PATH_PREFIX !== undefined) {
+    return {
+      executable,
+      arguments_: [
+        "-i",
+        "-C",
+        "set -gx PATH (string split ':' $PI_WORK_TERMINAL_PATH_PREFIX) $PATH",
+      ],
+    };
   }
   return {
-    executable: "/bin/sh",
-    arguments_: ["-c", "exec \"$@\"", "pi-work-bundled-pi", nodePath, cliPath],
+    executable,
+    arguments_: ["-i"],
   };
 }
 
@@ -147,12 +333,43 @@ export class PiConsole {
   constructor(
     private readonly options: {
       runtimeDirectory: string;
-      cliPath: string;
       userData: string;
+      workingDirectory: string;
       nodePath: string;
       emit: (event: PiConsoleEvent) => void;
     },
   ) {}
+
+  private prepareEnvironment(baseEnvironment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    const npmCli = resolveBundledNpmCli(this.options.runtimeDirectory);
+    if (!existsSync(npmCli) || !existsSync(this.options.nodePath)) {
+      throw new Error("Pi Work bundled Node/npm runtime is unavailable.");
+    }
+    const commandShimDirectory = join(this.options.userData, "pi-terminal", "bin");
+    createTerminalCommandShims({
+      directory: commandShimDirectory,
+      nodeExecutable: this.options.nodePath,
+      npmCli,
+    });
+    const environment = createPiConsoleEnvironment({
+      runtimeDirectory: this.options.runtimeDirectory,
+      commandShimDirectory,
+      baseEnvironment,
+    });
+    const pathPrefix = [
+      commandShimDirectory,
+      join(this.options.runtimeDirectory, "node_modules", ".bin"),
+    ].join(process.platform === "win32" ? ";" : delimiter);
+    const bootstrap = createTerminalShellBootstrap({
+      directory: join(this.options.userData, "pi-terminal", "shell"),
+      pathPrefix,
+      baseEnvironment,
+    });
+    environment.PI_WORK_TERMINAL_PATH_PREFIX = pathPrefix;
+    environment.PI_WORK_TERMINAL_BASH_RC = bootstrap.bashRc;
+    environment.ZDOTDIR = bootstrap.zshDirectory;
+    return environment;
+  }
 
   start(): PiConsoleStartResult {
     if (this.process !== null) {
@@ -160,21 +377,13 @@ export class PiConsole {
     }
 
     try {
-      if (!isPathInside(this.options.runtimeDirectory, this.options.cliPath) || !existsSync(this.options.cliPath)) {
-        throw new Error("Pi Work bundled Pi runtime is unavailable.");
-      }
-      const environment = createIsolatedPiEnvironment({
-        userData: this.options.userData,
-        runtimeDirectory: this.options.runtimeDirectory,
-        nodeExecutable: this.options.nodePath,
-      });
-      environment.ELECTRON_RUN_AS_NODE = "1";
-      const launch = resolvePiConsoleLaunch(this.options.nodePath, this.options.cliPath);
+      const environment = this.prepareEnvironment();
+      const launch = resolvePiConsoleLaunch(environment);
       const terminal = pty.spawn(launch.executable, launch.arguments_, {
         name: "xterm-256color",
         cols: 100,
         rows: 30,
-        cwd: this.options.userData,
+        cwd: this.options.workingDirectory,
         env: environment as Record<string, string>,
       });
       this.process = terminal;
@@ -192,13 +401,59 @@ export class PiConsole {
       return { started: true, reused: false, output: "" };
     } catch (error) {
       this.process = null;
-      const message = error instanceof Error ? error.message : "Unable to start Pi Console.";
+      const message = error instanceof Error ? error.message : "Unable to start Pi Terminal.";
       this.options.emit({
         type: "error",
         message,
       });
       return { started: false, message };
     }
+  }
+
+  execute(input: PiConsoleExecuteInput): Promise<PiConsoleExecuteResult> {
+    const command = input.command.trim();
+    if (command.length === 0) {
+      return Promise.reject(new Error("Terminal command cannot be empty."));
+    }
+    const cwd = input.cwd === undefined ? this.options.workingDirectory : resolve(input.cwd);
+    const environment = this.prepareEnvironment({
+      ...process.env,
+      ...input.env,
+    });
+    const shell = resolvePiConsoleLaunch(environment).executable;
+    const timeoutMs = input.timeoutMs === undefined
+      ? 0
+      : Math.max(1, Math.min(10 * 60 * 1000, Math.floor(input.timeoutMs)));
+
+    return new Promise((resolveResult) => {
+      exec(command, {
+        cwd,
+        env: environment,
+        shell,
+        timeout: timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
+      }, (error, stdout, stderr) => {
+        const executionError = error as (Error & {
+          code?: number | string;
+          signal?: NodeJS.Signals;
+          killed?: boolean;
+        }) | null;
+        resolveResult({
+          command,
+          cwd,
+          exitCode: executionError === null
+            ? 0
+            : typeof executionError.code === "number"
+              ? executionError.code
+              : null,
+          signal: executionError?.signal ?? null,
+          stdout,
+          stderr,
+          timedOut: executionError?.killed === true && timeoutMs > 0,
+        });
+      });
+    });
   }
 
   write(data: string): void {

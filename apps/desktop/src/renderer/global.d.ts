@@ -54,6 +54,7 @@ declare global {
         write(data: string): Promise<void>;
         resize(dimensions: { cols: number; rows: number }): Promise<void>;
         snapshot(): Promise<{ running: boolean; output: string }>;
+        execute(input: PiConsoleExecuteInput): Promise<PiConsoleExecuteResult>;
         restart(): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
         close(): Promise<void>;
         onEvent(listener: (event: PiConsoleEvent) => void): () => void;
@@ -131,6 +132,7 @@ type DomainApi<T> = {
 
 type SkillApi = {
   list(): Promise<Skill[]>;
+  listFiles(id: string): Promise<Array<{ name: string; path: string; type: "directory" | "file" }>>;
   scanSystem(): Promise<import("@pi-work/protocol").SystemSkill[]>;
   create(input: unknown): Promise<Skill>;
   update(input: unknown): Promise<Skill>;
@@ -165,5 +167,22 @@ type PiConsoleEvent =
   | { type: "data"; data: string }
   | { type: "exit"; exitCode: number; signal?: number }
   | { type: "error"; message: string };
+
+type PiConsoleExecuteInput = {
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+};
+
+type PiConsoleExecuteResult = {
+  command: string;
+  cwd: string;
+  exitCode: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+};
 
 export {};

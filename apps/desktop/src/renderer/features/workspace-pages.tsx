@@ -51,6 +51,7 @@ import { sessionsByStage, sessionsForBoard } from "../board.js";
 import type { MessageKey } from "../i18n.js";
 
 type T = (key: MessageKey) => string;
+type SkillFolderEntry = { name: string; path: string; type: "directory" | "file" };
 
 export function PageHeader(props: { eyebrow?: string; title: string; detail?: string; action?: ReactNode }) {
   return (
@@ -286,6 +287,11 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
   });
   const filtered = (query.data ?? []).filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   const selected = query.data?.find(({ id }) => id === selectedId) ?? null;
+  useEffect(() => {
+    const firstSkill = query.data?.[0];
+    if (selectedId !== null || firstSkill === undefined) return;
+    setSelectedId(firstSkill.id);
+  }, [query.data, selectedId]);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["skills"] });
   const create = useMutation({
     mutationFn: () => window.piWork.skill.create({
@@ -331,6 +337,7 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
       t={t}
       detail={t("skillRuntimeDetail")}
       icon="skills"
+      itemIcon="workspace"
       items={filtered}
       selectedId={selectedId}
       loading={query.isLoading}
@@ -338,8 +345,9 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
       addLabel={t("add")}
       action={actions}
       filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchSkills")} /></label>}
+      listHeader={<div className="skill-folder-heading"><Icon name="workspace" size={14} /><span>{t("skillFolders")}</span></div>}
       onSelect={setSelectedId}
-      renderItem={(skill) => <><strong>{skill.name}</strong><small>{skill.description}</small><Badge>{skill.enabled ? t("enabled") : t("disabled")}</Badge></>}
+      renderItem={(skill) => <><span>{skill.name}</span><small>{skill.description}</small></>}
       detailPane={selected ? <SkillEditor skill={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
     />
   );
@@ -385,6 +393,10 @@ function SkillEditor({ skill, t, onSaved, onDeleted }: { skill: Skill; t: T; onS
   const [instructions, setInstructions] = useState(skill.instructions);
   const [enabled, setEnabled] = useState(skill.enabled);
   const [error, setError] = useState<string | null>(null);
+  const files = useQuery({
+    queryKey: ["skill-files", skill.id],
+    queryFn: () => window.piWork.skill.listFiles(skill.id),
+  });
   useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); setEnabled(skill.enabled); setError(null); }, [skill]);
   const save = useMutation({
     mutationFn: () => window.piWork.skill.update({ id: skill.id, value: { name, description, instructions, enabled } }),
@@ -403,8 +415,29 @@ function SkillEditor({ skill, t, onSaved, onDeleted }: { skill: Skill; t: T; onS
   });
   return <ResourceEditor title={skill.name} status={t("skillRuntimeDetail")} t={t} onDelete={() => remove.mutate()}>
     <Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert>
+    <SkillFolderTree entries={files.data} loading={files.isLoading} t={t} />
     <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field><Field><FieldLabel>{t("instructions")}</FieldLabel><Textarea className="markdown-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={18} /></Field><Field><FieldLabel>{t("enabled")}</FieldLabel><Switch checked={enabled} disabled={toggle.isPending} onCheckedChange={(next) => { setEnabled(next); toggle.mutate(next); }} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button disabled={save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
   </ResourceEditor>;
+}
+
+function SkillFolderTree({ entries, loading, t }: { entries: SkillFolderEntry[] | undefined; loading: boolean; t: T }) {
+  return (
+    <details className="skill-folder-tree" open>
+      <summary>
+        <span><Icon name="workspace" size={14} />{t("skillFolderContents")}</span>
+        <small>{loading ? t("loading") : `${entries?.length ?? 0} ${t("files")}`}</small>
+      </summary>
+      <div className="skill-folder-tree-list">
+        {loading ? <div className="skill-folder-tree-loading">{t("loading")}</div> : null}
+        {entries?.map((entry) => (
+          <div className={`skill-folder-tree-row skill-folder-tree-row--${entry.type} skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}`} key={entry.path}>
+            <Icon name={entry.type === "directory" ? "workspace" : "file"} size={14} />
+            <span>{entry.name}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
 }
 
 function nextSkillName(skills: Skill[]): string {
@@ -670,7 +703,9 @@ function LibraryLayout<T extends { id: string }>(props: {
   className?: string | undefined;
   showHeader?: boolean;
   toolbar?: ReactNode | undefined;
+  listHeader?: ReactNode | undefined;
   items: T[];
+  itemIcon?: IconName | undefined;
   selectedId: string | null;
   loading: boolean;
   empty: string;
@@ -691,7 +726,8 @@ function LibraryLayout<T extends { id: string }>(props: {
           {props.filter}
           {props.loading ? <div className="page-loading"><span /><span /><span /></div> : (
             <div className="library-list">
-              {props.items.map((item) => <Button variant="ghost" className={props.selectedId === item.id ? "library-row selected" : "library-row"} key={item.id} onClick={() => props.onSelect(item.id)}><span className="resource-symbol"><Icon name={props.icon} /></span><span className="library-row-copy">{props.renderItem(item)}</span><Icon name="forward" size={14} /></Button>)}
+              {props.listHeader}
+              {props.items.map((item) => <Button variant="ghost" className={props.selectedId === item.id ? "library-row selected" : "library-row"} key={item.id} onClick={() => props.onSelect(item.id)}><span className="resource-symbol"><Icon name={props.itemIcon ?? props.icon} /></span><span className="library-row-copy">{props.renderItem(item)}</span><Icon name="forward" size={14} /></Button>)}
               {props.items.length === 0 ? <p className="library-empty">{props.empty}</p> : null}
             </div>
           )}

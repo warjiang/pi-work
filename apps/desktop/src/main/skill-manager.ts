@@ -12,6 +12,14 @@ import {
 import { PiWorkStore } from "@pi-work/storage";
 
 const skillFileName = "SKILL.md";
+const maxSkillFileEntries = 200;
+const maxSkillFileDepth = 6;
+
+export type SkillFolderEntry = {
+  name: string;
+  path: string;
+  type: "directory" | "file";
+};
 
 export class SkillManager {
   private migration: Promise<void> | null = null;
@@ -25,6 +33,12 @@ export class SkillManager {
   async list(): Promise<Skill[]> {
     await this.ensureMigrated();
     return this.store.listGlobalSkills();
+  }
+
+  async listFiles(id: string): Promise<SkillFolderEntry[]> {
+    await this.ensureMigrated();
+    this.requireSkill(id);
+    return collectSkillFolderEntries(this.directoryFor(id));
   }
 
   async scanSystem(): Promise<SystemSkill[]> {
@@ -234,6 +248,39 @@ type SystemSkillRoot = {
   source: SystemSkill["source"];
   path: string;
 };
+
+async function collectSkillFolderEntries(root: string): Promise<SkillFolderEntry[]> {
+  const entries: SkillFolderEntry[] = [];
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    if (depth > maxSkillFileDepth || entries.length >= maxSkillFileEntries) return;
+    let children: Dirent<string>[];
+    try {
+      children = await readdir(directory, { withFileTypes: true, encoding: "utf8" });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+    const visibleChildren = children
+      .filter((entry) => entry.name !== ".git" && entry.name !== "node_modules" && !entry.isSymbolicLink())
+      .sort((left, right) => {
+        const type = Number(right.isDirectory()) - Number(left.isDirectory());
+        return type || left.name.localeCompare(right.name);
+      });
+    for (const child of visibleChildren) {
+      if (entries.length >= maxSkillFileEntries) return;
+      const absolutePath = join(directory, child.name);
+      const relativePath = relative(root, absolutePath).split(sep).join("/");
+      if (child.isDirectory()) {
+        entries.push({ name: child.name, path: relativePath, type: "directory" });
+        await visit(absolutePath, depth + 1);
+      } else if (child.isFile()) {
+        entries.push({ name: child.name, path: relativePath, type: "file" });
+      }
+    }
+  };
+  await visit(root, 0);
+  return entries;
+}
 
 async function findSkillDirectories(root: string): Promise<string[]> {
   const directories: string[] = [];

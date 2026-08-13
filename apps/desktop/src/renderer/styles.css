@@ -1697,10 +1697,6 @@ kbd {
   display: none;
 }
 
-.thinking-block summary:hover {
-  background: var(--panel-muted);
-}
-
 .thinking-marker,
 .tool-status-icon {
   position: relative;
@@ -1822,10 +1818,6 @@ kbd {
 
 .tool-status > summary:focus-visible {
   outline: none;
-}
-
-.tool-status > summary:hover {
-  background: var(--panel-muted);
 }
 
 .tool-status-icon {
@@ -3676,10 +3668,6 @@ details pre {
   padding: 9px 8px;
 }
 
-.system-skill-row:hover {
-  background: var(--hover);
-}
-
 .system-skill-row > button {
   justify-self: end;
   white-space: nowrap;
@@ -3718,20 +3706,70 @@ details pre {
   min-height: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 12px;
+  border-radius: 9px;
   background: var(--panel);
 }
 
 .settings-skills-page .library-list-pane {
-  background: color-mix(in srgb, var(--panel-muted) 48%, transparent);
+  padding: 8px;
+  background: color-mix(in srgb, var(--panel-muted) 62%, var(--panel));
 }
 
 .settings-skills-toolbar {
   display: flex;
   flex: 0 0 auto;
+  min-height: 42px;
+  align-items: center;
   justify-content: flex-end;
   border-bottom: 1px solid var(--border);
-  padding: 10px 12px;
+  padding: 5px 9px;
+}
+
+.settings-skills-page .library-layout {
+  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+}
+
+.settings-skills-page .library-search {
+  margin: 0 2px 6px;
+}
+
+.settings-skills-page .library-row {
+  grid-template-columns: 30px minmax(0, 1fr) 14px;
+  min-height: 54px;
+  gap: 9px;
+  padding: 6px;
+}
+
+.settings-skills-page .resource-symbol {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.settings-skills-page .library-row-copy strong,
+.settings-skills-page .system-skill-copy strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-skills-page .library-row-copy small {
+  margin: 1px 0 3px;
+  font-size: 11px;
+}
+
+.settings-skills-page .library-row-copy [class*="badge"] {
+  min-height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+.settings-skills-page .resource-detail-empty {
+  gap: 8px;
+  background: var(--panel);
+}
+
+.settings-skills-page .resource-editor-body > .runtime-boundary {
+  display: none;
 }
 
 .library-empty {
@@ -3805,19 +3843,20 @@ details pre {
 
 .browser-privacy {
   display: flex;
-  min-height: 42px;
+  min-height: 38px;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border));
   border-radius: 0;
-  background: var(--amber-bg);
-  padding: 8px 14px;
+  background: var(--panel-muted);
+  padding: 7px 18px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .browser-privacy > .ui-icon {
-  color: var(--amber);
+  color: var(--muted);
 }
 
 .browser-toolbar {
@@ -4771,7 +4810,7 @@ textarea,
 
 .sidebar-nav-button strong {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .nav-count {
@@ -5555,7 +5594,10 @@ h3,
   display: none;
 }
 
-.sidebar-nav-button strong,
+.sidebar-nav-button strong {
+  font-weight: 400;
+}
+
 .recent-task strong,
 .sidebar-settings-button strong {
   font-weight: 500;
@@ -5856,7 +5898,7 @@ h3,
   background: var(--panel);
 }
 
-.settings-shell .settings-layout {
+.settings-shell {
   grid-template-columns: 232px minmax(0, 1fr);
 }
 
@@ -6016,17 +6058,21 @@ h3,
   z-index: 60;
   inset: 0;
   display: grid;
-  grid-template-rows: 46px minmax(0, 1fr);
+  grid-template-columns: 214px minmax(0, 1fr);
+  grid-template-rows: 52px minmax(0, 1fr) 0;
   min-width: 0;
   min-height: 0;
   background: var(--bg);
 }
 
 .settings-titlebar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-column: 1 / -1;
+  grid-row: 1;
+  position: relative;
+  display: flex;
   min-width: 0;
   align-items: center;
+  justify-content: space-between;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   background: var(--panel);
   padding: 0 16px;
@@ -6035,22 +6081,6 @@ h3,
 
 :root[data-platform="darwin"] .settings-titlebar {
   padding-left: 78px;
-}
-
-.settings-titlebar-identity {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-  letter-spacing: -0.01em;
-}
-
-.settings-titlebar-identity strong {
-  font-weight: 600;
-}
-
-.settings-titlebar-identity span {
-  color: var(--faint);
 }
 
 .settings-titlebar > span {
@@ -6075,13 +6105,16 @@ h3,
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--muted);
+  font-weight: 400;
   padding: 0 10px;
 }
 
-.settings-back:hover {
-  border-color: color-mix(in srgb, var(--border) 76%, transparent);
-  background: color-mix(in srgb, var(--panel-muted) 78%, transparent);
-  color: var(--text);
+.settings-back:hover,
+.settings-back:active {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--muted);
 }
 
 .settings-back span {
@@ -6091,16 +6124,11 @@ h3,
 }
 
 .settings-shell .settings-layout {
-  display: grid;
-  grid-template: minmax(0, 1fr) 0 / 214px minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  transition: grid-template-rows 220ms cubic-bezier(0.22, 0.72, 0.22, 1);
+  display: contents;
 }
 
-.settings-shell.pi-console-open .settings-layout {
-  grid-template-rows: minmax(0, 1fr) clamp(240px, 38vh, 420px);
+.settings-shell.pi-console-open {
+  grid-template-rows: 52px minmax(0, 1fr) clamp(240px, 38vh, 420px);
 }
 
 .settings-shell .settings-nav {
@@ -6114,7 +6142,7 @@ h3,
   background: var(--panel-muted);
   padding: 14px 10px 18px;
   grid-column: 1;
-  grid-row: 1 / 3;
+  grid-row: 2 / 4;
   -webkit-app-region: no-drag;
   scrollbar-width: none;
 }
@@ -6147,7 +6175,7 @@ h3,
   padding: 0 8px;
   color: var(--muted);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   -webkit-app-region: no-drag;
 }
 
@@ -6171,7 +6199,7 @@ h3,
 
 .settings-shell .settings-content {
   grid-column: 2;
-  grid-row: 1;
+  grid-row: 2;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -6199,10 +6227,12 @@ h3,
 
 .settings-content-inner--skills {
   grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  padding-bottom: 22px;
 }
 
 .settings-content-inner--skills .settings-skills-page {
-  min-height: 420px;
+  min-height: min(620px, calc(100dvh - 146px));
 }
 
 .settings-content-inner--browser {
@@ -6218,15 +6248,15 @@ h3,
 
 .settings-page-heading {
   display: grid;
-  min-height: 34px;
+  min-height: 28px;
   align-items: center;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  padding: 0 1px 9px;
+  border: 0;
+  padding: 0 1px;
 }
 
 .settings-page-heading h1 {
-  font-size: 21px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1.2;
 }
@@ -6243,7 +6273,7 @@ h3,
 
 .settings-shell .settings-section h2 {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: -0.012em;
 }
 
@@ -6326,7 +6356,7 @@ h3,
 .settings-theme-row strong {
   color: var(--text);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .settings-language-row small {
@@ -6887,11 +6917,6 @@ h3,
   transition: opacity 180ms ease, transform 220ms cubic-bezier(0.22, 0.72, 0.22, 1);
 }
 
-.settings-layout > .pi-console-panel {
-  grid-column: 2;
-  grid-row: 2;
-}
-
 .pi-console-panel.is-open {
   opacity: 1;
   transform: translateY(0);
@@ -7018,8 +7043,8 @@ h3,
 }
 
 .extension-category-filter button:hover {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
+  background: transparent;
+  color: var(--muted);
 }
 
 .extension-category-filter button.selected {
@@ -7037,20 +7062,20 @@ h3,
 
 .extension-card {
   display: grid;
-  min-height: 157px;
+  min-height: 145px;
   grid-template-rows: 1fr auto;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: 11px;
-  background: color-mix(in srgb, var(--panel) 78%, var(--panel-muted));
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-muted));
   overflow: hidden;
-  transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  transition: border-color 140ms ease;
 }
 
 .extension-card:hover {
-  border-color: color-mix(in srgb, var(--border-strong) 66%, var(--border));
-  background: var(--panel);
-  box-shadow: 0 10px 20px color-mix(in srgb, var(--text) 4%, transparent);
-  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-muted));
+  box-shadow: none;
+  transform: none;
 }
 
 .extension-card-main {
@@ -7061,7 +7086,7 @@ h3,
   gap: 12px;
   border: 0;
   background: transparent;
-  padding: 16px 16px 13px;
+  padding: 14px 14px 11px;
   color: inherit;
   cursor: pointer;
   text-align: left;
@@ -7125,7 +7150,7 @@ h3,
 .extension-card-copy {
   display: grid;
   min-width: 0;
-  gap: 8px;
+  gap: 6px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.52;
@@ -7144,7 +7169,7 @@ h3,
 }
 
 .extension-card-heading small,
-.extension-drawer-heading small {
+.extension-detail-heading small {
   color: color-mix(in srgb, var(--muted) 88%, transparent);
   font-size: 9px;
   font-weight: 700;
@@ -7159,7 +7184,7 @@ h3,
   justify-content: space-between;
   gap: 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-  padding: 9px 11px 10px 15px;
+  padding: 7px 10px 8px 13px;
 }
 
 .extension-card-footer code {
@@ -7607,8 +7632,8 @@ h3,
 
 .build-info-list > div {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) auto;
-  min-height: 48px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  min-height: 40px;
   align-items: center;
   gap: 14px;
 }
@@ -7628,8 +7653,354 @@ h3,
   white-space: nowrap;
 }
 
-.build-info-list button {
-  min-width: 78px;
+/*
+ * Settings is an operational surface: hierarchy comes from layout, size, and
+ * tone rather than bold labels. This also neutralizes the Button primitive's
+ * default semibold class for controls rendered inside the settings shell.
+ */
+:is(.settings-shell, .extension-detail-dialog, .extension-manual-install-dialog, .settings-confirm-dialog) :is(h1, h2, h3, h4, h5, h6, strong, b),
+:is(.settings-shell, .extension-detail-dialog, .extension-manual-install-dialog, .settings-confirm-dialog) :is(button, [role="button"]) {
+  font-weight: 400 !important;
+}
+
+.settings-nav-group > header,
+.extension-card-heading small,
+.extension-detail-heading small {
+  font-weight: 400;
+}
+
+/*
+ * The Skills and Extensions settings are operational views, not collections
+ * of promotional cards. Keep their density high enough for a desktop
+ * workspace while preserving a single, clear list/detail hierarchy.
+ */
+.settings-content-inner--skills .settings-skills-page {
+  height: auto;
+  min-height: 0;
+}
+
+.settings-content-inner--skills {
+  grid-template-rows: auto auto;
+}
+
+.settings-content-inner--skills > * {
+  width: 100%;
+}
+
+.settings-skills-page {
+  border-radius: 8px;
+  overflow: visible;
+}
+
+.settings-skills-toolbar {
+  min-height: 38px;
+  padding: 3px 8px;
+}
+
+.settings-skills-toolbar .page-header-actions {
+  gap: 6px;
+}
+
+.settings-skills-toolbar .page-header-actions > button {
+  min-height: 30px;
+  padding-inline: 9px;
+  font-size: 12px;
+}
+
+.settings-skills-page .library-layout {
+  grid-template-columns: minmax(232px, 280px) minmax(0, 1fr);
+  min-height: 0;
+  overflow: visible;
+}
+
+.settings-skills-page .library-list-pane {
+  padding: 7px;
+}
+
+.settings-skills-page .library-row {
+  min-height: 48px;
+  align-items: center;
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.settings-skills-page .library-row:hover {
+  background: transparent;
+}
+
+.settings-skills-page .library-row.selected,
+.settings-skills-page .library-row.selected:hover {
+  background: var(--active);
+}
+
+.settings-skills-page .resource-detail-pane,
+.settings-skills-page .resource-detail-empty {
+  background: var(--panel);
+}
+
+.settings-skills-page .library-list {
+  overflow: visible;
+}
+
+.settings-skills-page .skill-folder-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.settings-skills-page .skill-folder-heading .ui-icon {
+  color: var(--muted);
+}
+
+.settings-skills-page .library-row-copy {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+}
+
+.settings-skills-page .library-row-copy > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-skills-page .library-row-copy small {
+  margin: 0;
+}
+
+.settings-skills-page .resource-editor-header {
+  min-height: 58px;
+  padding: 9px 14px;
+}
+
+.settings-skills-page .resource-editor-header h2 {
+  font-size: 15px;
+  letter-spacing: -0.012em;
+}
+
+.settings-skills-page .resource-editor-header span {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.settings-skills-page .resource-editor-body {
+  padding: 12px 16px 14px;
+}
+
+.settings-skills-page .resource-editor-body .field-group {
+  gap: 10px;
+}
+
+.settings-skills-page .skill-folder-tree {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 72%, var(--panel));
+}
+
+.settings-skills-page .skill-folder-tree > summary {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-skills-page .skill-folder-tree > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-skills-page .skill-folder-tree > summary > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-skills-page .skill-folder-tree > summary > small {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.settings-skills-page .skill-folder-tree-list {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 5px;
+}
+
+.settings-skills-page .skill-folder-tree-row,
+.settings-skills-page .skill-folder-tree-loading {
+  display: flex;
+  min-width: 0;
+  min-height: 23px;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.settings-skills-page .skill-folder-tree-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-skills-page .skill-folder-tree-row--directory {
+  color: var(--text);
+}
+
+.settings-skills-page .skill-folder-tree-row--depth-0 { padding-left: 3px; }
+.settings-skills-page .skill-folder-tree-row--depth-1 { padding-left: 18px; }
+.settings-skills-page .skill-folder-tree-row--depth-2 { padding-left: 33px; }
+.settings-skills-page .skill-folder-tree-row--depth-3 { padding-left: 48px; }
+.settings-skills-page .skill-folder-tree-row--depth-4 { padding-left: 63px; }
+.settings-skills-page .skill-folder-tree-row--depth-5 { padding-left: 78px; }
+.settings-skills-page .skill-folder-tree-row--depth-6 { padding-left: 93px; }
+
+.settings-skills-page .markdown-editor {
+  min-height: 180px;
+  height: min(280px, 30dvh);
+  resize: vertical;
+}
+
+.extension-store {
+  gap: 10px;
+}
+
+.settings-shell .extension-store-section > header {
+  margin-bottom: 10px;
+}
+
+.extension-store-toolbar {
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.extension-store-tabs button {
+  min-height: 30px;
+  padding-inline: 8px;
+}
+
+.extension-store-actions {
+  gap: 7px;
+}
+
+.extension-store-search,
+.extension-manual-install-trigger {
+  height: 30px;
+}
+
+.extension-store-search input {
+  height: 28px;
+}
+
+.extension-category-filter {
+  margin-top: -1px;
+}
+
+.extension-card-grid {
+  gap: 8px;
+}
+
+.extension-card {
+  min-height: 122px;
+  border-radius: 9px;
+  transition: none;
+}
+
+.extension-card-main {
+  gap: 10px;
+  padding: 11px 12px 9px;
+}
+
+.extension-card-icon {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+  border-radius: 8px;
+}
+
+.extension-card-copy {
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.extension-card-heading {
+  gap: 2px;
+}
+
+.extension-card-heading strong {
+  font-size: 13px;
+}
+
+.extension-card-footer {
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+}
+
+.extension-card-footer button {
+  min-height: 26px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+.extension-store-empty {
+  min-height: 144px;
+  border-radius: 9px;
+}
+
+.settings-shell .extension-list > .extension-installed-row {
+  min-height: 58px;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.extension-store-installed .extension-installed-main:not(:disabled):hover strong {
+  text-decoration: none;
+}
+
+.extension-detail-body {
+  gap: 13px;
+}
+
+.extension-detail-heading {
+  gap: 10px;
+}
+
+.extension-detail-heading h2 {
+  font-size: 16px;
+}
+
+.extension-detail-meta > div {
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.extension-security-note {
+  padding: 8px 9px;
+}
+
+.extension-detail-actions {
+  gap: 8px;
+  padding-top: 10px;
 }
 
 @media (max-width: 900px) {
@@ -7637,7 +8008,7 @@ h3,
     padding: 0 11px;
   }
 
-  .settings-shell .settings-layout {
+  .settings-shell {
     grid-template-columns: 214px minmax(0, 1fr);
   }
 
@@ -7721,7 +8092,7 @@ h3,
 }
 
 @media (max-width: 720px) {
-  .settings-shell .settings-layout {
+  .settings-shell {
     grid-template-columns: 184px minmax(0, 1fr);
   }
 

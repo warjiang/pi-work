@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, Workspace } from "@pi-work/protocol";
+import type {
+  AppSettings,
+  BuildInfo,
+  ModelCatalog,
+  ProviderConfig,
+  Workspace,
+} from "@pi-work/protocol";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -119,10 +125,6 @@ export function SettingsPage(props: {
           <Icon name="back" />
           <span>{props.t("backToWorkspace")}</span>
         </Button>
-        <div className="settings-titlebar-identity">
-          <strong>{props.t("appName")}</strong>
-          <span>{props.t("settings")}</span>
-        </div>
         <div className="settings-titlebar-actions">
           <Button
             variant="ghost"
@@ -381,7 +383,7 @@ function ModelSettings(props: BaseProps) {
         }}><SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger><SelectContent><SelectGroup>{modelOptions.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent></Select>
       </SettingsSubsection>
     </SettingsSectionBlock>
-    <AlertDialog open={removeProvider !== null} onOpenChange={(open) => { if (!open) setRemoveProvider(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{props.t("removeCredential")}</AlertDialogTitle><AlertDialogDescription>{removeProvider}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+    <AlertDialog open={removeProvider !== null} onOpenChange={(open) => { if (!open) setRemoveProvider(null); }}><AlertDialogContent className="settings-confirm-dialog"><AlertDialogHeader><AlertDialogTitle>{props.t("removeCredential")}</AlertDialogTitle><AlertDialogDescription>{removeProvider}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </>;
 }
 
@@ -698,7 +700,7 @@ function ExtensionSettings({
     </AlertDialog>
 
     <AlertDialog open={pendingRemove !== null} onOpenChange={(open) => !open && setPendingRemove(null)}>
-      <AlertDialogContent>
+      <AlertDialogContent className="settings-confirm-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle>{t("removeExtensionConfirmTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("removeExtensionConfirmDetail")}</AlertDialogDescription>
@@ -755,18 +757,11 @@ function ShortcutSettings({ t }: { t: T }) {
 }
 
 function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {
-  const [copied, setCopied] = useState<string | null>(null);
   const rows: Array<{ key: "version" | "branch" | "commit"; value: string | null }> = [
     { key: "version", value: buildInfo.version },
     { key: "branch", value: buildInfo.branch },
     { key: "commit", value: buildInfo.commit },
   ];
-  const copy = (key: string, value: string) => {
-    void navigator.clipboard.writeText(value).then(() => {
-      setCopied(key);
-      window.setTimeout(() => setCopied((current) => current === key ? null : current), 1_500);
-    });
-  };
   return (
     <SettingsSectionBlock title={t("about")} detail={t("buildInformationDetail")} showTitle={false}>
       <div className="about-heading">
@@ -778,15 +773,6 @@ function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {
           <div key={row.key}>
             <dt>{t(row.key)}</dt>
             <dd title={row.value ?? undefined}>{row.value ?? t("unavailable")}</dd>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={row.value === null}
-              onClick={() => row.value && copy(row.key, row.value)}
-            >
-              <Icon name={copied === row.key ? "check" : "copy"} />
-              {copied === row.key ? t("copied") : t("copy")}
-            </Button>
           </div>
         ))}
       </dl>

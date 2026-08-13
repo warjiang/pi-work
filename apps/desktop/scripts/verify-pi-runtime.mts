@@ -30,6 +30,7 @@ await access(resolve(runtimeDirectory, "chunks"));
 const sdkDirectory = resolve(runtimeDirectory, "node_modules", "@earendil-works", "pi-coding-agent");
 await access(resolve(sdkDirectory, "package.json"));
 await access(resolve(sdkDirectory, "dist", "cli.js"));
+await access(resolve(runtimeDirectory, "node_modules", "npm", "bin", "npm-cli.js"));
 const sdk = await import(pathToFileURL(resolve(sdkDirectory, "dist", "index.js")).href);
 if (typeof sdk.DefaultPackageManager !== "function" || typeof sdk.DefaultResourceLoader !== "function") {
   throw new Error("Packaged Pi runtime does not export extension package/resource loaders.");

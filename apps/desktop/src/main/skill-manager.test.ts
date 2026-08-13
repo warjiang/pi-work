@@ -95,6 +95,13 @@ describe("SkillManager", () => {
     const destination = join(userData, "pi-agent", "skills", skill.id);
     await expect(readFile(join(destination, "scripts", "review.mjs"), "utf8")).resolves.toBe("export default 1;\n");
     await expect(readFile(join(destination, "references", "guide.md"), "utf8")).resolves.toBe("# Guide\n");
+    await expect(manager.listFiles(skill.id)).resolves.toEqual([
+      { name: "references", path: "references", type: "directory" },
+      { name: "guide.md", path: "references/guide.md", type: "file" },
+      { name: "scripts", path: "scripts", type: "directory" },
+      { name: "review.mjs", path: "scripts/review.mjs", type: "file" },
+      { name: "SKILL.md", path: "SKILL.md", type: "file" },
+    ]);
     await expect(readFile(join(source, "SKILL.md"), "utf8")).resolves.toContain("disable-model-invocation: true");
     await manager.update(skill.id, {
       name: "pdf-review",

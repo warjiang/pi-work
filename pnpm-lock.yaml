@@ -5688,7 +5688,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 24.7.2
+      '@types/node': 24.13.3
 
   '@types/cacheable-request@6.0.3':
     dependencies:
@@ -7463,7 +7463,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.2
-      '@types/node': 24.7.2
+      '@types/node': 24.13.3
       long: 5.3.2
 
   pump@3.0.4:

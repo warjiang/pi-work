@@ -77,7 +77,6 @@ import {
   createIsolatedPiEnvironment,
   PiConsole,
   type PiConsoleEvent,
-  resolveBundledPiCli,
   resolveBundledPiRuntime,
 } from "./pi-console.js";
 
@@ -378,13 +377,12 @@ function bundledPiRuntimeDirectory(): string {
 
 function getPiConsole(): PiConsole {
   if (piConsole === null) {
-    console.info(`[Pi Console] Starting ${app.isPackaged ? "packaged" : "development"} bundled Pi runtime.`);
+    console.info(`[Pi Terminal] Starting with the ${app.isPackaged ? "packaged" : "development"} Node/npm runtime.`);
     const runtimeDirectory = bundledPiRuntimeDirectory();
-    const cliPath = resolveBundledPiCli(runtimeDirectory);
     piConsole = new PiConsole({
       runtimeDirectory,
-      cliPath,
       userData: app.getPath("userData"),
+      workingDirectory: app.getPath("home"),
       nodePath: process.execPath,
       emit: sendPiConsoleEvent,
     });
@@ -856,6 +854,10 @@ function registerIpc(): void {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
   ipcMain.handle("skill:list", () => getSkillManager().list());
+  ipcMain.handle("skill:list-files", (_event, input: unknown) => {
+    const { id } = removeDomainEntityInputSchema.parse(input);
+    return getSkillManager().listFiles(id);
+  });
   ipcMain.handle("skill:scan-system", () => getSkillManager().scanSystem());
   ipcMain.handle("skill:create", (_event, input: unknown) => (
     getSkillManager().create(createSkillInputSchema.parse(input))
@@ -898,6 +900,37 @@ function registerIpc(): void {
     getPiConsole().resize(cols, rows);
   });
   ipcMain.handle("pi-console:snapshot", () => getPiConsole().snapshot());
+  ipcMain.handle("pi-console:execute", (_event, input: unknown) => {
+    if (typeof input !== "object" || input === null) throw new Error("Invalid terminal command.");
+    const { command, cwd, env, timeoutMs } = input as {
+      command?: unknown;
+      cwd?: unknown;
+      env?: unknown;
+      timeoutMs?: unknown;
+    };
+    if (typeof command !== "string") throw new Error("Invalid terminal command.");
+    if (cwd !== undefined && typeof cwd !== "string") throw new Error("Invalid terminal working directory.");
+    if (
+      env !== undefined
+      && (
+        typeof env !== "object"
+        || env === null
+        || Array.isArray(env)
+        || Object.values(env).some((value) => typeof value !== "string")
+      )
+    ) {
+      throw new Error("Invalid terminal environment.");
+    }
+    if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs))) {
+      throw new Error("Invalid terminal timeout.");
+    }
+    return getPiConsole().execute({
+      command,
+      ...(cwd === undefined ? {} : { cwd }),
+      ...(env === undefined ? {} : { env: env as Record<string, string> }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+  });
   ipcMain.handle("pi-console:restart", () => getPiConsole().restart());
   ipcMain.handle("pi-console:close", () => {
     piConsole?.close();
