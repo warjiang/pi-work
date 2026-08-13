@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { useGSAP } from "@gsap/react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -482,8 +482,13 @@ export function TaskWorkbench(props: {
   const [modelId, setModelId] = useState(props.session.modelId ?? props.settings?.modelId ?? "");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.session.thinkingLevel);
   const [followStream, setFollowStream] = useState(true);
+  const [atLatest, setAtLatest] = useState(true);
   const messageScroller = useRef<HTMLDivElement>(null);
+  const messageFlow = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
+  const followStreamRef = useRef(true);
+  const userScrollIntentRef = useRef(false);
+  const userScrollIntentTimer = useRef<number | null>(null);
   const streamQueue = useRef("");
   const streamTimer = useRef<number | null>(null);
   const streamWaiters = useRef<Array<() => void>>([]);
@@ -554,14 +559,27 @@ export function TaskWorkbench(props: {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
     if (navigationTimer.current !== null) window.clearTimeout(navigationTimer.current);
+    if (userScrollIntentTimer.current !== null) window.clearTimeout(userScrollIntentTimer.current);
     streamWaiters.current.splice(0).forEach((resolve) => resolve());
   }, []);
   useEffect(() => {
     cancelTurnNavigation();
-    setFollowStream(true);
+    setStreamFollowing(true);
+    setAtLatest(true);
     setPublishOutcome(null);
     setRunNotice(null);
     scheduleScrollToLatest("auto");
+  }, [sessionId]);
+  useEffect(() => {
+    const flow = messageFlow.current;
+    if (flow === null) return;
+    const observer = new ResizeObserver(() => {
+      const scroller = messageScroller.current;
+      if (scroller !== null) setAtLatest(isNearBottom(scroller));
+      if (followStreamRef.current) scheduleScrollToLatest("auto");
+    });
+    observer.observe(flow);
+    return () => observer.disconnect();
   }, [sessionId]);
   useEffect(() => {
     setActiveTurnId((current) => {
@@ -729,6 +747,13 @@ export function TaskWorkbench(props: {
   }
 
   const recommendation = recommendedAction(props.session, unpublished.length, approvals.length, props.t);
+  const hasLiveActivity = liveProcess.thoughts.length > 0
+    || liveProcess.tools.length > 0
+    || liveProcess.notice !== null
+    || streamed !== "";
+  const showRunLoading = !liveResponsePersisted
+    && (send.isPending || props.session.running)
+    && !hasLiveActivity;
   const progressAnnouncement = useMemo(() => {
     if (!send.isPending && !props.session.running) return runNotice ?? "";
     const runningTool = liveProcess.tools.find((tool) => !tool.complete);
@@ -799,71 +824,83 @@ export function TaskWorkbench(props: {
           <div
             className="message-scroller"
             ref={messageScroller}
-            onPointerDown={cancelTurnNavigation}
+            onPointerDown={(event) => {
+              cancelTurnNavigation();
+              const bounds = event.currentTarget.getBoundingClientRect();
+              if (event.clientX >= bounds.right - 16) markUserScrollIntent();
+            }}
             onTouchStart={cancelTurnNavigation}
-            onWheel={cancelTurnNavigation}
+            onTouchMove={markUserScrollIntent}
+            onWheel={() => {
+              cancelTurnNavigation();
+              markUserScrollIntent();
+            }}
             onScroll={(event) => {
               const scroller = event.currentTarget;
-              const next = isNearBottom(scroller);
-              setFollowStream((current) => current === next ? current : next);
+              const nearBottom = isNearBottom(scroller);
+              setAtLatest(nearBottom);
+              if (userScrollIntentRef.current) setStreamFollowing(nearBottom);
               const visibleTurnId = activeTurnForScroller(scroller, turns);
               const nextTurnId = activeTurnDuringScroll(visibleTurnId, navigatingTurnId.current);
               setActiveTurnId((current) => current === nextTurnId ? current : nextTurnId);
             }}
           >
-            {messages.isError ? (
-              <TaskSectionError t={props.t} onRetry={() => void messages.refetch()} />
-            ) : (messages.data?.length ?? 0) === 0 && pendingPrompt === null ? (
-              <div className="conversation-empty">
-                <span>{personal ? props.t("privateSandbox") : props.t("taskDescription")}</span>
-                <h2>{props.session.goal}</h2>
-                <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
-              </div>
-            ) : (
-              <MessageList
-                messages={messages.data ?? []}
-                activities={activities.data ?? []}
-                attachments={savedAttachments.data ?? []}
-                collapsingProcessMessageId={collapsingProcessMessageId}
-                t={props.t}
-                onPreview={(attachment) => {
-                  if (typeof window.piWork.attachment.preview !== "function") {
-                    setError("Image preview is ready after restarting Pi Work.");
-                    return;
-                  }
-                  setPreviewAttachment(attachment);
-                  setPreviewUrl(null);
-                  void window.piWork.attachment.preview(attachment.id)
-                    .then(setPreviewUrl)
-                    .catch((cause: Error) => setError(cause.message));
-                }}
-              />
-            )}
-            {pendingPrompt !== null ? (
-              <article className="message user pending"><div>{pendingPrompt}</div></article>
-            ) : null}
-            {!liveResponsePersisted && (liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "") ? (
-              <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}</article>
-            ) : null}
-            {!personal && props.session.status === "awaiting_plan_approval" && plan.data !== null && plan.data !== undefined ? (
-              <PlanApprovalCard
-                plan={plan.data}
-                workingDirectory={props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}
-                outputPath={props.workspace?.outputPath ?? null}
-                pending={approvePlan.isPending}
-                t={props.t}
-                onReviewSteps={() => props.onInspectorOpen("plan")}
-                onResolve={(approved) => approvePlan.mutate(approved)}
-              />
-            ) : null}
-            {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
-            {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
+            <div className="message-flow" ref={messageFlow}>
+              {messages.isError ? (
+                <TaskSectionError t={props.t} onRetry={() => void messages.refetch()} />
+              ) : (messages.data?.length ?? 0) === 0 && pendingPrompt === null ? (
+                <div className="conversation-empty">
+                  <span>{personal ? props.t("privateSandbox") : props.t("taskDescription")}</span>
+                  <h2>{props.session.goal}</h2>
+                  <p>{personal ? props.t("privateSandboxDetail") : recommendation.label}</p>
+                </div>
+              ) : (
+                <MessageList
+                  messages={messages.data ?? []}
+                  activities={activities.data ?? []}
+                  attachments={savedAttachments.data ?? []}
+                  collapsingProcessMessageId={collapsingProcessMessageId}
+                  t={props.t}
+                  onPreview={(attachment) => {
+                    if (typeof window.piWork.attachment.preview !== "function") {
+                      setError("Image preview is ready after restarting Pi Work.");
+                      return;
+                    }
+                    setPreviewAttachment(attachment);
+                    setPreviewUrl(null);
+                    void window.piWork.attachment.preview(attachment.id)
+                      .then(setPreviewUrl)
+                      .catch((cause: Error) => setError(cause.message));
+                  }}
+                />
+              )}
+              {pendingPrompt !== null ? (
+                <article className="message user pending"><div>{pendingPrompt}</div></article>
+              ) : null}
+              {!liveResponsePersisted && hasLiveActivity ? (
+                <article className="message assistant"><LiveProcessView collapse={streamed !== ""} process={liveProcess} t={props.t} />{streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}</article>
+              ) : null}
+              {!personal && props.session.status === "awaiting_plan_approval" && plan.data !== null && plan.data !== undefined ? (
+                <PlanApprovalCard
+                  plan={plan.data}
+                  workingDirectory={props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}
+                  outputPath={props.workspace?.outputPath ?? null}
+                  pending={approvePlan.isPending}
+                  t={props.t}
+                  onReviewSteps={() => props.onInspectorOpen("plan")}
+                  onResolve={(approved) => approvePlan.mutate(approved)}
+                />
+              ) : null}
+              {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
+              {showRunLoading ? <RunLoadingState label={props.t("runStarting")} /> : null}
+            </div>
           </div>
         </div>
         <div className="composer-dock">
-          {!followStream ? (
+          {!followStream || !atLatest ? (
             <Button variant="secondary" className="scroll-to-latest" size="icon" type="button" aria-label={props.t("scrollToLatest")} onClick={() => {
-              setFollowStream(true);
+              setStreamFollowing(true);
+              setAtLatest(true);
               scheduleScrollToLatest("smooth");
             }}><Icon name="arrow-down" /></Button>
           ) : null}
@@ -1101,10 +1138,28 @@ export function TaskWorkbench(props: {
   function scheduleScrollToLatest(behavior: ScrollBehavior) {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = window.requestAnimationFrame(() => {
-      scrollFrame.current = null;
-      const scroller = messageScroller.current;
-      if (scroller !== null) scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+      scrollFrame.current = window.requestAnimationFrame(() => {
+        scrollFrame.current = null;
+        const scroller = messageScroller.current;
+        if (scroller === null) return;
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+        if (behavior === "auto") setAtLatest(true);
+      });
     });
+  }
+
+  function setStreamFollowing(next: boolean) {
+    followStreamRef.current = next;
+    setFollowStream((current) => current === next ? current : next);
+  }
+
+  function markUserScrollIntent() {
+    userScrollIntentRef.current = true;
+    if (userScrollIntentTimer.current !== null) window.clearTimeout(userScrollIntentTimer.current);
+    userScrollIntentTimer.current = window.setTimeout(() => {
+      userScrollIntentRef.current = false;
+      userScrollIntentTimer.current = null;
+    }, 180);
   }
 
   function cancelTurnNavigation() {
@@ -1119,7 +1174,7 @@ export function TaskWorkbench(props: {
     const target = document.getElementById(turn.targetId);
     if (target === null) return;
     cancelTurnNavigation();
-    setFollowStream(false);
+    setStreamFollowing(false);
     setActiveTurnId(turn.messageId);
     navigatingTurnId.current = turn.messageId;
     target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1163,7 +1218,10 @@ export function TaskWorkbench(props: {
 
   function runPrompt(content: string) {
     if (send.isPending || props.session.running) return;
+    setStreamFollowing(true);
+    setAtLatest(true);
     setPendingPrompt(content);
+    scheduleScrollToLatest("smooth");
     send.mutate(content);
   }
 }
@@ -1494,7 +1552,6 @@ function AssistantResult({ content, t, streaming = false }: { content: string; t
     if (!streaming || resultRef.current === null) return;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const result = resultRef.current;
-    const header = result.querySelector(":scope > header");
     const markdown = result.querySelector(":scope > .markdown-message");
     const nodes = markdown === null ? [] : Array.from(markdown.children);
     const freshNodes = nodes.filter((node) => !revealedNodesRef.current.has(node));
@@ -1512,17 +1569,6 @@ function AssistantResult({ content, t, streaming = false }: { content: string; t
         duration: reduceMotion ? 0 : 0.24,
         ease: "power3.out",
       }, 0);
-      if (header !== null) {
-        timeline.fromTo(header, {
-          autoAlpha: 0,
-          x: -4,
-        }, {
-          autoAlpha: 1,
-          x: 0,
-          duration: reduceMotion ? 0 : 0.18,
-          ease: "power2.out",
-        }, reduceMotion ? 0 : 0.04);
-      }
     }
 
     if (freshNodes.length > 0) {
@@ -1544,40 +1590,137 @@ function AssistantResult({ content, t, streaming = false }: { content: string; t
     dependencies: [content, streaming],
   });
   return (
-    <section ref={resultRef} className={`assistant-result${streaming ? " is-streaming" : ""}`} aria-label={streaming ? t("responseStreaming") : t("result")}>
-      {streaming ? (
-        <header>
-          <span className="assistant-result-icon" aria-hidden="true">
-            <Icon name="status" size={14} />
-          </span>
-          <span>{t("responseStreaming")}</span>
-        </header>
-      ) : null}
+    <section ref={resultRef} className={`assistant-result${streaming ? " is-streaming" : ""}`} aria-label={t("result")}>
       <MarkdownMessage streaming={streaming} content={content} copyLabel={t("copyCode")} copiedLabel={t("copied")} />
     </section>
   );
 }
 
-function ThoughtProcessCard({ activity, t, open = false, label }: {
+const runLoadingDelays = Array.from({ length: 9 }, (_, index) => {
+  const row = Math.floor(index / 3);
+  const column = index % 3;
+  return (column + Math.abs(row - 1)) * 90;
+});
+
+function RunLoadingState({ label }: { label: string }) {
+  const [elapsedDeciseconds, setElapsedDeciseconds] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const timer = window.setInterval(() => setElapsedDeciseconds((current) => current + 1), 100);
+    return () => window.clearInterval(timer);
+  }, []);
+  useGSAP(() => {
+    if (rootRef.current === null) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    gsap.fromTo(rootRef.current, {
+      autoAlpha: reduceMotion ? 1 : 0,
+      y: reduceMotion ? 0 : 5,
+    }, {
+      autoAlpha: 1,
+      y: 0,
+      duration: reduceMotion ? 0 : 0.2,
+      ease: "power3.out",
+    });
+  }, { scope: rootRef });
+
+  const totalSeconds = elapsedDeciseconds / 10;
+  const elapsed = totalSeconds < 60
+    ? `${totalSeconds.toFixed(1)}s`
+    : `${Math.floor(totalSeconds / 60)}m ${(totalSeconds % 60).toFixed(1)}s`;
+
+  return (
+    <div ref={rootRef} className="run-loading-state" aria-hidden="true">
+      <span className="run-loading-grid" aria-hidden="true">
+        {runLoadingDelays.map((delay, index) => (
+          <span
+            key={index}
+            style={{ "--run-loading-delay": `${delay}ms` } as CSSProperties}
+          />
+        ))}
+      </span>
+      <span className="run-loading-label">{label}</span>
+      <span className="run-loading-elapsed">{elapsed}</span>
+    </div>
+  );
+}
+
+function ThoughtProcessCard({ activity, t, open = false, collapse = false, label }: {
   activity: Pick<Activity, "id" | "detail">;
   t: T;
   open?: boolean;
+  collapse?: boolean;
   label?: string;
 }) {
   const preview = summarizeProcessValue(activity.detail);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const previousCollapseRef = useRef(collapse);
+  const collapsingRef = useRef(false);
+  const [expanded, setExpanded] = useState(open && !collapse);
+
+  useEffect(() => {
+    if (collapse) return;
+    setExpanded(open);
+  }, [collapse, open]);
+
+  useGSAP(() => {
+    const details = detailsRef.current;
+    const content = contentRef.current;
+    const justCollapsed = !previousCollapseRef.current && collapse;
+    previousCollapseRef.current = collapse;
+    if (!justCollapsed || details === null || content === null || !details.open) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const summary = details.querySelector(":scope > summary");
+    collapsingRef.current = true;
+    const timeline = gsap.timeline({
+      defaults: { overwrite: "auto" },
+      onComplete: () => {
+        setExpanded(false);
+        collapsingRef.current = false;
+        gsap.set([content, summary], { clearProps: "all" });
+      },
+    });
+    timeline
+      .to(content, {
+        height: 0,
+        autoAlpha: 0,
+        y: -5,
+        duration: reduceMotion ? 0 : 0.24,
+        ease: "power3.inOut",
+      }, 0)
+      .fromTo(summary, {
+        scale: 0.985,
+      }, {
+        scale: 1,
+        transformOrigin: "left center",
+        duration: reduceMotion ? 0 : 0.18,
+        ease: "power2.out",
+      }, reduceMotion ? 0 : 0.12);
+  }, {
+    scope: detailsRef,
+    dependencies: [collapse],
+  });
+
   return (
-    <details className="thinking-block" open={open}>
+    <details
+      ref={detailsRef}
+      className="thinking-block"
+      open={expanded}
+      onToggle={(event) => {
+        if (!collapsingRef.current) setExpanded(event.currentTarget.open);
+      }}
+    >
       <summary>
         <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
         <span className="thinking-label">{label ?? t("thoughtProcess")}</span>
         {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
       </summary>
-      <div className="thinking-content"><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
+      <div ref={contentRef} className="thinking-content"><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
     </details>
   );
 }
 
-function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
+function LiveProcessView({ process, collapse, t }: { process: LiveProcess; collapse: boolean; t: T }) {
   return (
     <div className="live-process">
       {process.timeline.map((item, index) => {
@@ -1590,6 +1733,7 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
                 activity={{ id: String(thought.segmentId), detail: thought.content }}
                 t={t}
                 open={!thought.complete}
+                collapse={collapse}
                 label={thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}
               />
             </LiveProcessItem>
@@ -1598,7 +1742,7 @@ function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
         const tool = process.tools.find(({ toolCallId }) => toolCallId === item.toolCallId);
         return tool === undefined ? null : (
           <LiveProcessItem key={`tool-${tool.toolCallId}`} last={index === process.timeline.length - 1}>
-            <ToolProcessCard animate tool={tool} t={t} />
+            <ToolProcessCard animate collapse={collapse} tool={tool} t={t} />
           </LiveProcessItem>
         );
       })}
@@ -1637,13 +1781,14 @@ function LiveProcessItem({ children, last }: { children: ReactNode; last: boolea
   return <div ref={itemRef} className={`live-process-item${last ? " is-last" : ""}`}>{children}</div>;
 }
 
-function ToolProcessCard({ tool, t, animate = false }: { tool: LiveTool; t: T; animate?: boolean }) {
+function ToolProcessCard({ tool, t, animate = false, collapse = false }: { tool: LiveTool; t: T; animate?: boolean; collapse?: boolean }) {
   const preview = toolPreview(tool.arguments);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const expandedRef = useRef<HTMLDivElement>(null);
   const previousCompleteRef = useRef(tool.complete);
+  const previousCollapseRef = useRef(collapse);
   const collapsingRef = useRef(false);
-  const [open, setOpen] = useState(animate && !tool.complete);
+  const [open, setOpen] = useState(animate && !tool.complete && !collapse);
 
   useGSAP(() => {
     const expanded = expandedRef.current;
@@ -1668,7 +1813,7 @@ function ToolProcessCard({ tool, t, animate = false }: { tool: LiveTool; t: T; a
     const expanded = expandedRef.current;
     const justCompleted = !previousCompleteRef.current && tool.complete;
     previousCompleteRef.current = tool.complete;
-    if (!animate || !justCompleted || details === null || expanded === null) return;
+    if (!animate || collapse || !justCompleted || details === null || expanded === null) return;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const summary = details.querySelector(":scope > summary");
     collapsingRef.current = true;
@@ -1700,6 +1845,44 @@ function ToolProcessCard({ tool, t, animate = false }: { tool: LiveTool; t: T; a
   }, {
     scope: detailsRef,
     dependencies: [tool.complete],
+  });
+
+  useGSAP(() => {
+    const details = detailsRef.current;
+    const expanded = expandedRef.current;
+    const justCollapsed = !previousCollapseRef.current && collapse;
+    previousCollapseRef.current = collapse;
+    if (!animate || !justCollapsed || details === null || expanded === null || !details.open) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const summary = details.querySelector(":scope > summary");
+    collapsingRef.current = true;
+    const timeline = gsap.timeline({
+      defaults: { overwrite: "auto" },
+      onComplete: () => {
+        setOpen(false);
+        collapsingRef.current = false;
+        gsap.set([expanded, summary], { clearProps: "all" });
+      },
+    });
+    timeline
+      .to(expanded, {
+        height: 0,
+        autoAlpha: 0,
+        y: -5,
+        duration: reduceMotion ? 0 : 0.24,
+        ease: "power3.inOut",
+      }, 0)
+      .fromTo(summary, {
+        scale: 0.985,
+      }, {
+        scale: 1,
+        transformOrigin: "left center",
+        duration: reduceMotion ? 0 : 0.18,
+        ease: "power2.out",
+      }, reduceMotion ? 0 : 0.12);
+  }, {
+    scope: detailsRef,
+    dependencies: [collapse],
   });
 
   return (
