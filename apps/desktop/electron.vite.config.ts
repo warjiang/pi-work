@@ -5,6 +5,10 @@ import tailwindcss from "@tailwindcss/vite";
 import { resolveBuildMetadata } from "./build-info.js";
 
 const workspaceRoot = resolve(import.meta.dirname, "../..");
+const rendererAliases = {
+  "@": resolve(import.meta.dirname, "src/renderer"),
+  "@resources": resolve(import.meta.dirname, "resources"),
+};
 const buildMetadata = resolveBuildMetadata({ cwd: workspaceRoot });
 const workspaceAliases = {
   "@pi-work/artifacts": resolve(workspaceRoot, "packages/artifacts/src/index.ts"),
@@ -61,7 +65,7 @@ export default defineConfig({
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        "@": resolve("src/renderer"),
+        ...rendererAliases,
         ...workspaceAliases,
       },
     },

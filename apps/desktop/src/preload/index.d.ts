@@ -52,6 +52,7 @@ declare global {
         write(data: string): Promise<void>;
         resize(dimensions: { cols: number; rows: number }): Promise<void>;
         snapshot(): Promise<{ running: boolean; output: string }>;
+        execute(input: PiConsoleExecuteInput): Promise<PiConsoleExecuteResult>;
         restart(): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
         close(): Promise<void>;
         onEvent(listener: (event: PiConsoleEvent) => void): () => void;
@@ -113,7 +114,7 @@ declare global {
       status: DomainApi<StatusDefinition>;
       label: DomainApi<import("@pi-work/protocol").Label>;
       source: DomainApi<Source>;
-      skill: DomainApi<Skill>;
+      skill: SkillApi;
       automation: DomainApi<Automation>;
       browser: BrowserApi;
     };
@@ -125,6 +126,18 @@ type DomainApi<T> = {
   create(input: unknown): Promise<T>;
   update(input: unknown): Promise<T>;
   remove(id: string): Promise<void>;
+};
+
+type SkillApi = {
+  list(): Promise<Skill[]>;
+  listFiles(id: string): Promise<Array<{ name: string; path: string; type: "directory" | "file" }>>;
+  scanSystem(): Promise<import("@pi-work/protocol").SystemSkill[]>;
+  create(input: unknown): Promise<Skill>;
+  update(input: unknown): Promise<Skill>;
+  remove(id: string): Promise<void>;
+  setEnabled(id: string, enabled: boolean): Promise<Skill>;
+  import(path: string): Promise<Skill>;
+  chooseImport(): Promise<string | null>;
 };
 
 type BrowserApi = {
@@ -152,5 +165,22 @@ type PiConsoleEvent =
   | { type: "data"; data: string }
   | { type: "exit"; exitCode: number; signal?: number }
   | { type: "error"; message: string };
+
+type PiConsoleExecuteInput = {
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+};
+
+type PiConsoleExecuteResult = {
+  command: string;
+  cwd: string;
+  exitCode: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+};
 
 export {};

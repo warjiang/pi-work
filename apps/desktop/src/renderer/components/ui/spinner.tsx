@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { Icon } from "./icon.js";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function Spinner({ className, ...props }: ComponentProps<"span">) {
   return (

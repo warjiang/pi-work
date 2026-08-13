@@ -14,9 +14,9 @@ import type {
   ThinkingLevel,
   Workspace,
 } from "@pi-work/protocol";
-import { PiMark } from "../components/pi-mark.js";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
-import { Button } from "../components/ui/button.js";
+import { PiMark } from "@/components/pi-mark.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
+import { Button } from "@/components/ui/button.js";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +24,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog.js";
+} from "@/components/ui/dialog.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,11 +32,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.js";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import type { IconName } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
+} from "@/components/ui/dropdown-menu.js";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import type { IconName } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
 import {
   Select,
   SelectContent,
@@ -44,14 +44,25 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.js";
-import { Switch } from "../components/ui/switch.js";
-import { Textarea } from "../components/ui/textarea.js";
-import { thinkingLevelLabel } from "../i18n.js";
-import type { MessageKey } from "../i18n.js";
-import type { AppView, SettingsSection, WorkspaceScope } from "../store.js";
+} from "@/components/ui/select.js";
+import { Switch } from "@/components/ui/switch.js";
+import { Textarea } from "@/components/ui/textarea.js";
+import { thinkingLevelLabel } from "@/i18n.js";
+import type { MessageKey } from "@/i18n.js";
+import type { AppView, SettingsSection, WorkspaceScope } from "@/store.js";
 
 type T = (key: MessageKey) => string;
+
+export const workspaceSidebarIcons = {
+  inbox: "inbox",
+  attention: "attention",
+  completed: "check-circle",
+  board: "folder-kanban",
+  sources: "source",
+  automations: "automation",
+  folderSettings: "folder-settings",
+  settings: "settings",
+} as const satisfies Record<string, IconName>;
 
 export function TopBar(props: {
   workspaceScope: WorkspaceScope;
@@ -105,7 +116,11 @@ export function TopBar(props: {
       <Button variant="outline" className="search-trigger" onClick={props.onOpenSearch}>
         <Icon name="search" />
         <span>{props.t("globalSearch")}</span>
-        <kbd>⌘K</kbd>
+        <span className="search-shortcut" aria-hidden="true">
+          <kbd>⌘</kbd>
+          <span>+</span>
+          <kbd>K</kbd>
+        </span>
       </Button>
       <div className="topbar-trailing">
         <Button
@@ -151,10 +166,10 @@ export function Sidebar(props: {
         <div className="sidebar-body">
           <div className="sidebar-brand"><PiMark /><strong>{props.t("appName")}</strong></div>
           <SidebarSection title={props.t("work")}>
-            <SidebarNavButton active={props.view === "inbox"} icon="inbox" label={props.t("inbox")} onClick={() => props.onView("inbox")} />
-            <SidebarNavButton active={props.view === "attention"} icon="alert" label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
-            <SidebarNavButton active={props.view === "completed"} icon="check-circle" label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
-            {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon="folder-kanban" label={props.t("board")} onClick={() => props.onView("board")} /> : null}
+            <SidebarNavButton active={props.view === "inbox"} icon={workspaceSidebarIcons.inbox} label={props.t("inbox")} onClick={() => props.onView("inbox")} />
+            <SidebarNavButton active={props.view === "attention"} icon={workspaceSidebarIcons.attention} label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
+            <SidebarNavButton active={props.view === "completed"} icon={workspaceSidebarIcons.completed} label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
+            {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon={workspaceSidebarIcons.board} label={props.t("board")} onClick={() => props.onView("board")} /> : null}
           </SidebarSection>
           <SidebarSection className="recent-section" title={props.t("recentTasks")} count={recent.length}>
             <div className="recent-task-list">
@@ -166,11 +181,7 @@ export function Sidebar(props: {
                   aria-current={props.view === "inbox" && props.selectedTaskId === session.id ? "page" : undefined}
                   onClick={() => props.onOpenTask(session.id)}
                 >
-                  <span className={`task-state-dot state-${session.status}`} />
-                  <span>
-                    <strong>{session.title}</strong>
-                    <small>{session.kind === "task" ? props.t("task") : props.t("quickQuestion")}</small>
-                  </span>
+                  <strong>{session.title}</strong>
                   {session.flagged ? <Icon name="flag" size={14} /> : null}
                 </Button>
               ))}
@@ -179,16 +190,15 @@ export function Sidebar(props: {
           </SidebarSection>
           {props.isFolder ? (
             <SidebarSection title={props.t("library")}>
-              <SidebarNavButton active={props.view === "sources"} icon="source" label={props.t("sources")} onClick={() => props.onView("sources")} />
-              <SidebarNavButton active={props.view === "skills"} icon="skills" label={props.t("skills")} onClick={() => props.onView("skills")} />
-              <SidebarNavButton active={props.view === "automations"} icon="list-todo" label={props.t("automations")} onClick={() => props.onView("automations")} />
-              <SidebarNavButton active={props.view === "folder-settings"} icon="settings" label={props.t("folderSettings")} onClick={() => props.onView("folder-settings")} />
+              <SidebarNavButton active={props.view === "sources"} icon={workspaceSidebarIcons.sources} label={props.t("sources")} onClick={() => props.onView("sources")} />
+              <SidebarNavButton active={props.view === "automations"} icon={workspaceSidebarIcons.automations} label={props.t("automations")} onClick={() => props.onView("automations")} />
+              <SidebarNavButton active={props.view === "folder-settings"} icon={workspaceSidebarIcons.folderSettings} label={props.t("folderSettings")} onClick={() => props.onView("folder-settings")} />
             </SidebarSection>
           ) : null}
         </div>
         <footer className="sidebar-footer">
-          <Button variant="ghost" className="sidebar-settings-button" onClick={props.onOpenSettings}>
-            <Icon name="settings" />
+          <Button type="button" variant="ghost" className="sidebar-settings-button" onClick={props.onOpenSettings}>
+            <Icon name={workspaceSidebarIcons.settings} />
             <strong>{props.t("settings")}</strong>
             <span
               className="sidebar-settings-version"
@@ -214,7 +224,7 @@ function SidebarSection(props: { title: string; count?: number; className?: stri
 
 function SidebarNavButton(props: { active: boolean; icon: IconName; label: string; badge?: number; onClick(): void }) {
   return (
-    <Button variant="ghost" className={`sidebar-nav-button ${props.active ? "selected" : ""}`} aria-current={props.active ? "page" : undefined} onClick={props.onClick}>
+    <Button type="button" variant="ghost" className={`sidebar-nav-button ${props.active ? "selected" : ""}`} aria-current={props.active ? "page" : undefined} onClick={props.onClick}>
       <Icon name={props.icon} />
       <strong>{props.label}</strong>
       {props.badge ? <span className="nav-count">{props.badge}</span> : null}
@@ -233,13 +243,12 @@ type SearchItem = {
 
 export const commandSettingItems: ReadonlyArray<{ section: SettingsSection; key: MessageKey }> = [
   { section: "general", key: "general" },
-  { section: "appearance", key: "appearance" },
   { section: "modelsCredentials", key: "modelsCredentials" },
   { section: "workFolders", key: "workFolders" },
   { section: "permissions", key: "permissions" },
+  { section: "skills", key: "skills" },
   { section: "extensions", key: "extensions" },
   { section: "browser", key: "browser" },
-  { section: "shortcuts", key: "shortcuts" },
   { section: "about", key: "about" },
 ];
 
@@ -268,12 +277,10 @@ export function CommandPalette(props: {
       enabled: props.open && query.trim().length > 0,
     })),
   });
-  const skillQueries = useQueries({
-    queries: folders.map((workspace) => ({
-      queryKey: ["command-skills", workspace.id],
-      queryFn: () => window.piWork.skill.list(workspace.id),
-      enabled: props.open && query.trim().length > 0,
-    })),
+  const skills = useQuery({
+    queryKey: ["command-skills"],
+    queryFn: () => window.piWork.skill.list(),
+    enabled: props.open && query.trim().length > 0,
   });
   const normalized = query.trim().toLocaleLowerCase();
   const sessions = query.trim() === ""
@@ -294,21 +301,23 @@ export function CommandPalette(props: {
         action: () => props.onOpenTask(session.id),
       });
     });
-    const addResource = (resource: Source | Skill, workspace: Workspace, kind: "sources" | "skills") => {
+    const addResource = (resource: Source | Skill, workspace: Workspace | null, kind: "sources" | "skills") => {
       if (normalized === "" || !`${resource.name} ${"description" in resource ? resource.description : resource.type}`.toLocaleLowerCase().includes(normalized)) return;
       result.push({
-        id: `${kind}:${workspace.id}:${resource.id}`,
+        id: `${kind}:${workspace?.id ?? "global"}:${resource.id}`,
         group: "resources",
         title: resource.name,
-        detail: `${workspace.name} · ${kind === "sources" ? props.t("sources") : props.t("skills")}`,
+        detail: workspace === null ? props.t("skills") : `${workspace.name} · ${props.t("sources")}`,
         icon: kind === "sources" ? "source" : "skills",
-        action: () => props.onOpenContext(workspace.id, kind),
+        action: () => kind === "skills"
+          ? props.onOpenSettings("skills")
+          : props.onOpenContext(workspace!.id, "sources"),
       });
     };
     folders.forEach((workspace, index) => {
       (sourceQueries[index]?.data ?? []).forEach((source) => addResource(source, workspace, "sources"));
-      (skillQueries[index]?.data ?? []).forEach((skill) => addResource(skill, workspace, "skills"));
     });
+    (skills.data ?? []).forEach((skill) => addResource(skill, null, "skills"));
     commandSettingItems.forEach(({ section, key }) => {
       if (normalized === "" || !props.t(key).toLocaleLowerCase().includes(normalized)) return;
       result.push({
@@ -321,9 +330,9 @@ export function CommandPalette(props: {
       });
     });
     return result.slice(0, 28);
-  }, [folders, normalized, props, sessions, skillQueries, sourceQueries]);
-  const searching = search.isLoading || sourceQueries.some(({ isLoading }) => isLoading) || skillQueries.some(({ isLoading }) => isLoading);
-  const searchFailed = search.isError || sourceQueries.some(({ isError }) => isError) || skillQueries.some(({ isError }) => isError);
+  }, [folders, normalized, props, sessions, skills.data, sourceQueries]);
+  const searching = search.isLoading || sourceQueries.some(({ isLoading }) => isLoading) || skills.isLoading;
+  const searchFailed = search.isError || sourceQueries.some(({ isError }) => isError) || skills.isError;
 
   useEffect(() => setActive(0), [query]);
   useEffect(() => {

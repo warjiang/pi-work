@@ -6,7 +6,6 @@ export type AppView =
   | "completed"
   | "board"
   | "sources"
-  | "skills"
   | "automations"
   | "folder-settings";
 
@@ -18,6 +17,7 @@ export type SettingsSection =
   | "modelsCredentials"
   | "workFolders"
   | "permissions"
+  | "skills"
   | "extensions"
   | "browser"
   | "shortcuts"

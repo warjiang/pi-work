@@ -185,6 +185,36 @@ export const skillSchema = z.object({
 });
 export type Skill = z.infer<typeof skillSchema>;
 
+export const skillNameSchema = z.string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Skill names use lowercase letters, numbers, and single hyphens.");
+export const skillDescriptionSchema = z.string().trim().min(1).max(1_024);
+export const skillInstructionsSchema = z.string().max(100_000);
+export const createSkillInputSchema = z.object({
+  name: skillNameSchema,
+  description: skillDescriptionSchema,
+  instructions: skillInstructionsSchema,
+  enabled: z.boolean().default(true),
+});
+export const updateSkillInputSchema = createSkillInputSchema;
+export const importSkillInputSchema = z.object({
+  path: z.string().trim().min(1).max(4_096),
+});
+export const setSkillEnabledInputSchema = z.object({
+  id: z.uuid(),
+  enabled: z.boolean(),
+});
+export const systemSkillSchema = z.object({
+  name: skillNameSchema,
+  description: skillDescriptionSchema,
+  path: z.string().min(1),
+  source: z.enum(["pi", "agents", "codex", "claude"]),
+  imported: z.boolean(),
+});
+export type SystemSkill = z.infer<typeof systemSkillSchema>;
+
 export const automationTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("schedule"), cron: z.string().min(1).max(120) }),
   z.object({ type: z.literal("status_changed"), statusId: z.uuid().nullable() }),

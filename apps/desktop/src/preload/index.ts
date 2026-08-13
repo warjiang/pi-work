@@ -29,6 +29,7 @@ const piWork = {
     write: (data: string) => ipcRenderer.invoke("pi-console:write", data),
     resize: (dimensions: { cols: number; rows: number }) => ipcRenderer.invoke("pi-console:resize", dimensions),
     snapshot: () => ipcRenderer.invoke("pi-console:snapshot"),
+    execute: (input: unknown) => ipcRenderer.invoke("pi-console:execute", input),
     restart: () => ipcRenderer.invoke("pi-console:restart"),
     close: () => ipcRenderer.invoke("pi-console:close"),
     onEvent: (listener: (event: unknown) => void) => {
@@ -102,7 +103,17 @@ const piWork = {
   status: domainApi("status"),
   label: domainApi("label"),
   source: domainApi("source"),
-  skill: domainApi("skill"),
+  skill: {
+    list: () => ipcRenderer.invoke("skill:list"),
+    listFiles: (id: string) => ipcRenderer.invoke("skill:list-files", { id }),
+    scanSystem: () => ipcRenderer.invoke("skill:scan-system"),
+    create: (input: unknown) => ipcRenderer.invoke("skill:create", input),
+    update: (input: unknown) => ipcRenderer.invoke("skill:update", input),
+    remove: (id: string) => ipcRenderer.invoke("skill:remove", { id }),
+    setEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke("skill:set-enabled", { id, enabled }),
+    import: (path: string) => ipcRenderer.invoke("skill:import", { path }),
+    chooseImport: () => ipcRenderer.invoke("skill:choose-import"),
+  },
   automation: domainApi("automation"),
   browser: {
     open: (url: string) => ipcRenderer.invoke("browser:open", { url }),

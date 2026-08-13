@@ -1,0 +1,391 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-12T08:50:00.000Z",
+  "title": "Design System: Pi Work",
+  "extensions": {
+    "colorMeta": {
+      "slate-ink": {
+        "role": "neutral",
+        "displayName": "Slate Ink",
+        "canonical": "#202124",
+        "darkValue": "#f1f1ef",
+        "tonalRamp": [
+          "#141517",
+          "#202124",
+          "#33353a",
+          "#4b4d53",
+          "#686a70",
+          "#8b8d93",
+          "#b4b6bb",
+          "#dcdde0"
+        ]
+      },
+      "slate-accent": {
+        "role": "primary",
+        "displayName": "Slate Accent",
+        "canonical": "#2a2b2f",
+        "darkValue": "#f1f1ef",
+        "tonalRamp": [
+          "#161619",
+          "#2a2b2f",
+          "#3d3e44",
+          "#55565d",
+          "#71727a",
+          "#94959c",
+          "#bbbcc1",
+          "#e0e0e3"
+        ]
+      },
+      "signal-blue": {
+        "role": "secondary",
+        "displayName": "Signal Blue",
+        "canonical": "#42699d",
+        "darkValue": "#90b8ef",
+        "tonalRamp": [
+          "#16243a",
+          "#22364d",
+          "#2f4a6d",
+          "#42699d",
+          "#6089c0",
+          "#90b8ef",
+          "#bcd4f4",
+          "#edf3fb"
+        ]
+      },
+      "grove-green": {
+        "role": "tertiary",
+        "displayName": "Grove Green",
+        "canonical": "#33785c",
+        "darkValue": "#86c7a1",
+        "tonalRamp": [
+          "#12281e",
+          "#203c2f",
+          "#285641",
+          "#33785c",
+          "#57a37f",
+          "#86c7a1",
+          "#b6dfc6",
+          "#ecf6ef"
+        ]
+      },
+      "clay-red": {
+        "role": "tertiary",
+        "displayName": "Clay Red",
+        "canonical": "#b04747",
+        "darkValue": "#ed9b9b",
+        "tonalRamp": [
+          "#2e1618",
+          "#492c30",
+          "#7a3436",
+          "#b04747",
+          "#cf6c6c",
+          "#ed9b9b",
+          "#f4c4c4",
+          "#fbefef"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#f7f7f6",
+        "darkValue": "#1d1d20",
+        "tonalRamp": [
+          "#1d1d20",
+          "#242427",
+          "#343438",
+          "#535359",
+          "#8b8d93",
+          "#c9c9c4",
+          "#e8e8e6",
+          "#f7f7f6"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#ffffff",
+        "darkValue": "#242427",
+        "tonalRamp": [
+          "#1d1d20",
+          "#242427",
+          "#2a2a2e",
+          "#343438",
+          "#c9c9c4",
+          "#e8e8e6",
+          "#f3f3f2",
+          "#ffffff"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e2e2df",
+        "darkValue": "#3a3a3f",
+        "tonalRamp": [
+          "#28282c",
+          "#3a3a3f",
+          "#535359",
+          "#85858b",
+          "#c9c9c4",
+          "#e2e2df",
+          "#efefec",
+          "#f7f7f6"
+        ]
+      },
+      "muted-text": {
+        "role": "neutral",
+        "displayName": "Muted Text",
+        "canonical": "#686a70",
+        "darkValue": "#b0b0b5",
+        "tonalRamp": [
+          "#202124",
+          "#33353a",
+          "#4b4d53",
+          "#686a70",
+          "#85858b",
+          "#b0b0b5",
+          "#d2d2d6",
+          "#efefec"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Empty states and first-run moments only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page and settings headings."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Task titles, card headings, section leads."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Conversation messages and artifact prose. The app baseline."
+      },
+      "compact": {
+        "displayName": "Compact",
+        "purpose": "Controls, navigation, and list rows — the working chrome size."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Metadata, helper text, timestamps."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase lifecycle badges only."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Code, console output, filesystem paths, comparable values."
+      }
+    },
+    "shadows": [
+      {
+        "name": "raised",
+        "value": "0 7px 20px rgb(32 33 36 / 0.08), 0 1px 2px rgb(32 33 36 / 0.08)",
+        "purpose": "The composer floating over scrolling conversation. Dark mode: 0 7px 20px rgb(0 0 0 / 0.2), 0 1px 2px rgb(0 0 0 / 0.28)."
+      },
+      {
+        "name": "overlay",
+        "value": "0 16px 42px rgb(32 33 36 / 0.12)",
+        "purpose": "Dialogs, popovers, dropdown menus, command palette. Dark mode: 0 16px 42px rgb(0 0 0 / 0.28)."
+      },
+      {
+        "name": "composer-soft",
+        "value": "0 2px 8px rgb(32 33 36 / 0.06)",
+        "purpose": "The composer's refined final elevation — softer than the generic raised token."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-state",
+        "value": "160ms ease",
+        "purpose": "Color, background, border, and opacity transitions on every interactive element."
+      },
+      {
+        "name": "ease-press",
+        "value": "120ms ease",
+        "purpose": "Transform on press; paired with translateY(1px) on :active."
+      },
+      {
+        "name": "ease-shell",
+        "value": "220ms cubic-bezier(0.22, 0.72, 0.22, 1)",
+        "purpose": "Shell grid changes such as the console pane opening."
+      },
+      {
+        "name": "ease-panel",
+        "value": "200ms ease",
+        "purpose": "Sidebar transform when it collapses into an overlay."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "inspector-collapse",
+        "value": "1180px"
+      },
+      {
+        "name": "sidebar-overlay",
+        "value": "900px"
+      },
+      {
+        "name": "reading-cap",
+        "value": "760px"
+      },
+      {
+        "name": "stack",
+        "value": "720px"
+      },
+      {
+        "name": "compact",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single committed action at a decision point. Slate, never colored.",
+      "html": "<button class=\"ds-btn-primary\">Approve plan</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--accent, #2a2b2f); border-radius: var(--radius-control, 8px); background: var(--accent, #2a2b2f); color: var(--accent-text, #ffffff); font-family: var(--font-sans, Geist, -apple-system, sans-serif); font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease, transform 120ms ease; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--accent, #2a2b2f) 90%, transparent); } .ds-btn-primary:focus-visible { outline: 2px solid var(--ring, #42699d); outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "The default for toolbar and inline actions; invisible until hovered.",
+      "html": "<button class=\"ds-btn-ghost\"><svg class=\"ds-btn-ghost-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5v14M5 12h14\"/></svg>New task</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-control, 8px); background: transparent; color: var(--muted, #686a70); font-family: var(--font-sans, Geist, -apple-system, sans-serif); font-size: 13px; font-weight: 500; cursor: pointer; transition: background-color 160ms ease, color 160ms ease, transform 120ms ease; } .ds-btn-ghost-icon { flex: 0 0 auto; shape-rendering: geometricPrecision; } .ds-btn-ghost:hover { background: var(--hover, #f0f0ee); color: var(--text, #202124); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--ring, #42699d); outline-offset: 2px; } .ds-btn-ghost:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Standard 32px field. Focus shifts the border to Signal Blue and adds a 20% ring.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Search tasks, messages, resources\" />",
+      "css": ".ds-input { width: 100%; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--border, #e2e2df); border-radius: var(--radius-field, 12px); background: var(--panel, #ffffff); color: var(--text, #202124); font-family: var(--font-sans, Geist, -apple-system, sans-serif); font-size: 13px; outline: none; transition: border-color 160ms ease, box-shadow 160ms ease; } .ds-input::placeholder { color: var(--muted, #686a70); } .ds-input:focus-visible { border-color: var(--ring, #42699d); outline: 2px solid var(--ring, #42699d); outline-offset: 2px; } .ds-input:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "33px navigation row with a leading line icon and optional trailing count. Selection is tonal, never chromatic.",
+      "html": "<nav class=\"ds-nav\"><button class=\"ds-nav-item ds-nav-item--active\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 6h16M4 12h16M4 18h10\"/></svg><span>Inbox</span><span class=\"ds-nav-count\">3</span></button><button class=\"ds-nav-item\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\"/><path d=\"M8 4v16\"/></svg><span>Board</span></button></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; padding: 8px; background: var(--panel-muted, #f3f3f2); border-right: 1px solid var(--border, #e2e2df); } .ds-nav-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 33px; padding: 0 9px; border: none; border-radius: var(--radius-control, 8px); background: transparent; color: var(--muted, #686a70); font-family: var(--font-sans, Geist, -apple-system, sans-serif); font-size: 13px; text-align: left; cursor: pointer; transition: background-color 160ms ease, color 160ms ease; } .ds-nav-item span:first-of-type { flex: 1 1 auto; min-width: 0; } .ds-nav-item:hover { background: var(--hover, #f0f0ee); color: var(--text, #202124); } .ds-nav-item--active { background: var(--active, #e7e7e4); color: var(--text, #202124); } .ds-nav-item:focus-visible { outline: 2px solid var(--ring, #42699d); outline-offset: 2px; } .ds-nav-count { color: var(--faint, #8b8d93); font-size: 12px; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Lifecycle Badge",
+      "kind": "chip",
+      "refersTo": "lifecycle-badge",
+      "description": "10px uppercase state marker. Names a state; never acts as a control.",
+      "html": "<span class=\"ds-badge\">Planning</span> <span class=\"ds-badge ds-badge--completed\">Published</span> <span class=\"ds-badge ds-badge--failed\">Failed</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; width: fit-content; padding: 3px 6px; border-radius: 3px; background: var(--panel-muted, #f3f3f2); color: var(--muted, #686a70); font-family: var(--font-sans, Geist, -apple-system, sans-serif); font-size: 10px; font-weight: 700; letter-spacing: 0.035em; line-height: 1.3; text-transform: uppercase; white-space: nowrap; } .ds-badge--completed { background: var(--green-bg, #ecf6ef); color: var(--green, #33785c); } .ds-badge--failed { background: var(--danger-bg, #fbefef); color: var(--danger, #b04747); }"
+    },
+    {
+      "name": "Task Card",
+      "kind": "card",
+      "refersTo": "card-surface",
+      "description": "Flat board card: border and tone only, never a shadow.",
+      "html": "<article class=\"ds-card\"><span class=\"ds-card-badge\">In review</span><h3 class=\"ds-card-title\">Q3 supplier risk summary</h3><p class=\"ds-card-meta\">2 sources · staged 4m ago</p></article>",
+      "css": ".ds-card { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-height: 126px; padding: 12px; border: 1px solid var(--border, #e2e2df); border-radius: var(--radius-surface, 12px); background: var(--panel, #ffffff); box-shadow: none; text-align: left; font-family: var(--font-sans, Geist, -apple-system, sans-serif); transition: background-color 160ms ease, border-color 160ms ease; } .ds-card:hover { background: var(--hover, #f0f0ee); } .ds-card-badge { align-self: flex-start; padding: 3px 6px; border-radius: 3px; background: var(--panel-muted, #f3f3f2); color: var(--muted, #686a70); font-size: 10px; font-weight: 700; letter-spacing: 0.035em; text-transform: uppercase; } .ds-card-title { margin: 0; color: var(--text, #202124); font-size: 15px; font-weight: 600; letter-spacing: -0.012em; line-height: 1.35; } .ds-card-meta { margin: 0; color: var(--faint, #8b8d93); font-size: 12px; line-height: 1.4; }"
+    },
+    {
+      "name": "Plan Approval Card",
+      "kind": "custom",
+      "refersTo": "approval-card",
+      "description": "The signature component, rendered at two weights. The plan variant shown here is the only tinted content surface and the only asymmetric border in the system; it makes the product's headline approval gate visible. Tool approvals reuse the grid via .ds-approval--tool at neutral weight. It is a role=\"group\" labelled by its heading, never a live region: a short visually-hidden alert elsewhere in the stage announces that a decision is waiting.",
+      "html": "<section class=\"ds-approval\" role=\"group\" aria-labelledby=\"ds-approval-title\"><span class=\"ds-approval-symbol\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 6 9 17l-5-5\"/></svg></span><div class=\"ds-approval-copy\"><h4 class=\"ds-approval-title\" id=\"ds-approval-title\">Approve this plan before any write</h4><p class=\"ds-approval-detail\">3 steps · works in ~/Research · publishes to ~/Research/Pi Work</p></div><div class=\"ds-approval-actions\"><button class=\"ds-approval-decline\">Decline</button><button class=\"ds-approval-approve\">Approve</button></div></section>",
+      "css": ".ds-approval { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: start; gap: 10px; width: min(100%, 760px); padding: 13px; border: 1px solid color-mix(in srgb, var(--amber, #42699d) 30%, var(--border, #e2e2df)); border-left: 3px solid var(--amber, #42699d); border-radius: var(--radius-surface, 12px); background: var(--amber-bg, #edf3fb); font-family: var(--font-sans, Geist, -apple-system, sans-serif); } .ds-approval-symbol { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid color-mix(in srgb, var(--amber, #42699d) 35%, var(--border, #e2e2df)); border-radius: 7px; color: var(--amber, #42699d); } .ds-approval-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; } .ds-approval-title { margin: 0; color: var(--text, #202124); font-size: 15px; font-weight: 600; letter-spacing: -0.012em; line-height: 1.35; } .ds-approval-detail { margin: 0; color: var(--muted, #686a70); font-size: 12px; line-height: 1.4; } .ds-approval-actions { display: flex; gap: 8px; } .ds-approval-approve, .ds-approval-decline { height: 32px; padding: 0 12px; border-radius: var(--radius-control, 8px); font-size: 13px; font-weight: 500; cursor: pointer; transition: background-color 160ms ease, transform 120ms ease; } .ds-approval-approve { border: 1px solid var(--accent, #2a2b2f); background: var(--accent, #2a2b2f); color: var(--accent-text, #ffffff); } .ds-approval-approve:hover { background: color-mix(in srgb, var(--accent, #2a2b2f) 90%, transparent); } .ds-approval-decline { border: 1px solid var(--border, #e2e2df); background: var(--panel, #ffffff); color: var(--text, #202124); } .ds-approval-decline:hover { background: var(--hover, #f0f0ee); } .ds-approval-approve:active, .ds-approval-decline:active { transform: translateY(1px); } .ds-approval-approve:focus-visible, .ds-approval-decline:focus-visible { outline: 2px solid var(--ring, #42699d); outline-offset: 2px; } .ds-approval--tool { border: 1px solid var(--border, #e2e2df); border-left: 1px solid var(--border, #e2e2df); background: var(--panel, #ffffff); } .ds-approval--tool .ds-approval-symbol { border-color: var(--border, #e2e2df); color: var(--muted, #686a70); }"
+    },
+    {
+      "name": "Composer",
+      "kind": "custom",
+      "refersTo": "input-field",
+      "description": "The persistently elevated input dock — the only in-flow object allowed a shadow.",
+      "html": "<form class=\"ds-composer\"><textarea class=\"ds-composer-field\" rows=\"2\" placeholder=\"Describe the task, or ask a quick question\"></textarea><div class=\"ds-composer-toolbar\"><span class=\"ds-composer-context\">Personal · private sandbox</span><button class=\"ds-composer-send\" type=\"submit\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 19V5M5 12l7-7 7 7\"/></svg></button></div></form>",
+      "css": ".ds-composer { display: flex; flex-direction: column; gap: 8px; width: min(780px, calc(100% - 48px)); margin: 0 auto; padding: 11px; border: 1px solid var(--border-strong, #c9c9c4); border-radius: var(--radius-field, 12px); background: var(--panel, #ffffff); box-shadow: 0 2px 8px rgb(32 33 36 / 0.06); font-family: var(--font-sans, Geist, -apple-system, sans-serif); } .ds-composer-field { width: 100%; min-width: 0; border: none; background: transparent; color: var(--text, #202124); font: inherit; font-size: 14px; line-height: 1.5; resize: none; outline: none; } .ds-composer-field::placeholder { color: var(--muted, #686a70); } .ds-composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .ds-composer-context { color: var(--faint, #8b8d93); font-size: 12px; } .ds-composer-send { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--accent, #2a2b2f); border-radius: var(--radius-control, 8px); background: var(--accent, #2a2b2f); color: var(--accent-text, #ffffff); cursor: pointer; transition: background-color 160ms ease, transform 120ms ease; } .ds-composer-send:hover { background: color-mix(in srgb, var(--accent, #2a2b2f) 90%, transparent); } .ds-composer-send:active { transform: translateY(1px); } .ds-composer-send:focus-visible { outline: 2px solid var(--ring, #42699d); outline-offset: 2px; }"
+    },
+    {
+      "name": "Timeline Node",
+      "kind": "custom",
+      "refersTo": "card-surface",
+      "description": "The activity timeline marker — the system's only circular form besides state dots.",
+      "html": "<ol class=\"ds-timeline\"><li class=\"ds-timeline-item\"><span class=\"ds-timeline-marker\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 6 9 17l-5-5\"/></svg></span><div class=\"ds-timeline-copy\"><p class=\"ds-timeline-title\">Plan approved</p><p class=\"ds-timeline-meta\">16:04 · 3 steps authorized</p></div></li><li class=\"ds-timeline-item\"><span class=\"ds-timeline-marker\"></span><div class=\"ds-timeline-copy\"><p class=\"ds-timeline-title\">Artifact staged</p><p class=\"ds-timeline-meta\">16:07 · summary.md</p></div></li></ol>",
+      "css": ".ds-timeline { position: relative; display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0 0 0 4px; list-style: none; font-family: var(--font-sans, Geist, -apple-system, sans-serif); } .ds-timeline::before { content: \"\"; position: absolute; top: 14px; bottom: 14px; left: 17px; width: 1px; background: var(--border, #e2e2df); } .ds-timeline-item { display: flex; align-items: flex-start; gap: 10px; } .ds-timeline-marker { position: relative; z-index: 1; display: grid; place-items: center; flex: 0 0 auto; width: 27px; height: 27px; border: 1px solid var(--border, #e2e2df); border-radius: 50%; background: var(--panel, #ffffff); color: var(--muted, #686a70); } .ds-timeline-copy { min-width: 0; } .ds-timeline-title { margin: 0; color: var(--text, #202124); font-size: 13px; font-weight: 500; } .ds-timeline-meta { margin: 2px 0 0; color: var(--faint, #8b8d93); font-size: 12px; font-variant-numeric: tabular-nums; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Workshop",
+    "overview": "Pi Work looks like a well-lit workbench in an otherwise quiet room. Nothing on it is decorative: every surface exists because something is being staged, inspected, or released on it. The room is near-monochrome — warm-grey paper, white panels, slate ink — so that the two moments that actually matter can arrive in color and be unmistakable. Work sits out in the open on the bench; it is not hidden inside chrome, dressed up in gradients, or announced with badges competing for the same attention.\n\nThe system is dense but not cramped. Controls are small (32px tall, 12–13px type) because the user is supervising, not filling in a form: the interface should occupy as little of the screen as the work allows, and the conversation, the plan, and the artifact should occupy the rest. Density comes from tight control geometry and modest padding, never from removing air between groups. The one place the system deliberately spends space is the reading column — the conversation, composer, and approval card all cap at roughly 760–780px so long agent output stays readable.\n\nDepth is tonal, not theatrical. Grouping is done with a 1px hairline border and a half-step change in surface tone, and shadows are reserved for objects that genuinely float above the bench. Motion is short and functional: 160ms color transitions, a 1px press, and nothing that draws the eye for its own sake. Both light and dark are first-class; dark is a genuine re-tint of the same room, not an inverted screenshot. The visual rejections are specific: no gradients on surfaces, no colored buttons for ordinary actions, no shadows on cards, no icon-only state signaling.",
+    "keyCharacteristics": [
+      "Near-monochrome warm greyscale with two earned chromatic events",
+      "Small, quiet, unfussy controls (32px is the standard control height)",
+      "Flat surfaces separated by hairline borders and half-step tonal shifts",
+      "A ~760px reading spine for anything the user must actually read",
+      "Full light/dark parity through a single CSS custom-property layer",
+      "Bilingual by construction: layouts survive both English and Chinese string lengths"
+    ],
+    "rules": [
+      {
+        "name": "The Two Events Rule",
+        "body": "Only two things in this product earn color: something needs approval (Signal Blue) and something has completed (Grove Green). Everything else is greyscale. If a new feature wants a third accent hue, it is almost always a hierarchy problem in disguise.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tonal Interaction Rule",
+        "body": "Hover, active, and selected states are expressed as a step along the neutral ramp — never by introducing a hue, a border color change alone, or a shadow.",
+        "section": "colors"
+      },
+      {
+        "name": "The Wash-Is-Not-Decoration Rule",
+        "body": "A tinted background (signal-blue-wash, grove-green-wash, clay-red-wash) marks a state the user must respond to or has resolved. Never use a wash to make an ordinary panel look more interesting.",
+        "section": "colors"
+      },
+      {
+        "name": "The Chrome-Is-Smaller Rule",
+        "body": "Interface chrome sets at 12–13px; content the user reads sets at 14px and up. If chrome and content are the same size, the chrome is too loud.",
+        "section": "typography"
+      },
+      {
+        "name": "The Negative Tracking Rule",
+        "body": "Tracking tightens as size grows (−0.012em at title, −0.035em at display) and never goes positive except for the 10px uppercase lifecycle label.",
+        "section": "typography"
+      },
+      {
+        "name": "The Bilingual Line Rule",
+        "body": "Never size a container to an English string. Every label must survive its zh-CN counterpart without truncation or wrapping into an adjacent control.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-Card Rule",
+        "body": "If it sits in the document flow, it has a border and no shadow. If it floats in a portal or over scrolling content, it has a shadow. There is no third case.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use tone and a 1px hairline to group things; reach for panel-muted before you reach for a shadow.",
+      "Do keep Signal Blue for approval, focus, and selection, and Grove Green for completion. Two events, no more.",
+      "Do size interface chrome at 12–13px and reading content at 14px+.",
+      "Do cap anything the user reads at ~760px and center it.",
+      "Do define every color through the CSS custom-property layer so dark mode comes for free; both themes are re-tinted, never inverted.",
+      "Do give every interactive element the 2px Signal Blue focus ring at 40% opacity with a 2px offset.",
+      "Do verify each new label in both en and zh-CN before considering a layout done.",
+      "Do respect prefers-reduced-motion; the app already gates its motion on it."
+    ],
+    "donts": [
+      "Don't put a shadow on a card, row, or panel that sits in the document flow.",
+      "Don't introduce a gradient on a surface, a button, or a badge.",
+      "Don't use a colored fill for an ordinary action — primary is slate, not blue.",
+      "Don't hard-code a hex value in a component; every color goes through a token.",
+      "Don't signal state with an icon or color alone — pair it with a label or badge text.",
+      "Don't exceed 24px of spacing to separate sections; use a border or a tonal change instead.",
+      "Don't grow control heights past 32px; density is the point.",
+      "Don't copy the approval card's tinted field or left rule onto any other component."
+    ]
+  }
+}

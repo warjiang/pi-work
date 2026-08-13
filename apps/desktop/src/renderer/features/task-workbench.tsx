@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -19,8 +19,8 @@ import type {
   ToolApproval,
   Workspace,
 } from "@pi-work/protocol";
-import { MarkdownMessage } from "../components/markdown-message.js";
-import { PiMark } from "../components/pi-mark.js";
+import { MarkdownMessage } from "@/components/markdown-message.js";
+import { PiMark } from "@/components/pi-mark.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,8 +30,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "../components/ui/alert-dialog.js";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
+} from "@/components/ui/alert-dialog.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
 import {
   Attachment,
   AttachmentAction,
@@ -41,9 +41,9 @@ import {
   AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
-} from "../components/ui/attachment.js";
-import { Badge } from "../components/ui/badge.js";
-import { Button } from "../components/ui/button.js";
+} from "@/components/ui/attachment.js";
+import { Badge } from "@/components/ui/badge.js";
+import { Button } from "@/components/ui/button.js";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -58,11 +58,11 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.js";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
-import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog.js";
+} from "@/components/ui/dropdown-menu.js";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog.js";
 import {
   Select,
   SelectContent,
@@ -70,17 +70,33 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.js";
-import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
-import { Textarea } from "../components/ui/textarea.js";
-import { thinkingLevelLabel } from "../i18n.js";
-import type { MessageKey } from "../i18n.js";
-import type { InspectorTab } from "../store.js";
+} from "@/components/ui/select.js";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
+import { Textarea } from "@/components/ui/textarea.js";
+import { thinkingLevelLabel } from "@/i18n.js";
+import type { MessageKey } from "@/i18n.js";
+import type { InspectorTab } from "@/store.js";
 
 type T = (key: MessageKey) => string;
-type LiveThought = { contentIndex: number; content: string; complete: boolean };
-type LiveTool = { toolCallId: string; toolName: string; detail: string; complete: boolean; failed: boolean };
-type LiveProcess = { thoughts: LiveThought[]; tools: LiveTool[]; notice: string | null };
+type LiveThought = { segmentId: number; contentIndex: number; content: string; complete: boolean };
+type LiveTool = {
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  detail: string;
+  output: unknown;
+  complete: boolean;
+  failed: boolean;
+};
+type LiveProcessItem =
+  | { kind: "thinking"; segmentId: number }
+  | { kind: "tool"; toolCallId: string };
+type LiveProcess = {
+  thoughts: LiveThought[];
+  tools: LiveTool[];
+  timeline: LiveProcessItem[];
+  notice: string | null;
+};
 type ConversationTurn = {
   messageId: string;
   targetId: string;
@@ -107,7 +123,7 @@ function attachmentDescription(attachment: AttachmentDraft): string {
   return `${subtype} · ${formatBytes(attachment.size)}`;
 }
 
-export function visibleAssistantContent(content: string): string {
+export function visibleMessageContent(content: string): string {
   return content
     .replace(
       /(^|\n)Attached files:\s*\n(?:[ \t]*[-*]\s+\/[^\n]*(?:\n|$))+/gi,
@@ -200,7 +216,7 @@ function ComposerPermissionMenu(props: {
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8} className="composer-permission-menu">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>{props.t("confirmation")}</DropdownMenuLabel>
+          <DropdownMenuLabel className="composer-permission-label">{props.t("confirmation")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={props.permissionMode} onValueChange={(value) => props.onPermissionChange(value as PermissionMode)}>
             <PermissionModeOption
               mode="ask"
@@ -448,7 +464,7 @@ export function TaskWorkbench(props: {
   const [input, setInput] = useState(() => localStorage.getItem(draftKey) ?? "");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [streamed, setStreamed] = useState("");
-  const [liveProcess, setLiveProcess] = useState<LiveProcess>({ thoughts: [], tools: [], notice: null });
+  const [liveProcess, setLiveProcess] = useState<LiveProcess>({ thoughts: [], tools: [], timeline: [], notice: null });
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -458,6 +474,9 @@ export function TaskWorkbench(props: {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [promotionWorkspaceId, setPromotionWorkspaceId] = useState(props.folders[0]?.id ?? "");
   const [publishingAll, setPublishingAll] = useState(false);
+  const [publishAllOpen, setPublishAllOpen] = useState(false);
+  const [publishOutcome, setPublishOutcome] = useState<{ published: number; failed: number } | null>(null);
+  const [runNotice, setRunNotice] = useState<string | null>(null);
   const [providerId, setProviderId] = useState(props.session.providerId ?? props.settings?.providerId ?? "");
   const [modelId, setModelId] = useState(props.session.modelId ?? props.settings?.modelId ?? "");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.session.thinkingLevel);
@@ -521,6 +540,7 @@ export function TaskWorkbench(props: {
     if (event.kind === "text_delta" && typeof event.payload.delta === "string") enqueueStream(event.payload.delta);
     setLiveProcess((current) => reduceLiveProcess(current, event.kind, event.payload, props.t));
     if (event.kind === "completed" || event.kind === "cancelled") {
+      setRunNotice(event.kind === "cancelled" ? props.t("runCancelled") : props.t("responseComplete"));
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
@@ -538,6 +558,8 @@ export function TaskWorkbench(props: {
   useEffect(() => {
     cancelTurnNavigation();
     setFollowStream(true);
+    setPublishOutcome(null);
+    setRunNotice(null);
     scheduleScrollToLatest("auto");
   }, [sessionId]);
   useEffect(() => {
@@ -549,11 +571,11 @@ export function TaskWorkbench(props: {
   useEffect(() => {
     if (!followStream) return;
     scheduleScrollToLatest("auto");
-  }, [approvals.length, followStream, liveProcess, messages.data?.length, pendingPrompt, streamed]);
+  }, [approvals.length, followStream, liveProcess, messages.data?.length, pendingPrompt, props.session.status, streamed]);
   useEffect(() => {
     if (personal) return;
-    if (props.session.status === "awaiting_plan_approval") props.onInspectorOpen("plan");
-    else if (approvals.length > 0 || props.session.status === "awaiting_action_approval") props.onInspectorOpen("activity");
+    if (props.session.status === "awaiting_plan_approval") return;
+    if (approvals.length > 0 || props.session.status === "awaiting_action_approval") props.onInspectorOpen("activity");
     else if (unpublished.length > 0) props.onInspectorOpen("output");
   }, [approvals.length, personal, props.onInspectorOpen, props.session.status, unpublished.length]);
   useEffect(() => {
@@ -576,7 +598,8 @@ export function TaskWorkbench(props: {
   const send = useMutation({
     mutationFn: (content: string) => {
       clearStream();
-      setLiveProcess({ thoughts: [], tools: [], notice: null });
+      setRunNotice(null);
+      setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
       if (providerId === "" || modelId === "") throw new Error(props.t("configureModel"));
       return window.piWork.chat.send({
         workspaceId: props.workspace?.id ?? null,
@@ -604,7 +627,7 @@ export function TaskWorkbench(props: {
     onError: (cause: Error) => {
       setPendingPrompt(null);
       clearStream();
-      setLiveProcess({ thoughts: [], tools: [], notice: null });
+      setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
       setError(cause.message);
     },
   });
@@ -653,6 +676,28 @@ export function TaskWorkbench(props: {
     onError: (cause: Error) => setError(cause.message),
   });
 
+  async function publishAll() {
+    const targets = unpublished;
+    if (targets.length === 0) return;
+    setPublishOutcome(null);
+    setPublishingAll(true);
+    let published = 0;
+    let failure: string | null = null;
+    for (const artifact of targets) {
+      try {
+        await window.piWork.artifact.publish({ artifactId: artifact.id });
+        published += 1;
+      } catch (cause) {
+        failure = cause instanceof Error ? cause.message : props.t("failedToLoad");
+        break;
+      }
+    }
+    setPublishOutcome({ published, failed: targets.length - published });
+    if (failure !== null) setError(failure);
+    await refreshTaskData();
+    setPublishingAll(false);
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     const content = input.trim();
@@ -678,6 +723,21 @@ export function TaskWorkbench(props: {
   }
 
   const recommendation = recommendedAction(props.session, unpublished.length, approvals.length, props.t);
+  const progressAnnouncement = useMemo(() => {
+    if (!send.isPending && !props.session.running) return runNotice ?? "";
+    const runningTool = liveProcess.tools.find((tool) => !tool.complete);
+    if (runningTool !== undefined) return `${props.t("toolRunning")}: ${runningTool.toolName}`;
+    if (streamed !== "") return props.t("responseStreaming");
+    const lastTool = liveProcess.tools.at(-1);
+    if (lastTool !== undefined && lastTool.complete) {
+      return `${lastTool.failed ? props.t("toolFailed") : props.t("toolCompleted")}: ${lastTool.toolName}`;
+    }
+    if (liveProcess.thoughts.some((thought) => !thought.complete)) return props.t("thinkingInProgress");
+    return props.t("sending");
+  }, [liveProcess, props.session.running, props.t, runNotice, send.isPending, streamed]);
+  const approvalAnnouncement = personal ? "" : approvals.length > 0
+    ? `${props.t("toolRequest")}: ${approvals.map(({ tool }) => tool).join(", ")}`
+    : props.session.status === "awaiting_plan_approval" ? props.t("planApprovalNeeded") : "";
   const retryContent = input.trim() || [...(messages.data ?? [])].reverse().find(({ role }) => role === "user")?.content.trim() || "";
   const canPromote = personal && !props.session.running && approvals.length === 0 && props.folders.length > 0;
   return (
@@ -685,7 +745,7 @@ export function TaskWorkbench(props: {
       <div className="execution-pane">
         <header className={`task-context-header ${personal ? "task-context-header-personal" : ""}`}>
           <div className="task-context-title">
-            <span>{personal ? props.t("privateSandbox") : (props.workspace?.name ?? props.t("workFolder"))}</span>
+            {!personal ? <span>{props.workspace?.name ?? props.t("workFolder")}</span> : null}
             <h1>{props.session.title}</h1>
           </div>
           {!personal ? (
@@ -721,6 +781,8 @@ export function TaskWorkbench(props: {
         </header>
         {error ? <Alert className="task-inline-error"><AlertDescription>{error}</AlertDescription><Button variant="ghost" size="icon" aria-label={props.t("close")} onClick={() => setError(null)}><Icon name="close" /></Button></Alert> : null}
         <div className="conversation-stage">
+          <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" aria-label={props.t("agentStatus")}>{progressAnnouncement}</div>
+          <div className="sr-only" role="alert" aria-atomic="true">{approvalAnnouncement}</div>
           <TurnNavigator
             turns={turns}
             activeTurnId={activeTurnId}
@@ -774,6 +836,17 @@ export function TaskWorkbench(props: {
             ) : null}
             {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
               <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <MarkdownMessage streaming content={streamed} copyLabel={props.t("copyCode")} copiedLabel={props.t("copied")} /> : null}</article>
+            ) : null}
+            {!personal && props.session.status === "awaiting_plan_approval" && plan.data !== null && plan.data !== undefined ? (
+              <PlanApprovalCard
+                plan={plan.data}
+                workingDirectory={props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}
+                outputPath={props.workspace?.outputPath ?? null}
+                pending={approvePlan.isPending}
+                t={props.t}
+                onReviewSteps={() => props.onInspectorOpen("plan")}
+                onResolve={(approved) => approvePlan.mutate(approved)}
+              />
             ) : null}
             {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
             {send.isPending && streamed === "" ? <div className="inline-progress"><span /><span /><span />{props.t("sending")}</div> : null}
@@ -832,7 +905,7 @@ export function TaskWorkbench(props: {
           }} placeholder={props.t("messagePlaceholder")} rows={2} />
           <div className="composer-toolbar">
             <div className="composer-toolbar-start">
-              <Button variant="ghost" size="icon" type="button" aria-label={props.t("addAttachment")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected))).catch((cause: Error) => setError(cause.message))}><Icon name="paperclip" /></Button>
+              <Button variant="ghost" size="icon" className="composer-attachment-trigger" type="button" aria-label={props.t("addAttachment")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected))).catch((cause: Error) => setError(cause.message))}><Icon name="paperclip" /></Button>
               <ComposerPermissionMenu
                 permissionMode={props.session.permissionMode}
                 planMode={props.session.planMode}
@@ -884,6 +957,8 @@ export function TaskWorkbench(props: {
         generatingPlan={generatePlan.isPending}
         approvingPlan={approvePlan.isPending}
         publishing={publishingAll}
+        publishOutcome={publishOutcome}
+        publishDestination={props.workspace?.outputPath ?? null}
         completing={complete.isPending}
         t={props.t}
         onTab={props.onInspectorTab}
@@ -901,24 +976,16 @@ export function TaskWorkbench(props: {
         onApprovePlan={(approved) => approvePlan.mutate(approved)}
         onResolveApproval={resolveApproval}
         onPublish={async (artifact) => {
+          setPublishOutcome(null);
           try {
             await window.piWork.artifact.publish({ artifactId: artifact.id });
+            setPublishOutcome({ published: 1, failed: 0 });
             await refreshTaskData();
           } catch (cause) {
             setError(cause instanceof Error ? cause.message : props.t("failedToLoad"));
           }
         }}
-        onPublishAll={async () => {
-          setPublishingAll(true);
-          try {
-            for (const artifact of unpublished) await window.piWork.artifact.publish({ artifactId: artifact.id });
-            await refreshTaskData();
-          } catch (cause) {
-            setError(cause instanceof Error ? cause.message : props.t("failedToLoad"));
-          } finally {
-            setPublishingAll(false);
-          }
-        }}
+        onPublishAll={() => setPublishAllOpen(true)}
         onRetryPlan={() => void plan.refetch()}
         onRetryActivity={() => void activities.refetch()}
         onRetryArtifacts={() => void artifacts.refetch()}
@@ -946,6 +1013,22 @@ export function TaskWorkbench(props: {
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{props.t("completeWithUnpublished")}</AlertDialogTitle><AlertDialogDescription>{props.t("unpublishedWarning")}</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => complete.mutate()}>{props.t("completeTask")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={publishAllOpen} onOpenChange={setPublishAllOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{props.t("publishConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{props.t("publishConfirmDetail")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <dl className="publish-confirm-scope">
+            <div><dt>{props.t("publishFilesLabel")}</dt><dd>{unpublished.length}</dd></div>
+            <div><dt>{props.t("publishDestinationLabel")}</dt><dd><code>{props.workspace?.outputPath ?? props.t("workFolder")}</code></dd></div>
+          </dl>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void publishAll()}>{props.t("publishAll")}</AlertDialogAction>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={promotionOpen} onOpenChange={setPromotionOpen}>
@@ -1076,15 +1159,13 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
     <div className="messages">
       {messages.map((message) => {
         const startsTurn = message.role === "user";
-        const assistantContent = message.role === "assistant"
-          ? visibleAssistantContent(message.content)
-          : message.content;
+        const visibleContent = visibleMessageContent(message.content);
         return (
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalThoughts activities={activities.filter((activity) => activity.kind === "thinking" && activity.messageId === message.id)} t={t} />{assistantContent !== "" ? <MarkdownMessage content={assistantContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
-                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} /><div className="message-user-content">{message.content}</div></>}
+                ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <MarkdownMessage content={visibleContent} copyLabel={t("copyCode")} copiedLabel={t("copied")} /> : null}</>
+                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <div className="message-user-content">{visibleContent}</div> : null}</>}
             </article>
           </div>
         );
@@ -1164,13 +1245,13 @@ export function conversationTurns(messages: ChatMessage[]): ConversationTurn[] {
       turns.push({
         messageId: message.id,
         targetId: turnTargetId(message.id),
-        question: message.content.trim(),
+        question: visibleMessageContent(message.content).trim(),
         answer: null,
       });
       continue;
     }
     if (message.role !== "assistant" || turns.length === 0) continue;
-    const answer = visibleAssistantContent(message.content).trim();
+    const answer = visibleMessageContent(message.content).trim();
     if (answer !== "") turns[turns.length - 1]!.answer = answer;
   }
   return turns;
@@ -1286,54 +1367,168 @@ function turnLabel(t: T, turn: number): string {
   return t("turn") === "第" ? `第 ${turn} 轮` : `${t("turn")} ${turn}`;
 }
 
-function HistoricalThoughts({ activities, t }: { activities: Activity[]; t: T }) {
-  if (activities.length === 0) return null;
-  return <details className="thinking-block"><summary>{t("thoughtProcess")}</summary>{activities.map((activity) => <div className="thinking-content" key={activity.id}>{activity.detail}</div>)}</details>;
+export function orderedProcessActivities(activities: Activity[]): Activity[] {
+  return [...activities].sort((left, right) => {
+    const leftSequence = typeof left.metadata.sequence === "number" ? left.metadata.sequence : null;
+    const rightSequence = typeof right.metadata.sequence === "number" ? right.metadata.sequence : null;
+    if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) return leftSequence - rightSequence;
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+}
+
+function HistoricalProcess({ activities, t }: { activities: Activity[]; t: T }) {
+  return (
+    <>
+      {orderedProcessActivities(activities).map((activity) => (
+        activity.kind === "thinking"
+          ? <ThoughtProcessCard activity={activity} key={activity.id} t={t} />
+          : <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />
+      ))}
+    </>
+  );
+}
+
+function ThoughtProcessCard({ activity, t, open = false, label }: {
+  activity: Pick<Activity, "id" | "detail">;
+  t: T;
+  open?: boolean;
+  label?: string;
+}) {
+  const preview = summarizeProcessValue(activity.detail);
+  return (
+    <details className="thinking-block" open={open}>
+      <summary>
+        <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
+        <span className="thinking-label">{label ?? t("thoughtProcess")}</span>
+        {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
+      </summary>
+      <div className="thinking-content"><MarkdownMessage compact content={activity.detail} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
+    </details>
+  );
 }
 
 function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
   return (
     <div className="live-process">
-      {process.thoughts.filter((thought) => thought.content.trim()).map((thought) => (
-        <details className="thinking-block" key={thought.contentIndex} open={!thought.complete}>
-          <summary>{thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}</summary>
-          <div className="thinking-content">{thought.content}</div>
-        </details>
-      ))}
-      {process.tools.map((tool) => (
-        <div className={`tool-status ${tool.complete ? "" : "is-running"}`} key={tool.toolCallId}>
-          <span className="tool-status-copy">
-            {tool.complete ? `${tool.failed ? t("toolFailed") : t("toolCompleted")}: ${tool.toolName}` : `${t("toolRunning")}: ${tool.toolName}`}
-            {tool.detail ? `: ${tool.detail}` : ""}
-          </span>
-        </div>
-      ))}
+      {process.timeline.map((item) => {
+        if (item.kind === "thinking") {
+          const thought = process.thoughts.find(({ segmentId }) => segmentId === item.segmentId);
+          if (thought === undefined || thought.content.trim() === "") return null;
+          return (
+            <ThoughtProcessCard
+              activity={{ id: String(thought.segmentId), detail: thought.content }}
+              key={`thinking-${thought.segmentId}`}
+              t={t}
+              open={!thought.complete}
+              label={thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}
+            />
+          );
+        }
+        const tool = process.tools.find(({ toolCallId }) => toolCallId === item.toolCallId);
+        return tool === undefined ? null : <ToolProcessCard key={`tool-${tool.toolCallId}`} tool={tool} t={t} />;
+      })}
       {process.notice ? <div className="process-notice">{process.notice}</div> : null}
     </div>
   );
 }
 
+function ToolProcessCard({ tool, t }: { tool: LiveTool; t: T }) {
+  const preview = toolPreview(tool.arguments);
+  return (
+    <details className={`tool-status ${tool.complete ? "is-complete" : "is-running"}${tool.failed ? " is-failed" : ""}`}>
+      <summary>
+        <span className="tool-status-icon"><Icon name={toolIcon(tool.toolName)} size={14} /><Icon name="chevron-down" size={14} className="tool-status-chevron" /></span>
+        <span className="tool-status-copy">
+          <span className="tool-status-heading">
+            <code>{tool.toolName}</code>
+            <span className="tool-status-preview" title={preview}>{preview}</span>
+            <span className="tool-status-state">
+              {tool.complete ? (tool.failed ? t("toolFailed") : t("toolCompleted")) : t("toolRunning")}
+            </span>
+          </span>
+          {tool.detail ? <span className="tool-status-detail" title={tool.detail}>{tool.detail}</span> : null}
+        </span>
+      </summary>
+      <div className="tool-status-expanded">
+        <ToolProcessSection label={t("activityToolCall")} value={tool.arguments} />
+        {tool.output !== undefined ? <ToolProcessSection label={t("activityToolResult")} value={tool.output} error={tool.failed} /> : null}
+      </div>
+    </details>
+  );
+}
+
+function ToolProcessSection(props: { label: string; value: unknown; error?: boolean }) {
+  return (
+    <section className={`tool-status-section${props.error ? " is-error" : ""}`}>
+      <span>{props.label}</span>
+      <pre>{formatProcessValue(props.value)}</pre>
+    </section>
+  );
+}
+
+export function toolFromActivity(activity: Pick<Activity, "id" | "title" | "detail" | "metadata">): LiveTool {
+  const metadata = activity.metadata;
+  const output = metadata.result ?? metadata.output;
+  return {
+    toolCallId: typeof metadata.toolCallId === "string" ? metadata.toolCallId : activity.id,
+    toolName: typeof metadata.toolName === "string" ? metadata.toolName : activity.title,
+    arguments: processArguments(metadata.arguments ?? metadata.args),
+    detail: activity.detail,
+    output,
+    complete: true,
+    failed: metadata.isError === true,
+  };
+}
+
 export function reduceLiveProcess(current: LiveProcess, kind: string, payload: Record<string, unknown>, t: T): LiveProcess {
   if (kind === "thinking") {
     const contentIndex = typeof payload.contentIndex === "number" ? payload.contentIndex : 0;
-    const thought = current.thoughts.find((item) => item.contentIndex === contentIndex);
-    if (payload.phase === "start") return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { contentIndex, content: "", complete: false }] };
+    const thought = current.thoughts.findLast((item) => item.contentIndex === contentIndex && !item.complete);
+    if (payload.phase === "start") {
+      const segmentId = nextThoughtSegmentId(current.thoughts);
+      return {
+        ...current,
+        timeline: [...current.timeline, { kind: "thinking", segmentId }],
+        thoughts: [...current.thoughts, { segmentId, contentIndex, content: "", complete: false }],
+      };
+    }
     if (payload.phase === "delta" && typeof payload.delta === "string") {
-      const next = thought ?? { contentIndex, content: "", complete: false };
-      return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { ...next, content: `${next.content}${payload.delta}` }] };
+      const next = thought ?? {
+        segmentId: nextThoughtSegmentId(current.thoughts),
+        contentIndex,
+        content: "",
+        complete: false,
+      };
+      return {
+        ...current,
+        timeline: thought === undefined ? [...current.timeline, { kind: "thinking", segmentId: next.segmentId }] : current.timeline,
+        thoughts: [...current.thoughts.filter((item) => item.segmentId !== next.segmentId), { ...next, content: `${next.content}${payload.delta}` }],
+      };
     }
     if (payload.phase === "end") {
-      const next = thought ?? { contentIndex, content: "", complete: false };
+      const next = thought ?? {
+        segmentId: nextThoughtSegmentId(current.thoughts),
+        contentIndex,
+        content: "",
+        complete: false,
+      };
       const content = typeof payload.content === "string" ? payload.content : next.content;
-      return { ...current, thoughts: [...current.thoughts.filter((item) => item.contentIndex !== contentIndex), { ...next, content, complete: true }] };
+      return {
+        ...current,
+        timeline: thought === undefined ? [...current.timeline, { kind: "thinking", segmentId: next.segmentId }] : current.timeline,
+        thoughts: [...current.thoughts.filter((item) => item.segmentId !== next.segmentId), { ...next, content, complete: true }],
+      };
     }
   }
   if (kind === "tool_call" && typeof payload.toolCallId === "string") return {
     ...current,
+    timeline: appendLiveProcessItem(current.timeline, { kind: "tool", toolCallId: payload.toolCallId }),
     tools: [...current.tools.filter((tool) => tool.toolCallId !== payload.toolCallId), {
       toolCallId: payload.toolCallId,
       toolName: String(payload.toolName ?? "tool"),
+      arguments: processArguments(payload.arguments),
       detail: "",
+      output: undefined,
       complete: false,
       failed: false,
     }],
@@ -1343,17 +1538,23 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
     const tool = existing ?? {
       toolCallId: payload.toolCallId,
       toolName: String(payload.toolName ?? "tool"),
+      arguments: processArguments(payload.arguments),
       detail: "",
+      output: undefined,
       complete: false,
       failed: false,
     };
-    const detail = summarizeProcessValue(kind === "tool_result" ? payload.result : payload.output);
+    const output = kind === "tool_result" ? payload.result : payload.output;
+    const detail = summarizeProcessValue(output);
     return {
       ...current,
+      timeline: appendLiveProcessItem(current.timeline, { kind: "tool", toolCallId: payload.toolCallId }),
       tools: [...current.tools.filter((item) => item.toolCallId !== payload.toolCallId), {
         ...tool,
         toolName: String(payload.toolName ?? tool.toolName),
+        arguments: Object.keys(processArguments(payload.arguments)).length > 0 ? processArguments(payload.arguments) : tool.arguments,
         detail: detail || tool.detail,
+        output,
         complete: kind === "tool_result",
         failed: kind === "tool_result" && payload.isError === true,
       }],
@@ -1375,10 +1576,90 @@ export function reduceLiveProcess(current: LiveProcess, kind: string, payload: R
   return current;
 }
 
-function summarizeProcessValue(value: unknown): string {
-  const source = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  const compact = source.replace(/\s+/g, " ").trim();
-  return compact.length > 120 ? `${compact.slice(0, 117)}…` : compact;
+function appendLiveProcessItem(items: LiveProcessItem[], next: LiveProcessItem): LiveProcessItem[] {
+  const exists = items.some((item) => {
+    if (item.kind === "thinking" && next.kind === "thinking") {
+      return item.segmentId === next.segmentId;
+    }
+    if (item.kind === "tool" && next.kind === "tool") {
+      return item.toolCallId === next.toolCallId;
+    }
+    return false;
+  });
+  return exists ? items : [...items, next];
+}
+
+function nextThoughtSegmentId(thoughts: LiveThought[]): number {
+  return thoughts.reduce((highest, thought) => Math.max(highest, thought.segmentId), -1) + 1;
+}
+
+function toolIcon(toolName: string) {
+  const normalized = toolName.toLowerCase();
+  if (normalized.includes("search") || normalized.includes("web") || normalized.includes("browse")) return "search" as const;
+  if (normalized.includes("read") || normalized.includes("write") || normalized.includes("file")) return "file" as const;
+  return "terminal" as const;
+}
+
+function processArguments(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+export function toolPreview(input?: Record<string, unknown>): string {
+  if (input === undefined || input === null) return "";
+  for (const key of ["command", "path", "file_path", "query", "pattern", "url", "prompt"]) {
+    const value = summarizeToolValue(input[key]);
+    if (value) return truncateProcessValue(value, 96);
+  }
+  const firstValue = Object.values(input).map(summarizeToolValue).find(Boolean);
+  return firstValue ? truncateProcessValue(firstValue, 96) : "";
+}
+
+export function summarizeProcessValue(value: unknown): string {
+  const parsed = typeof value === "string" ? parseToolValue(value) : value;
+  const summary = summarizeToolValue(parsed);
+  return summary ? truncateProcessValue(summary, 160) : "";
+}
+
+function formatProcessValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseToolValue(value: string): unknown {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (!compact.startsWith("{") && !compact.startsWith("[")) return compact;
+  try {
+    return JSON.parse(compact);
+  } catch {
+    return compact;
+  }
+}
+
+function summarizeToolValue(value: unknown): string {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (Array.isArray(value)) {
+    return value.map(summarizeToolValue).filter(Boolean).slice(0, 2).join(" · ");
+  }
+  if (value === null || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["text", "message", "summary", "title", "query", "url", "path", "command"]) {
+    const candidate = summarizeToolValue(record[key]);
+    if (candidate) return candidate;
+  }
+  for (const key of ["content", "output", "result", "data", "details"]) {
+    const candidate = summarizeToolValue(record[key]);
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+function truncateProcessValue(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, limit - 1).trimEnd()}…` : value;
 }
 
 function TaskInspector(props: {
@@ -1410,7 +1691,9 @@ function TaskInspector(props: {
   onApprovePlan(approved: boolean): void;
   onResolveApproval(approvalId: string, approved: boolean): void;
   onPublish(artifact: Artifact): Promise<void>;
-  onPublishAll(): Promise<void>;
+  onPublishAll(): void;
+  publishOutcome: { published: number; failed: number } | null;
+  publishDestination: string | null;
   onRetryPlan(): void;
   onRetryActivity(): void;
   onRetryArtifacts(): void;
@@ -1503,9 +1786,21 @@ function TaskInspector(props: {
               <div className="inspector-empty"><Icon name="file-output" /><p>{props.t("resultEmpty")}</p></div>
             ) : (
               <div className="artifact-list">
-                <Alert className="publish-note"><AlertDescription>{props.t("publishTarget")}</AlertDescription></Alert>
+                <Alert className="publish-note"><AlertDescription>{props.t("publishTarget")} {props.t("publishIrreversible")}</AlertDescription></Alert>
                 {props.artifacts.map((artifact) => <ArtifactPreview key={artifact.id} artifact={artifact} t={props.t} onPublish={() => props.onPublish(artifact)} />)}
-                {unpublished.length > 1 ? <Button variant="outline" disabled={props.publishing} onClick={() => void props.onPublishAll()}>{props.t("publishAll")}</Button> : null}
+                <div className="publish-outcome-live" role="status" aria-live="polite">
+                  {props.publishOutcome !== null ? (
+                    <div className={`publish-outcome ${props.publishOutcome.failed > 0 ? "partial" : ""}`}>
+                      <Icon name={props.publishOutcome.failed > 0 ? "alert" : "check-circle"} size={16} />
+                      <div>
+                        <strong>{props.publishOutcome.failed > 0 ? props.t("publishPartial") : props.t("publishSuccess")}</strong>
+                        <p><span>{props.t("publishedFilesCount")}</span><code>{props.publishOutcome.published}</code></p>
+                        {props.publishDestination !== null ? <p><span>{props.t("publishDestinationLabel")}</span><code>{props.publishDestination}</code></p> : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                {unpublished.length > 1 ? <Button variant="outline" disabled={props.publishing} onClick={() => props.onPublishAll()}>{props.publishing ? props.t("sending") : props.t("publishAll")}</Button> : null}
               </div>
             )}
             {props.session.status !== "completed" ? <Button className="complete-task-button" variant="secondary" disabled={props.completing} onClick={props.onComplete}><Icon name="check-circle" />{props.completing ? props.t("sending") : props.t("completeTask")}</Button> : null}
@@ -1550,17 +1845,52 @@ function omitThoughtMetadata(metadata: Record<string, unknown>): Record<string, 
   return safeMetadata;
 }
 
+function PlanApprovalCard(props: {
+  plan: Plan;
+  workingDirectory: string;
+  outputPath: string | null;
+  pending: boolean;
+  t: T;
+  onReviewSteps(): void;
+  onResolve(approved: boolean): void;
+}) {
+  const { plan, t } = props;
+  const headingId = useId();
+  return (
+    <article className="approval-card plan" role="group" aria-labelledby={headingId}>
+      <div className="approval-symbol"><Icon name="plan" /></div>
+      <div className="approval-copy">
+        <span>{t("planRequest")}</span>
+        <h3 id={headingId}>{plan.summary}</h3>
+        <p><strong>{t("workingDirectory")}</strong><code>{props.workingDirectory}</code></p>
+        {props.outputPath !== null ? <p><strong>{t("planPublishesTo")}</strong><code>{props.outputPath}</code></p> : null}
+        <p><strong>{t("planSteps")}</strong><code>{plan.steps.length}</code></p>
+        {plan.sources.length > 0 ? <p><strong>{t("planSources")}</strong><code>{plan.sources.length}</code></p> : null}
+        <p className="approval-scope-note">{t("planScopeNote")}</p>
+        <Button variant="ghost" size="sm" className="approval-review-link" onClick={props.onReviewSteps}>
+          {t("planReviewSteps")}<Icon name="forward" size={14} />
+        </Button>
+      </div>
+      <div className="approval-actions">
+        <Button variant="ghost" size="sm" disabled={props.pending} onClick={() => props.onResolve(false)}>{t("rejectPlan")}</Button>
+        <Button size="sm" disabled={props.pending} onClick={() => props.onResolve(true)}>{props.pending ? t("sending") : t("approvePlan")}</Button>
+      </div>
+    </article>
+  );
+}
+
 function ToolApprovalCard(props: { approval: ToolApproval; compact?: boolean; t: T; onResolve(approved: boolean): void }) {
   const { approval, t } = props;
   const path = argumentString(approval.arguments, ["path", "filePath", "file_path", "target", "targetPath"]);
   const command = argumentString(approval.arguments, ["command", "cmd", "script"]);
   const title = approval.tool === "bash" ? t("runCommand") : approval.tool === "write" ? t("writeFile") : t("editFile");
+  const headingId = useId();
   return (
-    <article className={`approval-card ${props.compact ? "compact" : ""}`}>
+    <article className={`approval-card tool ${props.compact ? "compact" : ""}`} role="group" aria-labelledby={headingId}>
       <div className="approval-symbol"><Icon name={approval.tool === "bash" ? "terminal" : "file"} /></div>
       <div className="approval-copy">
         <span>{t("toolRequest")}</span>
-        <h3>{title}</h3>
+        <h3 id={headingId}>{title}</h3>
         {path ? <p><strong>{t("path")}</strong><code>{path}</code></p> : null}
         {command ? <p><strong>{t("command")}</strong><code>{command}</code></p> : null}
         <p><strong>{t("workingDirectory")}</strong><code>{approval.cwd}</code></p>
@@ -1578,7 +1908,7 @@ function ArtifactPreview(props: { artifact: Artifact; t: T; onPublish(): Promise
   const [publishing, setPublishing] = useState(false);
   return (
     <article className="artifact-preview">
-      <header><div><Icon name="file" /><span><strong>{props.artifact.relativePath}</strong><small>{props.artifact.mimeType}</small></span></div><Badge>{props.artifact.publishedPath === null ? props.t("staged") : props.t("published")}</Badge></header>
+      <header><div><Icon name="file" /><span><strong>{props.artifact.relativePath}</strong><small>{props.artifact.mimeType}</small></span></div><Badge className={props.artifact.publishedPath === null ? "" : "artifact-published-badge"}>{props.artifact.publishedPath === null ? props.t("staged") : props.t("published")}</Badge></header>
       <pre>{props.artifact.content}</pre>
       <footer>
         <code>{props.artifact.publishedPath ?? props.artifact.stagedPath}</code>

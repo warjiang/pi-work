@@ -1,7 +1,7 @@
 import { Command as CommandPrimitive } from "cmdk";
 import type { ComponentProps } from "react";
 import { Icon } from "./icon.js";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function Command({ className, ...props }: ComponentProps<typeof CommandPrimitive>) {
   return <CommandPrimitive className={cn("flex h-full w-full flex-col overflow-hidden rounded-[var(--radius-control)] bg-popover text-popover-foreground", className)} {...props} />;

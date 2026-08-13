@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "../components/ui/alert.js";
-import { Button } from "../components/ui/button.js";
-import { FieldLabel } from "../components/ui/field.js";
-import { Icon } from "../components/ui/icon.js";
-import { Input } from "../components/ui/input.js";
-import type { MessageKey } from "../i18n.js";
+import { Alert, AlertDescription } from "@/components/ui/alert.js";
+import { Button } from "@/components/ui/button.js";
+import { FieldLabel } from "@/components/ui/field.js";
+import { Icon } from "@/components/ui/icon.js";
+import { Input } from "@/components/ui/input.js";
+import type { MessageKey } from "@/i18n.js";
 
 type T = (key: MessageKey) => string;
 

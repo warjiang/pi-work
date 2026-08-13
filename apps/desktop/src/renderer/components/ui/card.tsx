@@ -1,12 +1,12 @@
 import type { ComponentProps } from "react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function Card({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("rounded-[var(--radius-surface)] border border-border bg-card text-card-foreground", className)} {...props} />;
+  return <div className={cn("rounded-[var(--radius-surface)] bg-secondary text-card-foreground", className)} {...props} />;
 }
 
 export function CardHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("flex flex-col gap-1.5 p-4", className)} {...props} />;
+  return <div className={cn("flex flex-col gap-1.5 p-6", className)} {...props} />;
 }
 
 export function CardTitle({ className, ...props }: ComponentProps<"h3">) {
@@ -18,9 +18,9 @@ export function CardDescription({ className, ...props }: ComponentProps<"p">) {
 }
 
 export function CardContent({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("px-4 pb-4", className)} {...props} />;
+  return <div className={cn("px-6 pb-6", className)} {...props} />;
 }
 
 export function CardFooter({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("flex items-center px-4 pb-4", className)} {...props} />;
+  return <div className={cn("flex items-center px-6 pb-6", className)} {...props} />;
 }

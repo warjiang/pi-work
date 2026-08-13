@@ -4,23 +4,27 @@ import {
   activeTurnDuringScroll,
   conversationTurns,
   isNearBottom,
+  orderedProcessActivities,
   reduceLiveProcess,
+  summarizeProcessValue,
+  toolFromActivity,
+  toolPreview,
   turnHoverDistance,
-  visibleAssistantContent,
+  visibleMessageContent,
 } from "./task-workbench.js";
 
 const t = (key: string) => key;
-const empty = { thoughts: [], tools: [], notice: null };
+const empty = { thoughts: [], tools: [], timeline: [], notice: null };
 
 describe("live Pi process reducer", () => {
-  it("hides internal attached-file manifests from assistant content", () => {
-    expect(visibleAssistantContent(
+  it("hides internal attached-file manifests from conversation content", () => {
+    expect(visibleMessageContent(
       "Attached files:\n- /Users/me/clipboard-attachments/a.png\n\nI reviewed the image.",
     )).toBe("I reviewed the image.");
   });
 
   it("keeps regular assistant content untouched", () => {
-    expect(visibleAssistantContent("I reviewed the image.")).toBe("I reviewed the image.");
+    expect(visibleMessageContent("I reviewed the image.")).toBe("I reviewed the image.");
   });
 
   it("only follows the message stream while the scroller remains near its end", () => {
@@ -104,7 +108,56 @@ describe("live Pi process reducer", () => {
     const streaming = reduceLiveProcess(started, "thinking", { phase: "delta", contentIndex: 2, delta: "Inspect " }, t);
     const completed = reduceLiveProcess(streaming, "thinking", { phase: "end", contentIndex: 2, content: "Inspect files." }, t);
 
-    expect(completed.thoughts).toEqual([{ contentIndex: 2, content: "Inspect files.", complete: true }]);
+    expect(completed.thoughts).toEqual([{ segmentId: 0, contentIndex: 2, content: "Inspect files.", complete: true }]);
+    expect(completed.timeline).toEqual([{ kind: "thinking", segmentId: 0 }]);
+  });
+
+  it("keeps separate thinking segments when the runtime reuses a content index", () => {
+    const firstStarted = reduceLiveProcess(empty, "thinking", { phase: "start", contentIndex: 0 }, t);
+    const firstCompleted = reduceLiveProcess(firstStarted, "thinking", { phase: "end", contentIndex: 0, content: "Inspect files." }, t);
+    const tool = reduceLiveProcess(firstCompleted, "tool_call", { toolCallId: "call-1", toolName: "read" }, t);
+    const secondStarted = reduceLiveProcess(tool, "thinking", { phase: "start", contentIndex: 0 }, t);
+    const secondCompleted = reduceLiveProcess(secondStarted, "thinking", { phase: "end", contentIndex: 0, content: "Review results." }, t);
+
+    expect(secondCompleted.thoughts).toEqual([
+      { segmentId: 0, contentIndex: 0, content: "Inspect files.", complete: true },
+      { segmentId: 1, contentIndex: 0, content: "Review results.", complete: true },
+    ]);
+    expect(secondCompleted.timeline).toEqual([
+      { kind: "thinking", segmentId: 0 },
+      { kind: "tool", toolCallId: "call-1" },
+      { kind: "thinking", segmentId: 1 },
+    ]);
+  });
+
+  it("keeps thinking and tool activities in their original event order", () => {
+    const activities = orderedProcessActivities([
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000000",
+        messageId: "00000000-0000-4000-8000-000000000010",
+        kind: "tool_result",
+        title: "web_search",
+        detail: "Found results",
+        metadata: { sequence: 4 },
+        createdAt: "2026-08-12T00:00:04.000Z",
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        sessionId: "00000000-0000-4000-8000-000000000000",
+        messageId: "00000000-0000-4000-8000-000000000010",
+        kind: "thinking",
+        title: "Thinking",
+        detail: "Inspect results",
+        metadata: { sequence: 3 },
+        createdAt: "2026-08-12T00:00:05.000Z",
+      },
+    ]);
+
+    expect(activities.map(({ id }) => id)).toEqual([
+      "00000000-0000-4000-8000-000000000002",
+      "00000000-0000-4000-8000-000000000001",
+    ]);
   });
 
   it("does not create a thinking block when no thinking events arrive", () => {
@@ -120,9 +173,59 @@ describe("live Pi process reducer", () => {
     expect(completed.tools).toEqual([{
       toolCallId: "call-1",
       toolName: "read",
+      arguments: {},
       detail: "done",
+      output: "done",
       complete: true,
       failed: false,
     }]);
+  });
+
+  it("turns structured tool progress into readable copy", () => {
+    expect(summarizeProcessValue({
+      content: [{ type: "text", text: "Searching 3/3: NVIDIA stock price today" }],
+      details: { phase: "search", progress: 0.666666 },
+    })).toBe("Searching 3/3: NVIDIA stock price today");
+  });
+
+  it("does not expose unparseable structured tool payloads as JSON", () => {
+    expect(summarizeProcessValue({ phase: "search", progress: 0.666666 })).toBe("");
+  });
+
+  it("keeps tool arguments for a compact preview and expandable details", () => {
+    const started = reduceLiveProcess(empty, "tool_call", {
+      toolCallId: "call-1",
+      toolName: "web_search",
+      arguments: { query: "NVIDIA stock price today" },
+    }, t);
+
+    expect(started.tools[0]?.arguments).toEqual({ query: "NVIDIA stock price today" });
+    expect(toolPreview(started.tools[0]?.arguments ?? {})).toBe("NVIDIA stock price today");
+  });
+
+  it("accepts tool calls created before arguments were available", () => {
+    expect(toolPreview(undefined)).toBe("");
+  });
+
+  it("rebuilds persisted tool results after switching sessions", () => {
+    expect(toolFromActivity({
+      id: "activity-1",
+      title: "web_search",
+      detail: "Found NVIDIA stock data",
+      metadata: {
+        toolCallId: "call-1",
+        toolName: "web_search",
+        arguments: { query: "NVIDIA stock price today" },
+        result: { content: [{ type: "text", text: "Found NVIDIA stock data" }] },
+        isError: false,
+      },
+    })).toMatchObject({
+      toolCallId: "call-1",
+      toolName: "web_search",
+      arguments: { query: "NVIDIA stock price today" },
+      detail: "Found NVIDIA stock data",
+      complete: true,
+      failed: false,
+    });
   });
 });

@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export function FieldGroup({ className, ...props }: ComponentProps<"div">) {
   return <div className={cn("flex flex-col gap-3", className)} {...props} />;

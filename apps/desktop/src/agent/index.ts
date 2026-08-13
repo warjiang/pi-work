@@ -1,5 +1,5 @@
-import { PiAdapter } from "../../../../packages/pi-adapter/src/index.js";
-import { agentRequestSchema, agentResponseSchema } from "../../../../packages/protocol/src/index.js";
+import { PiAdapter } from "@pi-work/pi-adapter";
+import { agentRequestSchema, agentResponseSchema } from "@pi-work/protocol";
 import { randomUUID } from "node:crypto";
 
 const adapter = new PiAdapter();

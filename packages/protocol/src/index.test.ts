@@ -4,12 +4,16 @@ import {
   agentMessageSchema,
   createDomainEntityInputSchema,
   createArtifactInputSchema,
+  createSkillInputSchema,
   externalUrlInputSchema,
   extensionSourceSchema,
+  importSkillInputSchema,
   inspectAttachmentPathsSchema,
   promoteSessionInputSchema,
   sendChatInputSchema,
   sessionSearchInputSchema,
+  setSkillEnabledInputSchema,
+  systemSkillSchema,
   taskSchema,
   taskStatusSchema,
   updateSessionInputSchema,
@@ -74,6 +78,36 @@ describe("protocol schemas", () => {
     expect(externalUrlInputSchema.safeParse({ url: "javascript:alert(1)" }).success).toBe(false);
     expect(externalUrlInputSchema.safeParse({ url: "file:///tmp/secret" }).success).toBe(false);
     expect(externalUrlInputSchema.safeParse({ url: "/relative/path" }).success).toBe(false);
+  });
+
+  it("validates global Skill names, imports, and enabled state changes", () => {
+    const id = "018f88d1-1eb5-709a-90ef-4325747e294c";
+    expect(createSkillInputSchema.safeParse({
+      name: "pdf-review",
+      description: "Reviews PDF documents.",
+      instructions: "# Instructions",
+    }).success).toBe(true);
+    expect(createSkillInputSchema.safeParse({
+      name: "PDF Review",
+      description: "Reviews PDF documents.",
+      instructions: "# Instructions",
+    }).success).toBe(false);
+    expect(createSkillInputSchema.safeParse({
+      name: "pdf-review",
+      description: " ",
+      instructions: "# Instructions",
+    }).success).toBe(false);
+    expect(importSkillInputSchema.safeParse({ path: "" }).success).toBe(false);
+    expect(importSkillInputSchema.safeParse({ path: "/tmp/pdf-review" }).success).toBe(true);
+    expect(setSkillEnabledInputSchema.safeParse({ id, enabled: false }).success).toBe(true);
+    expect(setSkillEnabledInputSchema.safeParse({ id: "not-a-uuid", enabled: true }).success).toBe(false);
+    expect(systemSkillSchema.safeParse({
+      name: "pdf-review",
+      description: "Reviews PDF documents.",
+      path: "/Users/example/.codex/skills/pdf-review",
+      source: "codex",
+      imported: false,
+    }).success).toBe(true);
   });
 
   it("accepts chat messages without requiring a title or plan", () => {

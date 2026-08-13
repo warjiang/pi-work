@@ -5,6 +5,7 @@ import {
   createNewSessionInput,
   resolveDefaultModel,
   resolveDefaultThinkingLevel,
+  workspaceSidebarIcons,
 } from "./app-shell.js";
 
 const providers: ProviderConfig[] = [
@@ -84,14 +85,28 @@ describe("command settings", () => {
   it("links each search result to its exact settings section", () => {
     expect(commandSettingItems.map(({ section }) => section)).toEqual([
       "general",
-      "appearance",
       "modelsCredentials",
       "workFolders",
       "permissions",
+      "skills",
       "extensions",
       "browser",
-      "shortcuts",
       "about",
     ]);
+  });
+});
+
+describe("workspace sidebar icons", () => {
+  it("uses distinct semantic icons for workspace navigation", () => {
+    expect(workspaceSidebarIcons).toMatchObject({
+      inbox: "inbox",
+      attention: "attention",
+      completed: "check-circle",
+      board: "folder-kanban",
+      sources: "source",
+      automations: "automation",
+      folderSettings: "folder-settings",
+      settings: "settings",
+    });
   });
 });

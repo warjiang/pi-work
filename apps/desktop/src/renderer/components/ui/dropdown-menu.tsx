@@ -1,7 +1,7 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import type { ComponentProps } from "react";
 import { Icon } from "./icon.js";
-import { cn } from "../../lib/utils.js";
+import { cn } from "@/lib/utils.js";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -15,7 +15,7 @@ export function DropdownMenuContent({ className, sideOffset = 4, ...props }: Com
       <DropdownMenuPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          "z-[70] min-w-36 overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "z-[70] min-w-36 overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover p-1.5 text-popover-foreground shadow-[var(--shadow-raised)] data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}
@@ -28,7 +28,7 @@ export function DropdownMenuItem({ className, inset, ...props }: ComponentProps<
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
-        "flex h-8 cursor-default select-none items-center gap-2 rounded-[var(--radius-control)] px-2 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0",
+        "flex h-9 cursor-default select-none items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0",
         inset && "pl-8",
         className,
       )}
