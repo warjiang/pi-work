@@ -10,6 +10,8 @@ import type {
   ChatMessage,
   Conversation,
   ExtensionPackage,
+  ManagedCliExecutionResult,
+  ManagedCliPackage,
   ModelCatalog,
   Label,
   Plan,
@@ -59,6 +61,25 @@ declare global {
         restart(input?: { cwd?: string }): Promise<{ started: true; reused: boolean; output: string } | { started: false; message: string }>;
         close(): Promise<void>;
         onEvent(listener: (event: PiConsoleEvent) => void): () => void;
+      };
+      managedCli: {
+        list(): Promise<ManagedCliPackage[]>;
+        install(input: { packageSpec: string }): Promise<ManagedCliPackage[]>;
+        update(input: { name: string; version?: string }): Promise<ManagedCliPackage[]>;
+        remove(input: { name: string }): Promise<ManagedCliPackage[]>;
+        execute(input: {
+          command: string;
+          args?: string[];
+          cwd?: string;
+          sessionId?: string;
+          env?: Record<string, string>;
+          timeoutMs?: number;
+        }): Promise<ManagedCliExecutionResult>;
+      };
+      runtimeEnvironment: {
+        setSession(input: { sessionId: string; environment: Record<string, string> }): Promise<string[]>;
+        clearSession(input: { sessionId: string }): Promise<void>;
+        listSessionKeys(input: { sessionId: string }): Promise<string[]>;
       };
       model: {
         list(): Promise<ModelCatalog>;

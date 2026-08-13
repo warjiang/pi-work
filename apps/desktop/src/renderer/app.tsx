@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session, Workspace } from "@pi-work/protocol";
 import { Alert, AlertDescription } from "./components/ui/alert.js";
@@ -25,6 +26,7 @@ import {
   SourcesPage,
 } from "./features/workspace-pages.js";
 import { translator } from "./i18n.js";
+import { parseSidebarWidth, sidebarWidthStorageKey } from "./sidebar-layout.js";
 import type { AppView, WorkspaceScope } from "./store.js";
 import { useWorkspaceUi } from "./store.js";
 
@@ -34,6 +36,13 @@ export function App() {
   const [appError, setAppError] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleMounted, setConsoleMounted] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      return parseSidebarWidth(window.localStorage.getItem(sidebarWidthStorageKey));
+    } catch {
+      return parseSidebarWidth(null);
+    }
+  });
   const [consoleCommandRequest, setConsoleCommandRequest] = useState<{ id: number; value: string } | null>(null);
   const consoleCommandIdRef = useRef(0);
   const consoleCloseTimerRef = useRef<number | null>(null);
@@ -256,6 +265,16 @@ export function App() {
     )).catch((cause: unknown) => setAppError(errorMessage(cause)));
   }
 
+  function resizeSidebar(width: number, commit: boolean): void {
+    setSidebarWidth(width);
+    if (!commit) return;
+    try {
+      window.localStorage.setItem(sidebarWidthStorageKey, String(width));
+    } catch {
+      // A private or restricted renderer may not expose persistent storage.
+    }
+  }
+
   function showView(view: AppView) {
     ui.selectTask(null);
     if (
@@ -369,19 +388,18 @@ export function App() {
   ) : null;
 
   return (
-    <div className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}${consoleOpen && !ui.settingsOpen ? " pi-console-open" : ""}`}>
+    <div
+      className={`desktop ${ui.sidebarCollapsed ? "sidebar-collapsed" : ""}${consoleOpen && !ui.settingsOpen ? " pi-console-open" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
       <div className="workspace-shell" inert={ui.settingsOpen ? true : undefined} aria-hidden={ui.settingsOpen || undefined}>
         <a className="skip-link" href="#main-content">{t("work")}</a>
         <TopBar
           workspaceScope={ui.workspaceScope}
           workspaces={workspaces.data ?? []}
+          {...(ui.view === "inbox" && selectedSession !== null ? { sessionTitle: selectedSession.title } : {})}
           t={t}
-          onWorkspaceScope={ui.setWorkspaceScope}
-          onAddWorkspace={() => void addWorkspace()}
-          onManageWorkspaces={() => ui.openSettings("workFolders")}
           onToggleSidebar={toggleSidebar}
-          onOpenSearch={() => ui.setCommandOpen(true)}
-          onNewTask={createNewItem}
           consoleOpen={consoleOpen}
           onToggleConsole={toggleConsole}
         />
@@ -399,12 +417,18 @@ export function App() {
           isFolder={scopeWorkspace?.kind === "folder"}
           collapsed={ui.sidebarCollapsed}
           drawerOpen={ui.sidebarDrawerOpen}
+          width={sidebarWidth}
           t={t}
+          onNewTask={() => {
+            createNewItem();
+            ui.setSidebarDrawerOpen(false);
+          }}
           onView={showView}
           onWorkspaceScope={ui.setWorkspaceScope}
           onOpenSettings={() => ui.openSettings()}
           onOpenTask={openSession}
           onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
+          onResize={resizeSidebar}
         />
         <main className="app-main" id="main-content">
         {appError === null ? null : (

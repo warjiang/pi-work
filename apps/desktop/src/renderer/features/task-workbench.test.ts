@@ -5,6 +5,7 @@ import {
   conversationTurns,
   isNearBottom,
   orderedProcessActivities,
+  persistedAssistantMatchesStream,
   processSummary,
   reduceLiveProcess,
   summarizeProcessValue,
@@ -26,6 +27,29 @@ describe("live Pi process reducer", () => {
 
   it("keeps regular assistant content untouched", () => {
     expect(visibleMessageContent("I reviewed the image.")).toBe("I reviewed the image.");
+  });
+
+  it("replaces a streamed response once the same assistant message is persisted", () => {
+    const messages = [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "user" as const,
+        content: "Question",
+        createdAt: "2026-08-13T00:00:00.000Z",
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        role: "assistant" as const,
+        content: "Complete streamed answer",
+        createdAt: "2026-08-13T00:00:01.000Z",
+      },
+    ];
+
+    expect(persistedAssistantMatchesStream(messages, "Complete streamed answer")).toBe(true);
+    expect(persistedAssistantMatchesStream(messages, "Complete streamed")).toBe(true);
+    expect(persistedAssistantMatchesStream(messages, "Different answer")).toBe(false);
   });
 
   it("only follows the message stream while the scroller remains near its end", () => {

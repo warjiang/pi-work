@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, screen, shell, utilityProcess, WebContentsView } from "electron";
 import type { OpenDialogOptions, Rectangle, UtilityProcess } from "electron";
 import type {
   AgentRequest,
@@ -44,9 +44,13 @@ import {
   completeTaskInputSchema,
   createSkillInputSchema,
   externalUrlInputSchema,
+  executeManagedCliInputSchema,
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   importSkillInputSchema,
+  installManagedCliInputSchema,
+  managedCliExecutionResultSchema,
+  managedCliPackageSchema,
   planSchema,
   promoteSessionInputSchema,
   publishArtifactInputSchema,
@@ -60,12 +64,16 @@ import {
   updateConversationModelInputSchema,
   removeConversationInputSchema,
   removeDomainEntityInputSchema,
+  removeManagedCliInputSchema,
   resolveToolApprovalInputSchema,
   sessionSearchInputSchema,
+  sessionEnvironmentInputSchema,
+  setSessionEnvironmentInputSchema,
   setSkillEnabledInputSchema,
   sourceSchema,
   workspaceSchema,
   updateDomainEntityInputSchema,
+  updateManagedCliInputSchema,
   updateSkillInputSchema,
   updateSessionInputSchema,
   updateTaskBriefInputSchema,
@@ -73,6 +81,7 @@ import {
 import { stageArtifact, publishArtifact } from "@pi-work/artifacts";
 import { PiWorkStore } from "@pi-work/storage";
 import { CredentialBroker } from "./credential-broker.js";
+import { ManagedCliRuntime, SessionEnvironmentStore } from "./managed-cli.js";
 import { SkillManager } from "./skill-manager.js";
 import {
   createIsolatedPiEnvironment,
@@ -80,14 +89,18 @@ import {
   type PiConsoleEvent,
   resolveBundledPiRuntime,
 } from "./pi-console.js";
+import { loadWindowBounds, saveWindowBounds } from "./window-state.js";
 
 let mainWindow: BrowserWindow | null = null;
+let windowStateTimer: ReturnType<typeof setTimeout> | null = null;
 let store: PiWorkStore;
 let agentProcess: UtilityProcess | null = null;
 let credentialBroker: CredentialBroker;
 let piConsole: PiConsole | null = null;
+let managedCliRuntime: ManagedCliRuntime | null = null;
 let browserView: WebContentsView | null = null;
 let skillManager: SkillManager | null = null;
+const sessionEnvironments = new SessionEnvironmentStore();
 const pendingAgentRequests = new Map<string, {
   resolve: (response: AgentResponse) => void;
   reject: (error: Error) => void;
@@ -131,6 +144,7 @@ function collectorFor(requestId: string) {
 
 function collectRunEvent(response: Extract<AgentMessage, { type: "event" }>): void {
   const { event } = response;
+  if (event.kind === "completed" || event.kind === "cancelled") return;
   const collector = collectorFor(response.requestId);
   const metadata = { requestId: response.requestId, sequence: event.sequence, ...event.payload };
   if (event.kind === "thinking") {
@@ -376,15 +390,22 @@ function bundledPiRuntimeDirectory(): string {
   });
 }
 
+function getManagedCliRuntime(): ManagedCliRuntime {
+  managedCliRuntime ??= new ManagedCliRuntime({
+    userData: app.getPath("userData"),
+    runtimeDirectory: bundledPiRuntimeDirectory(),
+    nodeExecutable: process.execPath,
+  });
+  managedCliRuntime.initialize();
+  return managedCliRuntime;
+}
+
 function getPiConsole(): PiConsole {
   if (piConsole === null) {
     console.info(`[Pi Terminal] Starting with the ${app.isPackaged ? "packaged" : "development"} Node/npm runtime.`);
-    const runtimeDirectory = bundledPiRuntimeDirectory();
     piConsole = new PiConsole({
-      runtimeDirectory,
-      userData: app.getPath("userData"),
+      managedCliRuntime: getManagedCliRuntime(),
       workingDirectory: app.getPath("home"),
-      nodePath: process.execPath,
       emit: sendPiConsoleEvent,
     });
   }
@@ -409,13 +430,23 @@ async function terminalWorkingDirectory(input: unknown): Promise<string> {
 }
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 960,
+  const statePath = join(app.getPath("userData"), "window-state.json");
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const workAreas = [
+    primaryDisplay.workArea,
+    ...screen.getAllDisplays()
+      .filter((display) => display.id !== primaryDisplay.id)
+      .map((display) => display.workArea),
+  ];
+  const savedBounds = loadWindowBounds(statePath, workAreas);
+  const window = new BrowserWindow({
+    width: savedBounds?.width ?? 1440,
+    height: savedBounds?.height ?? 960,
+    ...(savedBounds === undefined ? {} : { x: savedBounds.x, y: savedBounds.y }),
     minWidth: 860,
     minHeight: 640,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
-    ...(process.platform === "darwin" && { trafficLightPosition: { x: 18, y: 16 } }),
+    ...(process.platform === "darwin" && { trafficLightPosition: { x: 18, y: 19 } }),
     titleBarOverlay: process.platform === "darwin" ? false : {
       color: "#00000000",
       symbolColor: "#737373",
@@ -429,11 +460,35 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+  mainWindow = window;
+
+  const saveState = (): void => {
+    if (windowStateTimer !== null) {
+      clearTimeout(windowStateTimer);
+      windowStateTimer = null;
+    }
+    if (window.isDestroyed()) return;
+    try {
+      saveWindowBounds(statePath, window.getNormalBounds());
+    } catch (error) {
+      console.warn("[Window] Unable to save window state.", error);
+    }
+  };
+  const scheduleSave = (): void => {
+    if (windowStateTimer !== null) clearTimeout(windowStateTimer);
+    windowStateTimer = setTimeout(saveState, 250);
+  };
+  window.on("move", scheduleSave);
+  window.on("resize", scheduleSave);
+  window.on("close", saveState);
+  window.on("closed", () => {
+    if (mainWindow === window) mainWindow = null;
+  });
 
   if (process.env.ELECTRON_RENDERER_URL === undefined) {
-    void mainWindow.loadFile(join(import.meta.dirname, "../renderer/index.html"));
+    void window.loadFile(join(import.meta.dirname, "../renderer/index.html"));
   } else {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+    void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   }
 }
 
@@ -550,10 +605,22 @@ function getAgentProcess(): UtilityProcess {
   return agentProcess;
 }
 
-function agentRuntime(cwd = app.getPath("userData")): AgentRuntime {
+function agentRuntime(cwd = app.getPath("userData"), sessionId?: string): AgentRuntime {
+  const isolatedEnvironment = createIsolatedPiEnvironment({
+    userData: app.getPath("userData"),
+    runtimeDirectory: bundledPiRuntimeDirectory(),
+    nodeExecutable: app.getPath("exe"),
+  });
+  const environment = getManagedCliRuntime().agentEnvironment(
+    { PATH: isolatedEnvironment.PATH, HOME: isolatedEnvironment.HOME },
+    sessionId === undefined ? {} : sessionEnvironments.get(sessionId),
+  );
   return {
     cwd,
     agentDir: join(app.getPath("userData"), "pi-agent"),
+    environment: Object.fromEntries(
+      Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    ),
   };
 }
 
@@ -713,6 +780,35 @@ function assertManagedChatPath(rootPath: string): void {
   if (difference === "" || difference === ".." || difference.startsWith(`..${sep}`) || isAbsolute(difference)) {
     throw new Error("Managed chat directory is outside Pi Work chat storage.");
   }
+}
+
+function pathIsInside(rootPath: string, candidatePath: string): boolean {
+  const difference = relative(resolve(rootPath), resolve(candidatePath));
+  return difference === "" || (
+    difference !== ".."
+    && !difference.startsWith(`..${sep}`)
+    && !isAbsolute(difference)
+  );
+}
+
+async function managedCliWorkingDirectory(sessionId: string | undefined, requestedCwd: string | undefined): Promise<string> {
+  if (sessionId === undefined) {
+    const cwd = resolve(requestedCwd ?? app.getPath("home"));
+    const details = await stat(cwd).catch(() => null);
+    if (details === null || !details.isDirectory()) throw new Error("Managed CLI working directory does not exist.");
+    return cwd;
+  }
+  const task = getStore().getTask(sessionId);
+  if (task === null) throw new Error("Session not found.");
+  const workspace = getStore().getWorkspace(task.workspaceId);
+  if (workspace === null) throw new Error("Workspace not found.");
+  const cwd = resolve(requestedCwd ?? task.workingDirectory ?? workspace.rootPath);
+  if (!workspace.directories.some((directory) => pathIsInside(directory, cwd))) {
+    throw new Error("Managed CLI working directory is outside this workspace.");
+  }
+  const details = await stat(cwd).catch(() => null);
+  if (details === null || !details.isDirectory()) throw new Error("Managed CLI working directory does not exist.");
+  return cwd;
 }
 
 function requireFolderTask(taskId: string) {
@@ -983,6 +1079,54 @@ function registerIpc(): void {
     piConsole?.close();
     piConsole = null;
   });
+  ipcMain.handle("managed-cli:list", () => (
+    getManagedCliRuntime().list().map((value) => managedCliPackageSchema.parse(value))
+  ));
+  ipcMain.handle("managed-cli:install", async (_event, input: unknown) => {
+    const { packageSpec } = installManagedCliInputSchema.parse(input);
+    return (await getManagedCliRuntime().install(packageSpec))
+      .map((value) => managedCliPackageSchema.parse(value));
+  });
+  ipcMain.handle("managed-cli:update", async (_event, input: unknown) => {
+    const { name, version } = updateManagedCliInputSchema.parse(input);
+    return (await getManagedCliRuntime().update(name, version))
+      .map((value) => managedCliPackageSchema.parse(value));
+  });
+  ipcMain.handle("managed-cli:remove", async (_event, input: unknown) => {
+    const { name } = removeManagedCliInputSchema.parse(input);
+    return (await getManagedCliRuntime().remove(name))
+      .map((value) => managedCliPackageSchema.parse(value));
+  });
+  ipcMain.handle("managed-cli:execute", async (_event, input: unknown) => {
+    const parsed = executeManagedCliInputSchema.parse(input);
+    const cwd = await managedCliWorkingDirectory(parsed.sessionId, parsed.cwd);
+    const sessionEnvironment = parsed.sessionId === undefined
+      ? {}
+      : sessionEnvironments.get(parsed.sessionId);
+    return managedCliExecutionResultSchema.parse(await getManagedCliRuntime().execute({
+      command: parsed.command,
+      args: parsed.args,
+      cwd,
+      env: {
+        ...sessionEnvironment,
+        ...parsed.env,
+      },
+      ...(parsed.timeoutMs === undefined ? {} : { timeoutMs: parsed.timeoutMs }),
+    }));
+  });
+  ipcMain.handle("runtime-environment:set-session", (_event, input: unknown) => {
+    const { sessionId, environment } = setSessionEnvironmentInputSchema.parse(input);
+    if (getStore().getTask(sessionId) === null) throw new Error("Session not found.");
+    return sessionEnvironments.set(sessionId, environment);
+  });
+  ipcMain.handle("runtime-environment:clear-session", (_event, input: unknown) => {
+    const { sessionId } = sessionEnvironmentInputSchema.parse(input);
+    sessionEnvironments.clear(sessionId);
+  });
+  ipcMain.handle("runtime-environment:list-session-keys", (_event, input: unknown) => {
+    const { sessionId } = sessionEnvironmentInputSchema.parse(input);
+    return sessionEnvironments.listKeys(sessionId);
+  });
   ipcMain.handle("model:list", () => listModels());
   ipcMain.handle("conversation:list", () => getStore().listManagedConversations());
   ipcMain.handle("session:list", (_event, input: unknown) => (
@@ -1050,6 +1194,7 @@ function registerIpc(): void {
     if (workspace?.kind === "managed") assertManagedChatPath(workspace.rootPath);
     const removed = getStore().removeConversation(parsed.taskId);
     clearPendingToolApprovals(parsed.taskId);
+    sessionEnvironments.clear(parsed.taskId);
     if (removed.workspace.kind === "managed") await rm(removed.workspace.rootPath, { recursive: true, force: true });
   });
   ipcMain.handle("session:messages", (_event, sessionId: unknown) => getStore().listMessages(taskSchema.shape.id.parse(sessionId)));
@@ -1157,7 +1302,7 @@ function registerIpc(): void {
       await providerCredential(task.providerId),
       task.modelId,
       task.thinkingLevel,
-      agentRuntime(task.workingDirectory ?? workspace.rootPath),
+      agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
     );
     getStore().savePlan(plan);
     getStore().addMessage({
@@ -1266,7 +1411,7 @@ function registerIpc(): void {
         await providerCredential(parsed.providerId),
         parsed.modelId,
         parsed.thinkingLevel,
-        agentRuntime(task.workingDirectory ?? workspace.rootPath),
+        agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
       );
       getStore().savePlan(plan);
       getStore().addMessage({
@@ -1314,7 +1459,7 @@ function registerIpc(): void {
       providerId: parsed.providerId,
       modelId: parsed.modelId,
       thinkingLevel: parsed.thinkingLevel,
-      runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath),
+      runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
       permissionMode: parsed.permissionMode ?? task.permissionMode,
       images,
     });
@@ -1487,4 +1632,5 @@ app.on("before-quit", () => {
   agentProcess?.kill();
   piConsole?.close();
   piConsole = null;
+  sessionEnvironments.clearAll();
 });

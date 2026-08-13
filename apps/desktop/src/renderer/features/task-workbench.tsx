@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Activity,
@@ -470,6 +471,7 @@ export function TaskWorkbench(props: {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [promotionOpen, setPromotionOpen] = useState(false);
+  const [topbarActionsTarget, setTopbarActionsTarget] = useState<HTMLElement | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<Pick<AttachmentDraft, "name" | "mimeType"> | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [promotionWorkspaceId, setPromotionWorkspaceId] = useState(props.folders[0]?.id ?? "");
@@ -524,6 +526,11 @@ export function TaskWorkbench(props: {
   const thinkingLevels: ThinkingLevel[] = activeModel?.thinkingLevels.length ? activeModel.thinkingLevels : ["off"];
   const approvals = props.approvals;
   const turns = useMemo(() => conversationTurns(messages.data ?? []), [messages.data]);
+  const liveResponsePersisted = pendingPrompt === null
+    && persistedAssistantMatchesStream(messages.data ?? [], streamed);
+  const collapsingProcessMessageId = liveResponsePersisted
+    ? messages.data?.at(-1)?.id ?? null
+    : null;
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -541,12 +548,7 @@ export function TaskWorkbench(props: {
     setLiveProcess((current) => reduceLiveProcess(current, event.kind, event.payload, props.t));
     if (event.kind === "completed" || event.kind === "cancelled") {
       setRunNotice(event.kind === "cancelled" ? props.t("runCancelled") : props.t("responseComplete"));
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["activities", sessionId] }),
-        props.onRefresh(),
-      ]);
+      void finishLiveRun();
     }
   }), [props.onRefresh, props.t, queryClient, sessionId]);
   useEffect(() => () => {
@@ -572,6 +574,11 @@ export function TaskWorkbench(props: {
     if (!followStream) return;
     scheduleScrollToLatest("auto");
   }, [approvals.length, followStream, liveProcess, messages.data?.length, pendingPrompt, props.session.status, streamed]);
+  useEffect(() => {
+    if (!liveResponsePersisted) return;
+    clearStream();
+    setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
+  }, [liveResponsePersisted]);
   useEffect(() => {
     if (personal) return;
     if (props.session.status === "awaiting_plan_approval") return;
@@ -740,45 +747,46 @@ export function TaskWorkbench(props: {
     : props.session.status === "awaiting_plan_approval" ? props.t("planApprovalNeeded") : "";
   const retryContent = input.trim() || [...(messages.data ?? [])].reverse().find(({ role }) => role === "user")?.content.trim() || "";
   const canPromote = personal && !props.session.running && approvals.length === 0 && props.folders.length > 0;
+  useEffect(() => {
+    setTopbarActionsTarget(document.getElementById("topbar-task-actions"));
+  }, []);
+  const headerActions = (
+    <div className="task-header-actions">
+      {!personal ? <Button variant="ghost" size="icon" aria-label={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => updateSession.mutate({ flagged: !props.session.flagged })}><Icon name="flag" /></Button> : null}
+      {!personal ? <Button variant="ghost" size="icon" aria-label={props.inspectorOpen ? props.t("closeInspector") : props.t("openInspector")} aria-controls="task-inspector" aria-expanded={props.inspectorOpen} onClick={props.onInspectorToggle}><Icon name="panel-right" /></Button> : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={props.t("advanced")}><Icon name="more" /></Button></DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {personal ? <DropdownMenuItem disabled={!canPromote} onSelect={() => setPromotionOpen(true)}><Icon name="workspace" />{props.t("moveToWorkFolder")}</DropdownMenuItem> : null}
+          {personal ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem onSelect={() => updateSession.mutate({ archived: !props.session.archived })}><Icon name={props.session.archived ? "archive-restore" : "archive"} />{props.session.archived ? props.t("restore") : props.t("archive")}</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setDeleteOpen(true)}><Icon name="trash" />{props.t("delete")}</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
   return (
     <section className={`task-workbench ${!personal && props.inspectorOpen ? "inspector-visible" : ""}`}>
       <div className="execution-pane">
-        <header className={`task-context-header ${personal ? "task-context-header-personal" : ""}`}>
+        {!personal ? <header className="task-context-header">
           <div className="task-context-title">
-            {!personal ? <span>{props.workspace?.name ?? props.t("workFolder")}</span> : null}
-            <h1>{props.session.title}</h1>
+            <span>{props.workspace?.name ?? props.t("workFolder")}</span>
           </div>
-          {!personal ? (
-            <>
-              <div className="task-context-meta">
-                <span className={`lifecycle-badge lifecycle-${props.session.status}`}>{lifecycleLabel(props.session, props.t)}</span>
-                <span className="folder-path"><Icon name="workspace" size={14} />{props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}</span>
-              </div>
-              <div className="recommended-action">
-                <span>{props.t("nextStep")}</span>
-                <Button variant="ghost" onClick={() => {
-                  if (recommendation.tab) props.onInspectorOpen(recommendation.tab);
-                  else if (props.session.status === "failed" && retryContent !== "") runPrompt(retryContent);
-                  else composerInput.current?.focus();
-                }}>{recommendation.label}<Icon name="forward" size={14} /></Button>
-              </div>
-            </>
-          ) : null}
-          <div className="task-header-actions">
-            {!personal ? <Button variant="ghost" size="icon" aria-label={props.session.flagged ? props.t("unflag") : props.t("flag")} onClick={() => updateSession.mutate({ flagged: !props.session.flagged })}><Icon name="flag" /></Button> : null}
-            {!personal ? <Button variant="ghost" size="icon" aria-label={props.inspectorOpen ? props.t("closeInspector") : props.t("openInspector")} aria-controls="task-inspector" aria-expanded={props.inspectorOpen} onClick={props.onInspectorToggle}><Icon name="panel-right" /></Button> : null}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={props.t("advanced")}><Icon name="more" /></Button></DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {personal ? <DropdownMenuItem disabled={!canPromote} onSelect={() => setPromotionOpen(true)}><Icon name="workspace" />{props.t("moveToWorkFolder")}</DropdownMenuItem> : null}
-                {personal ? <DropdownMenuSeparator /> : null}
-                <DropdownMenuItem onSelect={() => updateSession.mutate({ archived: !props.session.archived })}><Icon name={props.session.archived ? "archive-restore" : "archive"} />{props.session.archived ? props.t("restore") : props.t("archive")}</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setDeleteOpen(true)}><Icon name="trash" />{props.t("delete")}</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          <div className="task-context-meta">
+            <span className={`lifecycle-badge lifecycle-${props.session.status}`}>{lifecycleLabel(props.session, props.t)}</span>
+            <span className="folder-path"><Icon name="workspace" size={14} />{props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}</span>
           </div>
-        </header>
+          <div className="recommended-action">
+            <span>{props.t("nextStep")}</span>
+            <Button variant="ghost" onClick={() => {
+              if (recommendation.tab) props.onInspectorOpen(recommendation.tab);
+              else if (props.session.status === "failed" && retryContent !== "") runPrompt(retryContent);
+              else composerInput.current?.focus();
+            }}>{recommendation.label}<Icon name="forward" size={14} /></Button>
+          </div>
+        </header> : null}
+        {topbarActionsTarget === null ? null : createPortal(headerActions, topbarActionsTarget)}
         {error ? <Alert className="task-inline-error"><AlertDescription>{error}</AlertDescription><Button variant="ghost" size="icon" aria-label={props.t("close")} onClick={() => setError(null)}><Icon name="close" /></Button></Alert> : null}
         <div className="conversation-stage">
           <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" aria-label={props.t("agentStatus")}>{progressAnnouncement}</div>
@@ -817,6 +825,7 @@ export function TaskWorkbench(props: {
                 messages={messages.data ?? []}
                 activities={activities.data ?? []}
                 attachments={savedAttachments.data ?? []}
+                collapsingProcessMessageId={collapsingProcessMessageId}
                 t={props.t}
                 onPreview={(attachment) => {
                   if (typeof window.piWork.attachment.preview !== "function") {
@@ -834,7 +843,7 @@ export function TaskWorkbench(props: {
             {pendingPrompt !== null ? (
               <article className="message user pending"><div>{pendingPrompt}</div></article>
             ) : null}
-            {liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "" ? (
+            {!liveResponsePersisted && (liveProcess.thoughts.length > 0 || liveProcess.tools.length > 0 || liveProcess.notice !== null || streamed !== "") ? (
               <article className="message assistant"><LiveProcessView process={liveProcess} t={props.t} />{streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}</article>
             ) : null}
             {!personal && props.session.status === "awaiting_plan_approval" && plan.data !== null && plan.data !== undefined ? (
@@ -1126,6 +1135,18 @@ export function TaskWorkbench(props: {
     return new Promise((resolve) => streamWaiters.current.push(resolve));
   }
 
+  async function finishLiveRun() {
+    await waitForStream();
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
+      queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
+      queryClient.invalidateQueries({ queryKey: ["activities", sessionId] }),
+      props.onRefresh(),
+    ]);
+    clearStream();
+    setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
+  }
+
   function clearStream() {
     if (streamTimer.current !== null) window.clearTimeout(streamTimer.current);
     streamTimer.current = null;
@@ -1148,10 +1169,11 @@ export function TaskWorkbench(props: {
   }
 }
 
-function MessageList({ messages, activities, attachments, t, onPreview }: {
+function MessageList({ messages, activities, attachments, collapsingProcessMessageId, t, onPreview }: {
   messages: ChatMessage[];
   activities: Activity[];
   attachments: StoredAttachment[];
+  collapsingProcessMessageId: string | null;
   t: T;
   onPreview(attachment: StoredAttachment): void;
 }) {
@@ -1164,7 +1186,7 @@ function MessageList({ messages, activities, attachments, t, onPreview }: {
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}`}>
               {message.role === "assistant"
-                ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} t={t} />{visibleContent !== "" ? <AssistantResult content={visibleContent} t={t} /> : null}</>
+                ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} animateCollapse={message.id === collapsingProcessMessageId} t={t} />{visibleContent !== "" ? <AssistantResult content={visibleContent} t={t} /> : null}</>
                 : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <div className="message-user-content">{visibleContent}</div> : null}</>}
             </article>
           </div>
@@ -1255,6 +1277,13 @@ export function conversationTurns(messages: ChatMessage[]): ConversationTurn[] {
     if (answer !== "") turns[turns.length - 1]!.answer = answer;
   }
   return turns;
+}
+
+export function persistedAssistantMatchesStream(messages: ChatMessage[], streamed: string): boolean {
+  if (streamed === "") return false;
+  const latest = messages.at(-1);
+  if (latest?.role !== "assistant") return false;
+  return visibleMessageContent(latest.content).startsWith(streamed);
 }
 
 export function activeTurnIndex(turnTops: number[], threshold: number): number {
@@ -1376,23 +1405,51 @@ export function orderedProcessActivities(activities: Activity[]): Activity[] {
   });
 }
 
-function HistoricalProcess({ activities, t }: { activities: Activity[]; t: T }) {
+function HistoricalProcess({ activities, animateCollapse = false, t }: {
+  activities: Activity[];
+  animateCollapse?: boolean;
+  t: T;
+}) {
   const ordered = orderedProcessActivities(activities);
-  if (ordered.length === 0) return null;
+  const animateOnMount = useRef(animateCollapse).current;
+  const hasActivities = ordered.length > 0;
+  const [open, setOpen] = useState(animateOnMount);
+  const [collapsing, setCollapsing] = useState(false);
+  useEffect(() => {
+    if (!animateOnMount || !hasActivities) return;
+    const frame = window.requestAnimationFrame(() => setCollapsing(true));
+    const timer = window.setTimeout(() => {
+      setOpen(false);
+      setCollapsing(false);
+    }, 220);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [animateOnMount, hasActivities]);
+  if (!hasActivities) return null;
   const thoughts = ordered.filter(({ kind }) => kind === "thinking").length;
   const tools = ordered.length - thoughts;
   return (
-    <details className="process-group">
+    <details
+      className={`process-group${collapsing ? " is-collapsing" : ""}`}
+      open={open}
+      onToggle={(event) => {
+        if (!collapsing) setOpen(event.currentTarget.open);
+      }}
+    >
       <summary>
         <Icon name="chevron-down" size={14} className="process-group-chevron" />
         <span>{processSummary(tools, thoughts, t)}</span>
       </summary>
       <div className="process-group-content">
-        {ordered.map((activity) => (
-          activity.kind === "thinking"
-            ? <ThoughtProcessCard activity={activity} key={activity.id} t={t} />
-            : <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />
-        ))}
+        <div className="process-group-content-inner">
+          {ordered.map((activity) => (
+            activity.kind === "thinking"
+              ? <ThoughtProcessCard activity={activity} key={activity.id} t={t} />
+              : <ToolProcessCard key={activity.id} tool={toolFromActivity(activity)} t={t} />
+          ))}
+        </div>
       </div>
     </details>
   );

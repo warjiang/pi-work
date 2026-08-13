@@ -14,6 +14,7 @@ import {
   resolveBundledPiCli,
   resolveBundledPiRuntime,
 } from "./pi-console.js";
+import { ManagedCliRuntime } from "./managed-cli.js";
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -167,10 +168,12 @@ describe("bundled Pi Console runtime", () => {
 
   it("exposes buffered output and process state for renderer recovery", () => {
     const consoleInstance = new PiConsole({
-      runtimeDirectory: packageDirectory,
-      userData: "/user-data",
+      managedCliRuntime: new ManagedCliRuntime({
+        runtimeDirectory: packageDirectory,
+        userData: "/user-data",
+        nodeExecutable: process.execPath,
+      }),
       workingDirectory: "/working-directory",
-      nodePath: process.execPath,
       emit: () => {},
     });
 
@@ -184,19 +187,22 @@ describe("bundled Pi Console runtime", () => {
     const userData = await mkdtemp(join(tmpdir(), "pi-terminal-api-"));
     try {
       const consoleInstance = new PiConsole({
-        runtimeDirectory: packageDirectory,
-        userData,
+        managedCliRuntime: new ManagedCliRuntime({
+          runtimeDirectory: packageDirectory,
+          userData,
+          nodeExecutable: process.execPath,
+        }),
         workingDirectory: packageDirectory,
-        nodePath: process.execPath,
         emit: () => {},
       });
       const result = await consoleInstance.execute({
-        command: "node -p \"[process.execPath, process.env.ELECTRON_RUN_AS_NODE || 'clean'].join('\\\\n')\" && npm --version",
+        command: "node -p \"[process.execPath, process.env.ELECTRON_RUN_AS_NODE || 'clean'].join('\\\\n')\" && npm --version && npx --version",
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(process.execPath);
       expect(result.stdout).toContain("clean");
-      expect(result.stdout).toContain("11.6.2");
+      expect(result.stdout.match(/11\.6\.2/g)).toHaveLength(2);
+      expect(result.cwd).toBe(packageDirectory);
       expect(result.timedOut).toBe(false);
     } finally {
       await rm(userData, { recursive: true, force: true });

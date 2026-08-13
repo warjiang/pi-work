@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertAuthorizedFilePath, consumeSessionEvent, extensionToolNames, PiAdapter } from "./index.js";
+import {
+  assertAuthorizedFilePath,
+  consumeSessionEvent,
+  extensionToolNames,
+  mergeAgentBashEnvironment,
+  PiAdapter,
+} from "./index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -15,6 +21,22 @@ afterEach(async () => {
 });
 
 describe("PiAdapter", () => {
+  it("merges session variables into the spawned bash environment without mutating the process environment", () => {
+    const processEnvironment = { PATH: "/system/bin", SHARED: "process" };
+    const merged = mergeAgentBashEnvironment(processEnvironment, {
+      PATH: "/managed/bin:/system/bin",
+      LARK_TOKEN: "session-secret",
+      SHARED: "session",
+    });
+
+    expect(merged).toEqual({
+      PATH: "/managed/bin:/system/bin",
+      LARK_TOKEN: "session-secret",
+      SHARED: "session",
+    });
+    expect(processEnvironment).toEqual({ PATH: "/system/bin", SHARED: "process" });
+  });
+
   it("keeps installed extension tools available to chat sessions", () => {
     expect(extensionToolNames([
       { tools: new Map([["web_search", {}], ["fetch_content", {}]]) },

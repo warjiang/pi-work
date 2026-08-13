@@ -276,7 +276,12 @@ export class PiAdapter {
         onEvent,
       ),
       approvalTool(
-        createBashToolDefinition(runtime.cwd),
+        createBashToolDefinition(runtime.cwd, {
+          spawnHook: (context) => ({
+            ...context,
+            env: mergeAgentBashEnvironment(context.env, runtime.environment),
+          }),
+        }),
         runtime.cwd,
         permissionMode === "auto" ? async () => true : requestApproval,
         onEvent,
@@ -619,6 +624,16 @@ export function consumeSessionEvent(
     default:
       return;
   }
+}
+
+export function mergeAgentBashEnvironment(
+  contextEnvironment: NodeJS.ProcessEnv,
+  runtimeEnvironment: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+  return {
+    ...contextEnvironment,
+    ...runtimeEnvironment,
+  };
 }
 
 export function extensionToolNames(
