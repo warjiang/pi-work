@@ -66,6 +66,24 @@ describe("MarkdownMessage", () => {
     expect(html).not.toContain("<a");
   });
 
+  it("preserves unordered, ordered, and nested list semantics", () => {
+    const html = render([
+      "- First",
+      "  - Nested",
+      "",
+      "1. One",
+      "2. Two",
+    ].join("\n"));
+
+    expect(html).toContain("<ul>");
+    expect(html).toContain("<li>First");
+    expect(html).toContain("<ul>");
+    expect(html).toContain("<li>Nested</li>");
+    expect(html).toContain("<ol>");
+    expect(html).toContain("<li>One</li>");
+    expect(html).toContain("<li>Two</li>");
+  });
+
   it("removes raw HTML and disables unsafe or relative links", () => {
     const html = render([
       "<script>globalThis.compromised = true</script>",

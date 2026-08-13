@@ -8,6 +8,35 @@ import { labelSchema, statusDefinitionSchema } from "@pi-work/protocol";
 import { PiWorkStore } from "./index.js";
 
 describe("PiWorkStore", () => {
+  it("associates multiple directories with a workspace and bounds task working directories", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+
+    expect(workspace.directories).toEqual(["/workspace/product"]);
+    expect(store.addWorkspaceDirectory(workspace.id, "/workspace/docs").directories).toEqual([
+      "/workspace/product",
+      "/workspace/docs",
+    ]);
+    expect(store.createTask({
+      workspaceId: workspace.id,
+      title: "Docs",
+      goal: "Update the docs",
+      workingDirectory: "/workspace/docs/guides",
+    }).workingDirectory).toBe("/workspace/docs/guides");
+    expect(() => store.createTask({
+      workspaceId: workspace.id,
+      title: "Outside",
+      goal: "Touch another project",
+      workingDirectory: "/workspace/other",
+    })).toThrow("associated with this workspace");
+
+    store.close();
+  });
+
   it("requires plan approval before recording an artifact", () => {
     const store = new PiWorkStore();
     const workspace = store.createWorkspace({

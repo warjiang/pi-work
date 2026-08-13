@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -71,6 +72,32 @@ function booleanValue(value: unknown): boolean {
   return value === true || value === "1";
 }
 
+function pathInside(rootPath: string, candidatePath: string): boolean {
+  const difference = relative(resolve(rootPath), resolve(candidatePath));
+  return difference === "" || (
+    difference !== ".."
+    && !difference.startsWith(`..${sep}`)
+    && !isAbsolute(difference)
+  );
+}
+
+function parseWorkspace(row: typeof workspaces.$inferSelect): Workspace {
+  const directories = JSON.parse(row.directories) as unknown;
+  return workspaceSchema.parse({
+    ...row,
+    directories: Array.isArray(directories) && directories.length > 0
+      ? directories
+      : [row.rootPath],
+  });
+}
+
+function workspaceValues(workspace: Workspace): typeof workspaces.$inferInsert {
+  return {
+    ...workspace,
+    directories: JSON.stringify(workspace.directories),
+  };
+}
+
 function parseTask(row: typeof tasks.$inferSelect): Task {
   return taskSchema.parse({
     ...row,
@@ -134,26 +161,37 @@ export class PiWorkStore {
     name: string;
     rootPath: string;
     outputPath: string;
+    directories?: string[];
     kind?: WorkspaceKind;
     id?: string;
   }): Workspace {
     const workspace = workspaceSchema.parse({
       id: input.id ?? randomUUID(),
       ...input,
+      directories: input.directories ?? [input.rootPath],
       kind: input.kind ?? "folder",
       createdAt: timestamp(),
     });
-    this.db.insert(workspaces).values(workspace).run();
+    this.db.insert(workspaces).values(workspaceValues(workspace)).run();
     return workspace;
   }
 
   listWorkspaces(): Workspace[] {
-    return this.db.select().from(workspaces).orderBy(asc(workspaces.createdAt)).all().map((row) => workspaceSchema.parse(row));
+    return this.db.select().from(workspaces).orderBy(asc(workspaces.createdAt)).all().map(parseWorkspace);
   }
 
   getWorkspace(workspaceId: string): Workspace | null {
     const row = this.db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).get();
-    return row === undefined ? null : workspaceSchema.parse(row);
+    return row === undefined ? null : parseWorkspace(row);
+  }
+
+  addWorkspaceDirectory(workspaceId: string, directory: string): Workspace {
+    const workspace = this.requireFolderWorkspace(workspaceId);
+    const directories = [...new Set([...workspace.directories, directory])];
+    this.db.update(workspaces).set({
+      directories: JSON.stringify(directories),
+    }).where(eq(workspaces.id, workspaceId)).run();
+    return { ...workspace, directories };
   }
 
   createTask(input: {
@@ -172,6 +210,7 @@ export class PiWorkStore {
     const workspace = this.requireWorkspace(input.workspaceId);
     const kind = input.kind ?? "task";
     this.assertSessionWorkspaceKind(workspace, kind);
+    this.validateWorkingDirectory(workspace, input.workingDirectory);
     const createdAt = timestamp();
     const task = taskSchema.parse({
       id: input.id ?? randomUUID(),
@@ -285,6 +324,7 @@ export class PiWorkStore {
     const workspace = this.requireWorkspace(current.workspaceId);
     this.assertSessionWorkspaceKind(workspace, current.kind);
     this.validateSessionResources(workspace, input);
+    this.validateWorkingDirectory(workspace, input.workingDirectory);
     const next = taskSchema.parse({ ...current, ...input, updatedAt: timestamp() });
     this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
     this.appendEvent(sessionId, "session.updated", input);
@@ -302,7 +342,7 @@ export class PiWorkStore {
         .orderBy(asc(tasks.createdAt))
         .get();
       return taskRow === undefined ? [] : [{
-        workspace: workspaceSchema.parse(workspaceRow),
+        workspace: parseWorkspace(workspaceRow),
         task: parseTask(taskRow),
       }];
     });
@@ -855,6 +895,13 @@ export class PiWorkStore {
     }
   }
 
+  private validateWorkingDirectory(workspace: Workspace, workingDirectory: string | null | undefined): void {
+    if (workingDirectory === undefined || workingDirectory === null) return;
+    if (!workspace.directories.some((directory) => pathInside(directory, workingDirectory))) {
+      throw new Error("Working directory must be inside a folder associated with this workspace.");
+    }
+  }
+
   private validateAutomationReferences(automation: Automation, workspaceId: string): void {
     if (automation.trigger.type === "status_changed" && automation.trigger.statusId !== null) {
       const status = this.requireFolderDomainEntity<StatusDefinition>("status", automation.trigger.statusId);
@@ -930,6 +977,7 @@ export class PiWorkStore {
         id TEXT PRIMARY KEY NOT NULL,
         name TEXT NOT NULL,
         root_path TEXT NOT NULL,
+        directories TEXT NOT NULL DEFAULT '[]',
         output_path TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'folder',
         created_at TEXT NOT NULL
@@ -1026,6 +1074,8 @@ export class PiWorkStore {
       );
     `);
     this.addColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'folder'");
+    this.addColumn("workspaces", "directories", "TEXT NOT NULL DEFAULT '[]'");
+    this.sqlite.exec("UPDATE workspaces SET directories = json_array(root_path) WHERE directories = '[]'");
     this.addColumn("tasks", "provider_id", "TEXT");
     this.addColumn("tasks", "model_id", "TEXT");
     this.addColumn("tasks", "thinking_level", "TEXT NOT NULL DEFAULT 'off'");

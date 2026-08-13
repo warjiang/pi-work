@@ -13,6 +13,7 @@ describe("artifact lifecycle", () => {
       id: randomUUID(),
       name: "Research",
       rootPath,
+      directories: [rootPath],
       outputPath: join(rootPath, "Pi Work"),
       kind: "folder" as const,
       createdAt: new Date().toISOString(),

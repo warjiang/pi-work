@@ -107,6 +107,7 @@ export function SettingsPage(props: {
   onClose(): void;
   onUpdate(value: Partial<AppSettings>): Promise<unknown>;
   onAddWorkspace(): Promise<Workspace | null>;
+  onAddWorkspaceDirectory(workspaceId: string): Promise<Workspace | null>;
   onProvidersChanged(): Promise<unknown>;
   onModelsRefresh(): Promise<unknown>;
   onRestartOnboarding(): Promise<unknown>;
@@ -193,6 +194,7 @@ type BaseProps = {
   t: T;
   onUpdate(value: Partial<AppSettings>): Promise<unknown>;
   onAddWorkspace(): Promise<Workspace | null>;
+  onAddWorkspaceDirectory(workspaceId: string): Promise<Workspace | null>;
   onProvidersChanged(): Promise<unknown>;
   onModelsRefresh(): Promise<unknown>;
   onRestartOnboarding(): Promise<unknown>;
@@ -390,7 +392,7 @@ function ModelSettings(props: BaseProps) {
 function FolderSettings(props: BaseProps) {
   const folders = props.workspaces.filter(({ kind }) => kind === "folder");
   return <SettingsSectionBlock title={props.t("workFolders")} detail={props.t("folderAccessDetail")} showTitle={false}>
-    <div className="folder-settings-list">{folders.map((workspace) => <div key={workspace.id}><Icon name="workspace" /><span><strong>{workspace.name}</strong><code>{workspace.rootPath}</code></span><Badge>{props.t("authorized")}</Badge></div>)}{folders.length === 0 ? <p>{props.t("noItems")}</p> : null}</div>
+    <div className="folder-settings-list">{folders.map((workspace) => <div key={workspace.id}><Icon name="workspace" /><span><strong>{workspace.name}</strong>{workspace.directories.map((directory) => <code key={directory}>{directory}</code>)}</span><Button variant="ghost" size="sm" onClick={() => void props.onAddWorkspaceDirectory(workspace.id)}><Icon name="folder-plus" size={14} />{props.t("addDirectory")}</Button><Badge>{workspace.directories.length}</Badge></div>)}{folders.length === 0 ? <p>{props.t("noItems")}</p> : null}</div>
     <Button variant="outline" onClick={() => void props.onAddWorkspace()}><Icon name="folder-plus" />{props.t("addWorkFolder")}</Button>
   </SettingsSectionBlock>;
 }

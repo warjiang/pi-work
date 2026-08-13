@@ -227,6 +227,17 @@ export function App() {
     }
   }
 
+  async function addWorkspaceDirectory(workspaceId: string): Promise<Workspace | null> {
+    try {
+      const workspace = await window.piWork.workspace.addDirectory(workspaceId);
+      if (workspace !== null) await refresh();
+      return workspace;
+    } catch (cause) {
+      setAppError(errorMessage(cause));
+      return null;
+    }
+  }
+
   async function updateSettings(value: Parameters<typeof window.piWork.settings.update>[0]) {
     const next = await window.piWork.settings.update(value);
     await queryClient.invalidateQueries({ queryKey: ["settings"] });
@@ -344,9 +355,13 @@ export function App() {
   const resourceWorkspaceId = scopeWorkspace?.kind === "folder" ? scopeWorkspace.id : null;
   const appSettings = settings.data;
   const onboardingOpen = !appSettings.onboardingSkipped;
+  const terminalWorkingDirectory = selectedSession?.workingDirectory
+    ?? selectedWorkspace?.rootPath
+    ?? scopeWorkspace?.rootPath;
   const consolePanel = consoleMounted ? (
     <PiConsolePanel
       commandRequest={consoleCommandRequest}
+      {...(terminalWorkingDirectory === undefined ? {} : { cwd: terminalWorkingDirectory })}
       open={consoleOpen}
       t={t}
       onClose={closeConsole}
@@ -374,6 +389,11 @@ export function App() {
           view={ui.view}
           buildInfo={buildInfo.data}
           sessions={scopedSessions}
+          personalSessions={(sessions.data ?? []).filter((session) => (
+            session.kind === "chat" && workspaceById.get(session.workspaceId)?.kind === "managed"
+          ))}
+          workspaces={workspaces.data ?? []}
+          workspaceScope={ui.workspaceScope}
           selectedTaskId={ui.selectedTaskId}
           attentionIds={attentionIds}
           isFolder={scopeWorkspace?.kind === "folder"}
@@ -381,6 +401,7 @@ export function App() {
           drawerOpen={ui.sidebarDrawerOpen}
           t={t}
           onView={showView}
+          onWorkspaceScope={ui.setWorkspaceScope}
           onOpenSettings={() => ui.openSettings()}
           onOpenTask={openSession}
           onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
@@ -471,6 +492,7 @@ export function App() {
           onClose={ui.closeSettings}
           onUpdate={updateSettings}
           onAddWorkspace={addWorkspace}
+          onAddWorkspaceDirectory={addWorkspaceDirectory}
           onProvidersChanged={async () => {
             await Promise.all([
               queryClient.invalidateQueries({ queryKey: ["providers"] }),

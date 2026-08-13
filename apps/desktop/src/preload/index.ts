@@ -4,6 +4,7 @@ const piWork = {
   workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),
     list: () => ipcRenderer.invoke("workspace:list"),
+    addDirectory: (workspaceId: string) => ipcRenderer.invoke("workspace:add-directory", { workspaceId }),
   },
   provider: {
     list: () => ipcRenderer.invoke("provider:list"),
@@ -25,12 +26,12 @@ const piWork = {
     chooseLocal: (kind: "file" | "directory") => ipcRenderer.invoke("extension:choose-local", kind),
   },
   piConsole: {
-    start: () => ipcRenderer.invoke("pi-console:start"),
+    start: (input: { cwd?: string } = {}) => ipcRenderer.invoke("pi-console:start", input),
     write: (data: string) => ipcRenderer.invoke("pi-console:write", data),
     resize: (dimensions: { cols: number; rows: number }) => ipcRenderer.invoke("pi-console:resize", dimensions),
     snapshot: () => ipcRenderer.invoke("pi-console:snapshot"),
     execute: (input: unknown) => ipcRenderer.invoke("pi-console:execute", input),
-    restart: () => ipcRenderer.invoke("pi-console:restart"),
+    restart: (input: { cwd?: string } = {}) => ipcRenderer.invoke("pi-console:restart", input),
     close: () => ipcRenderer.invoke("pi-console:close"),
     onEvent: (listener: (event: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, value: unknown) => listener(value);

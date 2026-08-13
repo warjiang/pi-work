@@ -11,11 +11,13 @@ type T = (key: MessageKey) => string;
 
 export function PiConsolePanel({
   commandRequest,
+  cwd,
   open,
   t,
   onClose,
 }: {
   commandRequest: { id: number; value: string } | null;
+  cwd?: string;
   open: boolean;
   t: T;
   onClose(): void;
@@ -104,7 +106,7 @@ export function PiConsolePanel({
         }
       });
       const dataDisposable = terminal.onData((data) => void window.piWork.piConsole.write(data));
-      void window.piWork.piConsole.start().then((result) => {
+      void window.piWork.piConsole.start(cwd === undefined ? {} : { cwd }).then((result) => {
         if (result.started) {
           setStatus("connected");
           if (result.reused && result.output) terminal.write(result.output);
@@ -187,7 +189,7 @@ export function PiConsolePanel({
               receivedProcessDataRef.current = false;
               setStatus("starting");
               setErrorMessage(null);
-              void window.piWork.piConsole.restart().then((result) => {
+              void window.piWork.piConsole.restart(cwd === undefined ? {} : { cwd }).then((result) => {
                 if (result.started) {
                   setStatus("connected");
                   requestAnimationFrame(() => terminalRef.current?.focus());

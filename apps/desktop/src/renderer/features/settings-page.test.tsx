@@ -70,6 +70,7 @@ describe("SettingsPage", () => {
         onClose={() => undefined}
         onUpdate={async () => undefined}
         onAddWorkspace={async () => null}
+        onAddWorkspaceDirectory={async () => null}
         onProvidersChanged={async () => undefined}
         onModelsRefresh={async () => undefined}
         onRestartOnboarding={async () => undefined}
@@ -108,6 +109,7 @@ describe("SettingsPage", () => {
           onClose={() => undefined}
           onUpdate={async () => undefined}
           onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
@@ -136,6 +138,7 @@ describe("SettingsPage", () => {
           onClose={() => undefined}
           onUpdate={async () => undefined}
           onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}

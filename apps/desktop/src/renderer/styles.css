@@ -573,6 +573,20 @@ kbd {
   overflow: hidden;
 }
 
+.workspace-list-section {
+  flex: 0 0 auto;
+}
+
+.personal-recent-section {
+  flex: 1 1 180px;
+  min-height: 96px;
+}
+
+.workspace-task-section {
+  flex: 1 1 140px;
+  min-height: 82px;
+}
+
 .recent-section > nav,
 .recent-task-list {
   min-height: 0;
@@ -1795,8 +1809,9 @@ kbd {
   margin-top: 2px;
 }
 
+.message.assistant > .thinking-block + .markdown-message,
 .message.assistant > .tool-status + .markdown-message {
-  margin-top: 14px;
+  margin-top: 20px;
 }
 
 .tool-status > summary {
@@ -2004,7 +2019,43 @@ kbd {
 
 .markdown-message ul,
 .markdown-message ol {
+  list-style-position: outside;
   padding-left: 22px;
+}
+
+.markdown-message ul {
+  list-style-type: disc;
+}
+
+.markdown-message ol {
+  list-style-type: decimal;
+}
+
+.markdown-message ul ul {
+  list-style-type: circle;
+}
+
+.markdown-message ul ul ul {
+  list-style-type: square;
+}
+
+.markdown-message ol ol {
+  list-style-type: lower-alpha;
+}
+
+.markdown-message ol ol ol {
+  list-style-type: lower-roman;
+}
+
+.markdown-message li > ul,
+.markdown-message li > ol {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+
+.markdown-message li::marker {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .markdown-message li + li {
@@ -5045,11 +5096,15 @@ textarea,
 }
 
 .markdown-message h1 {
-  font-size: 25px;
+  font-size: 20px;
 }
 
 .markdown-message h2 {
-  font-size: 21px;
+  font-size: 17px;
+}
+
+.markdown-message h3 {
+  font-size: 15px;
 }
 
 .markdown-message blockquote {
