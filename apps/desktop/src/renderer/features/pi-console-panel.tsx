@@ -75,7 +75,11 @@ export function PiConsolePanel({
         if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
         resizeFrame = window.requestAnimationFrame(() => {
           resizeFrame = null;
-          fit.fit();
+          const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
+          const dimensions = fit.proposeDimensions();
+          if (dimensions === undefined) return;
+          terminal.resize(dimensions.cols, Math.max(1, dimensions.rows - 1));
+          if (wasAtBottom) terminal.scrollToBottom();
           if (terminal.cols === lastSize.cols && terminal.rows === lastSize.rows) return;
           lastSize = { cols: terminal.cols, rows: terminal.rows };
           void window.piWork.piConsole.resize(lastSize);

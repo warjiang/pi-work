@@ -1,7 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { useGSAP } from "@gsap/react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { gsap } from "gsap";
 import type {
   Activity,
   AppSettings,
@@ -21,7 +23,6 @@ import type {
   Workspace,
 } from "@pi-work/protocol";
 import { MarkdownMessage } from "@/components/markdown-message.js";
-import { PiMark } from "@/components/pi-mark.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -77,6 +78,8 @@ import { Textarea } from "@/components/ui/textarea.js";
 import { thinkingLevelLabel } from "@/i18n.js";
 import type { MessageKey } from "@/i18n.js";
 import type { InspectorTab } from "@/store.js";
+
+gsap.registerPlugin(useGSAP);
 
 type T = (key: MessageKey) => string;
 type LiveThought = { segmentId: number; contentIndex: number; content: string; complete: boolean };
@@ -406,10 +409,6 @@ export function SessionEmptyState(props: { personal: boolean; t: T; onNewTask():
     return (
       <section className="session-empty-state session-empty-state-personal" aria-label="Pi Work">
         <div className="session-empty-personal-layout">
-          <header className="session-empty-brand-lockup">
-            <PiMark size="hero" />
-            <span>Pi Work</span>
-          </header>
           <div className="session-empty-brand-copy">
             <p className="session-empty-kicker">{props.t("personalWorkspace")}</p>
             <h1>{props.t("personalEmptyTitle")}</h1>
@@ -1414,35 +1413,60 @@ function HistoricalProcess({ activities, animateCollapse = false, t }: {
   const animateOnMount = useRef(animateCollapse).current;
   const hasActivities = ordered.length > 0;
   const [open, setOpen] = useState(animateOnMount);
-  const [collapsing, setCollapsing] = useState(false);
-  useEffect(() => {
-    if (!animateOnMount || !hasActivities) return;
-    const frame = window.requestAnimationFrame(() => setCollapsing(true));
-    const timer = window.setTimeout(() => {
-      setOpen(false);
-      setCollapsing(false);
-    }, 220);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
-    };
-  }, [animateOnMount, hasActivities]);
+  const groupRef = useRef<HTMLDetailsElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  useGSAP(() => {
+    const group = groupRef.current;
+    const content = contentRef.current;
+    if (!animateOnMount || !hasActivities || group === null || content === null) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const summary = group.querySelector(":scope > summary");
+    const timeline = gsap.timeline({
+      defaults: { overwrite: "auto" },
+      onComplete: () => {
+        setOpen(false);
+        gsap.set([group, content, summary], { clearProps: "all" });
+      },
+    });
+    timeline
+      .to(content, {
+        height: 0,
+        autoAlpha: 0,
+        y: -6,
+        duration: reduceMotion ? 0 : 0.26,
+        ease: "power3.inOut",
+      }, 0)
+      .to(group, {
+        marginBottom: 8,
+        duration: reduceMotion ? 0 : 0.26,
+        ease: "power3.inOut",
+      }, 0)
+      .fromTo(summary, {
+        scale: 0.985,
+      }, {
+        scale: 1,
+        transformOrigin: "left center",
+        duration: reduceMotion ? 0 : 0.2,
+        ease: "power2.out",
+      }, reduceMotion ? 0 : 0.12);
+  }, { scope: groupRef });
   if (!hasActivities) return null;
   const thoughts = ordered.filter(({ kind }) => kind === "thinking").length;
   const tools = ordered.length - thoughts;
   return (
     <details
-      className={`process-group${collapsing ? " is-collapsing" : ""}`}
+      ref={groupRef}
+      className="process-group"
       open={open}
       onToggle={(event) => {
-        if (!collapsing) setOpen(event.currentTarget.open);
+        setOpen(event.currentTarget.open);
       }}
     >
       <summary>
         <Icon name="chevron-down" size={14} className="process-group-chevron" />
         <span>{processSummary(tools, thoughts, t)}</span>
       </summary>
-      <div className="process-group-content">
+      <div ref={contentRef} className="process-group-content">
         <div className="process-group-content-inner">
           {ordered.map((activity) => (
             activity.kind === "thinking"
@@ -1463,8 +1487,64 @@ export function processSummary(tools: number, thoughts: number, t: T): string {
 }
 
 function AssistantResult({ content, t, streaming = false }: { content: string; t: T; streaming?: boolean }) {
+  const resultRef = useRef<HTMLElement>(null);
+  const revealedNodesRef = useRef(new WeakSet<Element>());
+  const mountedRef = useRef(false);
+  useGSAP(() => {
+    if (!streaming || resultRef.current === null) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const result = resultRef.current;
+    const header = result.querySelector(":scope > header");
+    const markdown = result.querySelector(":scope > .markdown-message");
+    const nodes = markdown === null ? [] : Array.from(markdown.children);
+    const freshNodes = nodes.filter((node) => !revealedNodesRef.current.has(node));
+    freshNodes.forEach((node) => revealedNodesRef.current.add(node));
+
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      const timeline = gsap.timeline({ defaults: { overwrite: "auto" } });
+      timeline.fromTo(result, {
+        autoAlpha: 0,
+        y: 8,
+      }, {
+        autoAlpha: 1,
+        y: 0,
+        duration: reduceMotion ? 0 : 0.24,
+        ease: "power3.out",
+      }, 0);
+      if (header !== null) {
+        timeline.fromTo(header, {
+          autoAlpha: 0,
+          x: -4,
+        }, {
+          autoAlpha: 1,
+          x: 0,
+          duration: reduceMotion ? 0 : 0.18,
+          ease: "power2.out",
+        }, reduceMotion ? 0 : 0.04);
+      }
+    }
+
+    if (freshNodes.length > 0) {
+      gsap.fromTo(freshNodes, {
+        autoAlpha: reduceMotion ? 1 : 0.35,
+        y: reduceMotion ? 0 : 5,
+      }, {
+        autoAlpha: 1,
+        y: 0,
+        duration: reduceMotion ? 0 : 0.2,
+        stagger: reduceMotion ? 0 : 0.025,
+        ease: "power2.out",
+        overwrite: "auto",
+        clearProps: "opacity,visibility,transform",
+      });
+    }
+  }, {
+    scope: resultRef,
+    dependencies: [content, streaming],
+  });
   return (
-    <section className={`assistant-result${streaming ? " is-streaming" : ""}`} aria-label={streaming ? t("responseStreaming") : t("result")}>
+    <section ref={resultRef} className={`assistant-result${streaming ? " is-streaming" : ""}`} aria-label={streaming ? t("responseStreaming") : t("result")}>
       {streaming ? (
         <header>
           <span className="assistant-result-icon" aria-hidden="true">
@@ -1500,32 +1580,137 @@ function ThoughtProcessCard({ activity, t, open = false, label }: {
 function LiveProcessView({ process, t }: { process: LiveProcess; t: T }) {
   return (
     <div className="live-process">
-      {process.timeline.map((item) => {
+      {process.timeline.map((item, index) => {
         if (item.kind === "thinking") {
           const thought = process.thoughts.find(({ segmentId }) => segmentId === item.segmentId);
           if (thought === undefined || thought.content.trim() === "") return null;
           return (
-            <ThoughtProcessCard
-              activity={{ id: String(thought.segmentId), detail: thought.content }}
-              key={`thinking-${thought.segmentId}`}
-              t={t}
-              open={!thought.complete}
-              label={thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}
-            />
+            <LiveProcessItem key={`thinking-${thought.segmentId}`} last={index === process.timeline.length - 1}>
+              <ThoughtProcessCard
+                activity={{ id: String(thought.segmentId), detail: thought.content }}
+                t={t}
+                open={!thought.complete}
+                label={thought.complete ? t("thoughtProcess") : t("thinkingInProgress")}
+              />
+            </LiveProcessItem>
           );
         }
         const tool = process.tools.find(({ toolCallId }) => toolCallId === item.toolCallId);
-        return tool === undefined ? null : <ToolProcessCard key={`tool-${tool.toolCallId}`} tool={tool} t={t} />;
+        return tool === undefined ? null : (
+          <LiveProcessItem key={`tool-${tool.toolCallId}`} last={index === process.timeline.length - 1}>
+            <ToolProcessCard animate tool={tool} t={t} />
+          </LiveProcessItem>
+        );
       })}
       {process.notice ? <div className="process-notice">{process.notice}</div> : null}
     </div>
   );
 }
 
-function ToolProcessCard({ tool, t }: { tool: LiveTool; t: T }) {
+function LiveProcessItem({ children, last }: { children: ReactNode; last: boolean }) {
+  const itemRef = useRef<HTMLDivElement>(null);
+  useGSAP(() => {
+    const item = itemRef.current;
+    if (item === null) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timeline = gsap.timeline({ defaults: { overwrite: "auto" } });
+    timeline
+      .fromTo(item, {
+        autoAlpha: reduceMotion ? 1 : 0,
+        y: reduceMotion ? 0 : -9,
+        clipPath: reduceMotion ? "inset(0 0 0 0)" : "inset(0 0 100% 0)",
+      }, {
+        autoAlpha: 1,
+        y: 0,
+        clipPath: "inset(0 0 0% 0)",
+        duration: reduceMotion ? 0 : 0.28,
+        ease: "power3.out",
+      }, 0)
+      .fromTo(item, {
+        "--process-line-scale": reduceMotion ? 1 : 0,
+      }, {
+        "--process-line-scale": 1,
+        duration: reduceMotion ? 0 : 0.32,
+        ease: "power2.out",
+      }, reduceMotion ? 0 : 0.08);
+  }, { scope: itemRef });
+  return <div ref={itemRef} className={`live-process-item${last ? " is-last" : ""}`}>{children}</div>;
+}
+
+function ToolProcessCard({ tool, t, animate = false }: { tool: LiveTool; t: T; animate?: boolean }) {
   const preview = toolPreview(tool.arguments);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const expandedRef = useRef<HTMLDivElement>(null);
+  const previousCompleteRef = useRef(tool.complete);
+  const collapsingRef = useRef(false);
+  const [open, setOpen] = useState(animate && !tool.complete);
+
+  useGSAP(() => {
+    const expanded = expandedRef.current;
+    if (!animate || tool.complete || expanded === null) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    gsap.fromTo(expanded, {
+      height: 0,
+      autoAlpha: reduceMotion ? 1 : 0,
+      y: reduceMotion ? 0 : -4,
+    }, {
+      height: "auto",
+      autoAlpha: 1,
+      y: 0,
+      duration: reduceMotion ? 0 : 0.24,
+      ease: "power3.out",
+      clearProps: "height,opacity,visibility,transform",
+    });
+  }, { scope: detailsRef });
+
+  useGSAP(() => {
+    const details = detailsRef.current;
+    const expanded = expandedRef.current;
+    const justCompleted = !previousCompleteRef.current && tool.complete;
+    previousCompleteRef.current = tool.complete;
+    if (!animate || !justCompleted || details === null || expanded === null) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const summary = details.querySelector(":scope > summary");
+    collapsingRef.current = true;
+    setOpen(true);
+    const timeline = gsap.timeline({
+      defaults: { overwrite: "auto" },
+      onComplete: () => {
+        setOpen(false);
+        collapsingRef.current = false;
+        gsap.set([expanded, summary], { clearProps: "all" });
+      },
+    });
+    timeline
+      .to(expanded, {
+        height: 0,
+        autoAlpha: 0,
+        y: -5,
+        duration: reduceMotion ? 0 : 0.24,
+        ease: "power3.inOut",
+      }, 0)
+      .fromTo(summary, {
+        scale: 0.985,
+      }, {
+        scale: 1,
+        transformOrigin: "left center",
+        duration: reduceMotion ? 0 : 0.18,
+        ease: "power2.out",
+      }, reduceMotion ? 0 : 0.12);
+  }, {
+    scope: detailsRef,
+    dependencies: [tool.complete],
+  });
+
   return (
-    <details className={`tool-status ${tool.complete ? "is-complete" : "is-running"}${tool.failed ? " is-failed" : ""}`}>
+    <details
+      ref={detailsRef}
+      className={`tool-status ${tool.complete ? "is-complete" : "is-running"}${tool.failed ? " is-failed" : ""}`}
+      open={open}
+      onToggle={(event) => {
+        if (!collapsingRef.current) setOpen(event.currentTarget.open);
+      }}
+    >
       <summary>
         <span className="tool-status-icon"><Icon name={toolIcon(tool.toolName)} size={14} /><Icon name="chevron-down" size={14} className="tool-status-chevron" /></span>
         <span className="tool-status-copy">
@@ -1539,7 +1724,7 @@ function ToolProcessCard({ tool, t }: { tool: LiveTool; t: T }) {
           {tool.detail ? <span className="tool-status-detail" title={tool.detail}>{tool.detail}</span> : null}
         </span>
       </summary>
-      <div className="tool-status-expanded">
+      <div ref={expandedRef} className="tool-status-expanded">
         <ToolProcessSection label={t("activityToolCall")} value={tool.arguments} />
         {tool.output !== undefined ? <ToolProcessSection label={t("activityToolResult")} value={tool.output} error={tool.failed} /> : null}
       </div>
