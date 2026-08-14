@@ -161,6 +161,9 @@ export class ManagedCliRuntime {
   readonly manifestPath: string;
   readonly npmCliPath: string;
   readonly npxCliPath: string;
+  readonly piAgentDirectory: string;
+  readonly piPackageDirectory: string;
+  readonly piCliPath: string;
   private readonly platform: NodeJS.Platform;
 
   constructor(private readonly options: ManagedCliRuntimeOptions) {
@@ -178,11 +181,28 @@ export class ManagedCliRuntime {
     this.manifestPath = join(this.rootDirectory, "manifest.json");
     this.npmCliPath = join(options.runtimeDirectory, "node_modules", "npm", "bin", "npm-cli.js");
     this.npxCliPath = join(options.runtimeDirectory, "node_modules", "npm", "bin", "npx-cli.js");
+    this.piAgentDirectory = join(options.userData, "pi-agent");
+    this.piPackageDirectory = join(
+      options.runtimeDirectory,
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+    );
+    this.piCliPath = join(
+      this.piPackageDirectory,
+      "dist",
+      "cli.js",
+    );
   }
 
   initialize(): void {
-    if (!existsSync(this.options.nodeExecutable) || !existsSync(this.npmCliPath) || !existsSync(this.npxCliPath)) {
-      throw new Error("Pi Work bundled Node/npm/npx runtime is unavailable.");
+    if (
+      !existsSync(this.options.nodeExecutable)
+      || !existsSync(this.npmCliPath)
+      || !existsSync(this.npxCliPath)
+      || !existsSync(this.piCliPath)
+    ) {
+      throw new Error("Pi Work bundled Node/npm/npx/Pi runtime is unavailable.");
     }
     for (const directory of [
       this.runtimeBinDirectory,
@@ -549,6 +569,19 @@ export class ManagedCliRuntime {
           "",
         ].join("\r\n"));
       }
+      writeFileSync(join(this.runtimeBinDirectory, "pi.cmd"), [
+        "@echo off",
+        "set \"PI_WORK_ORIGINAL_NODE_OPTIONS=%NODE_OPTIONS%\"",
+        `set "PI_WORK_NODE_CLEANUP=${cleanupPath}"`,
+        "set \"NODE_OPTIONS=--require \\\"%PI_WORK_NODE_CLEANUP%\\\" %NODE_OPTIONS%\"",
+        "set ELECTRON_RUN_AS_NODE=1",
+        "set \"PI_CODING_AGENT_SESSION_DIR=\"",
+        "set \"PI_CONFIG_DIR=\"",
+        `set "PI_CODING_AGENT_DIR=${this.piAgentDirectory}"`,
+        `set "PI_PACKAGE_DIR=${this.piPackageDirectory}"`,
+        `"${this.options.nodeExecutable}" "${this.piCliPath}" %*`,
+        "",
+      ].join("\r\n"));
       return;
     }
 
@@ -558,9 +591,21 @@ export class ManagedCliRuntime {
       "export NODE_OPTIONS=\"--require \\\"$PI_WORK_NODE_CLEANUP\\\"${NODE_OPTIONS:+ $NODE_OPTIONS}\"",
       "export ELECTRON_RUN_AS_NODE=1",
     ].join("\n");
+    const piEnvironment = [
+      nodeEnvironment,
+      "unset PI_CODING_AGENT_SESSION_DIR",
+      "unset PI_CONFIG_DIR",
+      `export PI_CODING_AGENT_DIR=${quotePosix(this.piAgentDirectory)}`,
+      `export PI_PACKAGE_DIR=${quotePosix(this.piPackageDirectory)}`,
+    ].join("\n");
     writeFileSync(
       join(this.runtimeBinDirectory, "node"),
       `#!/bin/sh\n${nodeEnvironment}\nexec ${quotePosix(this.options.nodeExecutable)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(this.runtimeBinDirectory, "pi"),
+      `#!/bin/sh\n${piEnvironment}\nexec ${quotePosix(this.options.nodeExecutable)} ${quotePosix(this.piCliPath)} "$@"\n`,
       { mode: 0o755 },
     );
     for (const [name, cli] of [["npm", this.npmCliPath], ["npx", this.npxCliPath]] as const) {
