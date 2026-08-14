@@ -3819,10 +3819,6 @@ details pre {
   gap: 14px;
 }
 
-.system-skills-panel > [role="alert"] {
-  margin-bottom: 0;
-}
-
 .system-skills-list {
   display: grid;
   gap: 4px;
@@ -4161,8 +4157,9 @@ details pre {
 }
 
 .settings-layout {
+  position: relative;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: var(--settings-nav-width, 220px) minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   flex: 1;
@@ -4191,6 +4188,44 @@ details pre {
 .settings-nav button.selected {
   background: var(--active);
   color: var(--text);
+}
+
+.settings-nav-resize-handle {
+  position: absolute;
+  z-index: 4;
+  top: 48px;
+  bottom: 0;
+  left: var(--settings-nav-width, 184px);
+  width: 9px;
+  margin-left: -5px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.settings-nav-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 2px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background: var(--ring);
+  content: "";
+  opacity: 0;
+  transform: translateY(-50%) scaleY(0.72);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.settings-nav-resize-handle:hover::after,
+.settings-nav-resize-handle:focus-visible::after {
+  opacity: 0.42;
+  transform: translateY(-50%) scaleY(1);
+}
+
+:root[data-sidebar-resizing="true"] .settings-nav-resize-handle::after {
+  opacity: 0.62;
+  transform: translateY(-50%) scaleY(1);
 }
 
 .settings-content {
@@ -4700,7 +4735,7 @@ details pre {
   }
 
   .settings-layout {
-    grid-template-columns: 190px minmax(0, 1fr);
+    grid-template-columns: var(--settings-nav-width, 190px) minmax(0, 1fr);
   }
 
   .settings-content {
@@ -4787,6 +4822,10 @@ details pre {
   .settings-layout {
     display: block;
     overflow-y: auto;
+  }
+
+  .settings-nav-resize-handle {
+    display: none;
   }
 
   .settings-nav {
@@ -9000,7 +9039,7 @@ h3,
  * settings chrome, owns the window.
  */
 .settings-shell {
-  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-columns: var(--settings-nav-width, 184px) minmax(0, 1fr);
   grid-template-rows: 48px minmax(0, 1fr) var(--console-panel-height, 0px);
 }
 
@@ -9158,7 +9197,7 @@ h3,
 
 @media (min-width: 1440px) {
   .settings-shell {
-    grid-template-columns: 184px minmax(0, 1fr);
+    grid-template-columns: var(--settings-nav-width, 184px) minmax(0, 1fr);
   }
 
   .settings-content-inner {
@@ -9170,7 +9209,7 @@ h3,
 
 @media (max-width: 960px) {
   .settings-shell {
-    grid-template-columns: 172px minmax(0, 1fr);
+    grid-template-columns: var(--settings-nav-width, 172px) minmax(0, 1fr);
   }
 
   .settings-content-inner {
@@ -9583,48 +9622,47 @@ h3,
   flex: 0 0 auto;
   min-height: 44px;
   align-items: center;
-  border-bottom: 1px solid var(--border);
-  padding: 5px 8px;
-}
-
-.skill-page-actions {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px 5px 12px;
 }
 
-.skill-view-tabs,
+.settings-skills-toolbar-detail {
+  max-width: 52ch;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-skills-toolbar > button {
+  height: 32px;
+  padding-inline: 12px;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.settings-skills-toolbar > button [class*="ui-icon"] {
+  width: 14px;
+  height: 14px;
+}
+
 .skill-editor-tabs [role="tablist"] {
   border-radius: 7px;
   background: color-mix(in srgb, var(--panel-muted) 78%, transparent);
   padding: 3px;
 }
 
-.skill-view-tabs [role="tab"],
 .skill-editor-tabs [role="tab"] {
-  height: 28px;
+  height: 26px;
   border-radius: 5px;
-  padding-inline: 11px;
+  padding-inline: 12px;
   font-size: 11px;
-}
-
-.skill-page-actions > button {
-  height: 28px;
-  padding-inline: 11px;
-  gap: 6px;
-  font-size: 11px;
-}
-
-.skill-page-actions > button [class*="ui-icon"] {
-  width: 14px;
-  height: 14px;
 }
 
 .skill-manager-page .library-layout {
-  grid-template-columns: clamp(216px, 23%, 270px) minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   border-top: 0;
@@ -9636,8 +9674,8 @@ h3,
   min-height: 0;
   overflow: hidden;
   border-right: 1px solid var(--border);
-  padding: 7px 6px;
-  background: color-mix(in srgb, var(--panel-muted) 68%, var(--panel));
+  padding: 6px;
+  background: color-mix(in srgb, var(--panel-muted) 72%, var(--panel));
 }
 
 .skill-manager-page .library-list {
@@ -9646,7 +9684,49 @@ h3,
 }
 
 .skill-manager-page .library-search {
+  position: relative;
+  display: block;
   margin: 0 0 7px;
+}
+
+.skill-manager-page .library-search > .ui-icon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  width: 15px;
+  height: 15px;
+  transform: translateY(-50%);
+  color: var(--faint);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.skill-manager-page .library-search input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding-left: 31px;
+  background: var(--panel);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.skill-manager-page .library-search input:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 12%, transparent);
+}
+
+.skill-manager-page .library-search input::placeholder {
+  color: var(--faint);
+}
+
+/* When no Skills are installed, collapse the list pane and let the
+   onboarding panel span the full width, matching the MCP empty state. */
+.skill-manager-page.skills-empty .library-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.skill-manager-page.skills-empty .library-list-pane {
+  display: none;
 }
 
 .skill-manager-page .skill-folder-heading {
@@ -9661,12 +9741,12 @@ h3,
 }
 
 .skill-manager-page .library-row {
-  grid-template-columns: 24px minmax(0, 1fr) 12px;
-  min-height: 41px;
+  grid-template-columns: 28px minmax(0, 1fr) 12px;
+  min-height: 48px;
   align-items: center;
   gap: 7px;
   border-radius: 6px;
-  padding: 4px 6px;
+  padding: 5px 6px;
   transition: background-color 150ms ease, color 150ms ease;
 }
 
@@ -9679,11 +9759,11 @@ h3,
 }
 
 .skill-manager-page .resource-symbol {
-  width: 23px;
-  height: 23px;
-  border: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--surface) 74%, transparent);
+  background: var(--panel-muted);
 }
 
 .skill-manager-page .library-row-copy {
@@ -9757,14 +9837,40 @@ h3,
   font-size: 12px;
 }
 
+/* Skills empty state reuses the shared .mcp-empty-state pattern for
+   cross-page consistency; only the detail-pane layout needs adjusting. */
+.skill-manager-page.skills-empty .resource-detail-pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.skills-onboarding-error {
+  width: 100%;
+  max-width: 46ch;
+  margin: 0 0 14px;
+  text-align: left;
+}
+
+.skill-manager-page .library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 28px 14px;
+  color: var(--faint);
+  text-align: center;
+}
+
 .skill-editor-header {
   display: flex;
-  min-height: 52px;
+  min-height: 48px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--border);
-  padding: 6px 12px 6px 14px;
+  padding: 7px 12px 7px 14px;
 }
 
 .skill-editor-header > div:first-child {
@@ -10087,11 +10193,6 @@ h3,
   white-space: pre;
 }
 
-.skill-marketplace-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
 .skill-marketplace-layout {
   display: grid;
   grid-template-columns: clamp(300px, 35%, 390px) minmax(0, 1fr);
@@ -10299,6 +10400,33 @@ h3,
 .remote-skill-preview > footer > span {
   color: var(--muted);
   font-size: 10px;
+}
+
+.skill-marketplace-dialog {
+  width: min(880px, calc(100vw - 40px));
+  max-width: none;
+}
+
+.skill-marketplace-dialog .skill-marketplace-layout {
+  height: min(520px, 66dvh);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.skill-marketplace-dialog .skill-marketplace-preview {
+  overflow-y: auto;
+}
+
+.skill-scan-dialog {
+  width: min(720px, calc(100vw - 40px));
+  max-width: none;
+}
+
+.skill-scan-dialog .system-skills-panel {
+  max-height: min(460px, 58dvh);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .skill-url-dialog {

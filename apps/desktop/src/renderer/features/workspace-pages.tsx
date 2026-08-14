@@ -721,11 +721,12 @@ function SourceEditor({ source, allowedTypes, t, onSaved, onDeleted }: { source:
 
 export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }) {
   const queryClient = useQueryClient();
-  const [view, setView] = useState<"installed" | "marketplace">("installed");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [urlInstallOpen, setUrlInstallOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const saveSelectedRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -733,11 +734,6 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
     saveSelectedRef.current = save;
   }, []);
   const query = useQuery({ queryKey: ["skills"], queryFn: () => window.piWork.skill.list() });
-  const systemSkills = useQuery({
-    queryKey: ["system-skills"],
-    queryFn: () => window.piWork.skill.scanSystem(),
-    enabled: false,
-  });
   const filtered = (query.data ?? []).filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   const selected = query.data?.find(({ id }) => id === selectedId) ?? null;
   useEffect(() => {
@@ -770,16 +766,6 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
     },
     onError: (cause: Error) => setError(cause.message),
   });
-  const importSystemSkill = useMutation({
-    mutationFn: (path: string) => window.piWork.skill.import(path),
-    onSuccess: async (skill) => {
-      setError(null);
-      await refresh();
-      await systemSkills.refetch();
-      setSelectedId(skill.id);
-    },
-    onError: (cause: Error) => setError(cause.message),
-  });
   const selectSkill = (id: string) => {
     if (dirty && id !== selectedId) {
       setPendingSelection(id);
@@ -787,30 +773,33 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
     }
     setSelectedId(id);
   };
-  const actions = <div className="skill-page-actions">
-    <Tabs value={view} onValueChange={(next) => setView(next as typeof view)}>
-      <TabsList className="skill-view-tabs">
-        <TabsTrigger value="installed">{t("installedSkills")}</TabsTrigger>
-        <TabsTrigger value="marketplace">{t("skillMarketplace")}</TabsTrigger>
-      </TabsList>
-    </Tabs>
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button><Icon name="plus" />{t("installSkill")}<Icon name="chevron-down" /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => setUrlInstallOpen(true)}><Icon name="browser" />{t("installFromUrl")}</DropdownMenuItem>
-        <DropdownMenuItem disabled={importSkill.isPending} onSelect={() => importSkill.mutate()}><Icon name="folder-plus" />{t("installFromFolder")}</DropdownMenuItem>
-        <DropdownMenuItem disabled={systemSkills.isFetching} onSelect={() => { setView("installed"); setSelectedId(null); void systemSkills.refetch(); }}><Icon name="search" />{t("scanSystemSkills")}</DropdownMenuItem>
-        <DropdownMenuItem disabled={create.isPending} onSelect={() => create.mutate()}><Icon name="square-pen" />{t("createBlankSkill")}</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+  const onDialogInstalled = async (skills: Skill[]) => {
+    setError(null);
+    await refresh();
+    if (skills[0]) setSelectedId(skills[0].id);
+  };
+  const installMenu = <DropdownMenu>
+    <DropdownMenuTrigger asChild><Button><Icon name="plus" />{t("installSkill")}<Icon name="chevron-down" /></Button></DropdownMenuTrigger>
+    <DropdownMenuContent align="end">
+      <DropdownMenuItem onSelect={() => setMarketplaceOpen(true)}><Icon name="skills" />{t("browseMarketplace")}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => setUrlInstallOpen(true)}><Icon name="browser" />{t("installFromUrl")}</DropdownMenuItem>
+      <DropdownMenuItem disabled={importSkill.isPending} onSelect={() => importSkill.mutate()}><Icon name="folder-plus" />{t("installFromFolder")}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => setScanOpen(true)}><Icon name="search" />{t("scanSystemSkills")}</DropdownMenuItem>
+      <DropdownMenuItem disabled={create.isPending} onSelect={() => create.mutate()}><Icon name="square-pen" />{t("createBlankSkill")}</DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>;
+  const toolbar = <div className="settings-skills-toolbar">
+    <span className="settings-skills-toolbar-detail">{t("skillRuntimeDetail")}</span>
+    {installMenu}
+    {error ? <div className="settings-mcp-error"><Icon name="alert" /><span>{error}</span></div> : null}
   </div>;
   return (
     <>
-      {view === "installed" ? <LibraryLayout
+      <LibraryLayout
         title={t("skills")}
-        className={embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}
+        className={`${embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}${(query.data?.length ?? 0) === 0 ? " skills-empty" : ""}`}
         showHeader={!embedded}
-        toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : undefined}
+        toolbar={toolbar}
         t={t}
         detail={t("skillRuntimeDetail")}
         icon="skills"
@@ -820,7 +809,6 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
         loading={query.isLoading}
         empty={t("noInstalledSkills")}
         addLabel={t("installSkill")}
-        action={actions}
         filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchInstalledSkills")} /></label>}
         listHeader={<div className="skill-folder-heading"><span>{t("installedSkills")}</span><small>{query.data?.length ?? 0}</small></div>}
         onSelect={selectSkill}
@@ -832,22 +820,24 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
           registerSave={registerSelectedSave}
           onSaved={refresh}
           onDeleted={async () => { setSelectedId(null); await refresh(); }}
-        /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
-      /> : <SkillMarketplace
-        className={embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}
+        /> : <SkillsOnboarding t={t} error={error} installMenu={installMenu} />}
+      />
+      <SkillMarketplaceDialog
+        open={marketplaceOpen}
+        onOpenChange={setMarketplaceOpen}
         installed={query.data ?? []}
-        toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : actions}
         t={t}
-        onInstalled={async (skills) => {
-          await refresh();
-          setSelectedId(skills[0]?.id ?? null);
-          setView("installed");
-        }}
-      />}
+        onInstalled={async (skills) => { await onDialogInstalled(skills); setMarketplaceOpen(false); }}
+      />
+      <SystemScanDialog
+        open={scanOpen}
+        onOpenChange={setScanOpen}
+        t={t}
+        onImported={async (skill) => { await onDialogInstalled([skill]); }}
+      />
       <RemoteSkillDialog open={urlInstallOpen} t={t} onOpenChange={setUrlInstallOpen} onInstalled={async (skills) => {
-        await refresh();
-        setSelectedId(skills[0]?.id ?? null);
-        setView("installed");
+        await onDialogInstalled(skills);
+        setUrlInstallOpen(false);
       }} />
       <AlertDialog open={pendingSelection !== null} onOpenChange={(open) => { if (!open) setPendingSelection(null); }}>
         <AlertDialogContent>
@@ -868,10 +858,10 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
   );
 }
 
-function SkillMarketplace(props: {
-  className: string;
+function SkillMarketplaceDialog(props: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
   installed: Skill[];
-  toolbar: ReactNode;
   t: T;
   onInstalled(skills: Skill[]): Promise<void>;
 }) {
@@ -891,7 +881,7 @@ function SkillMarketplace(props: {
   const results = useQuery({
     queryKey: ["skill-marketplace", debounced],
     queryFn: () => window.piWork.skill.searchMarketplace({ provider: "skills.sh", query: debounced, limit: 30 }),
-    enabled: debounced.length >= 2,
+    enabled: props.open && debounced.length >= 2,
   });
   const resolve = useMutation({
     mutationFn: (skill: MarketplaceSkill) => window.piWork.skill.previewRemote({
@@ -915,34 +905,48 @@ function SkillMarketplace(props: {
     onError: (cause: Error) => setError(cause.message),
   });
   const installedNames = new Set(props.installed.map(({ name }) => name));
-  return <section className={`page ${props.className} skill-marketplace-page`}>
-    {props.toolbar}
-    <div className="skill-marketplace-layout">
-      <section className="skill-marketplace-results">
-        <label className="library-search skill-marketplace-search"><Icon name="search" /><Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={props.t("searchSkillMarketplace")} /></label>
-        <div className="skill-marketplace-list">
-          {query.trim().length < 2 ? <div className="skill-marketplace-empty"><Icon name="search" /><strong>{props.t("findSkills")}</strong><p>{props.t("findSkillsDetail")}</p></div> : null}
-          {results.isFetching ? <div className="page-loading"><span /><span /><span /></div> : null}
-          {results.error instanceof Error ? <Alert className="form-error"><AlertDescription>{results.error.message}</AlertDescription></Alert> : null}
-          {results.data?.map((skill) => {
-            const isInstalled = skill.installed || installedNames.has(skill.skillId);
-            return <Button key={skill.id} variant="ghost" className={selected?.id === skill.id ? "skill-marketplace-row selected" : "skill-marketplace-row"} onClick={() => resolve.mutate(skill)}>
-              <span className="resource-symbol"><Icon name="skills" /></span>
-              <span><strong>{skill.name}</strong><small>{skill.source}</small><small>{formatInstallCount(skill.installs)} {props.t("installs")}</small></span>
-              {isInstalled ? <Badge>{props.t("installed")}</Badge> : <Icon name="forward" size={14} />}
-            </Button>;
-          })}
-          {results.data?.length === 0 ? <p className="library-empty">{props.t("noMarketplaceResults")}</p> : null}
-        </div>
-      </section>
-      <aside className="skill-marketplace-preview">
-        {resolve.isPending ? <div className="page-loading"><span /><span /><span /></div> : null}
-        {!resolve.isPending && preview === null && error === null ? <div className="resource-detail-empty"><Icon name="skills" /><p>{props.t("selectMarketplaceSkill")}</p></div> : null}
-        {error ? <div className="skill-preview-error"><Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert>{selected ? <Button variant="outline" onClick={() => resolve.mutate(selected)}><Icon name="refresh" />{props.t("retry")}</Button> : null}</div> : null}
-        {preview ? <RemoteSkillPreviewPanel preview={preview} selected={selectedSkills} installing={install.isPending} t={props.t} onSelected={setSelectedSkills} onInstall={() => install.mutate()} /> : null}
-      </aside>
-    </div>
-  </section>;
+  const setOpen = (open: boolean) => {
+    if (!open) {
+      if (preview !== null) discardRemotePreview(preview.previewId);
+      setPreview(null);
+      setSelected(null);
+      setSelectedSkills([]);
+      setQuery("");
+      setDebounced("");
+      setError(null);
+    }
+    props.onOpenChange(open);
+  };
+  return <Dialog open={props.open} onOpenChange={setOpen}>
+    <DialogContent className="skill-marketplace-dialog">
+      <DialogHeader><DialogTitle>{props.t("skillMarketplace")}</DialogTitle><DialogDescription>{props.t("skillMarketplaceDialogDetail")}</DialogDescription></DialogHeader>
+      <div className="skill-marketplace-layout">
+        <section className="skill-marketplace-results">
+          <label className="library-search skill-marketplace-search"><Icon name="search" /><Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={props.t("searchSkillMarketplace")} /></label>
+          <div className="skill-marketplace-list">
+            {query.trim().length < 2 ? <div className="skill-marketplace-empty"><Icon name="search" /><strong>{props.t("findSkills")}</strong><p>{props.t("findSkillsDetail")}</p></div> : null}
+            {results.isFetching ? <div className="page-loading"><span /><span /><span /></div> : null}
+            {results.error instanceof Error ? <Alert className="form-error"><AlertDescription>{results.error.message}</AlertDescription></Alert> : null}
+            {results.data?.map((skill) => {
+              const isInstalled = skill.installed || installedNames.has(skill.skillId);
+              return <Button key={skill.id} variant="ghost" className={selected?.id === skill.id ? "skill-marketplace-row selected" : "skill-marketplace-row"} onClick={() => resolve.mutate(skill)}>
+                <span className="resource-symbol"><Icon name="skills" /></span>
+                <span><strong>{skill.name}</strong><small>{skill.source}</small><small>{formatInstallCount(skill.installs)} {props.t("installs")}</small></span>
+                {isInstalled ? <Badge>{props.t("installed")}</Badge> : <Icon name="forward" size={14} />}
+              </Button>;
+            })}
+            {results.data?.length === 0 ? <p className="library-empty">{props.t("noMarketplaceResults")}</p> : null}
+          </div>
+        </section>
+        <aside className="skill-marketplace-preview">
+          {resolve.isPending ? <div className="page-loading"><span /><span /><span /></div> : null}
+          {!resolve.isPending && preview === null && error === null ? <div className="resource-detail-empty"><Icon name="skills" /><p>{props.t("selectMarketplaceSkill")}</p></div> : null}
+          {error ? <div className="skill-preview-error"><Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert>{selected ? <Button variant="outline" onClick={() => resolve.mutate(selected)}><Icon name="refresh" />{props.t("retry")}</Button> : null}</div> : null}
+          {preview ? <RemoteSkillPreviewPanel preview={preview} selected={selectedSkills} installing={install.isPending} t={props.t} onSelected={setSelectedSkills} onInstall={() => install.mutate()} /> : null}
+        </aside>
+      </div>
+    </DialogContent>
+  </Dialog>;
 }
 
 function RemoteSkillDialog(props: { open: boolean; t: T; onOpenChange(open: boolean): void; onInstalled(skills: Skill[]): Promise<void> }) {
@@ -1028,6 +1032,54 @@ function RemoteSkillPreviewPanel(props: {
   </div>;
 }
 
+function SkillsOnboarding(props: { t: T; error: string | null; installMenu: ReactNode }) {
+  const t = props.t;
+  return <div className="mcp-empty-state">
+    <span className="mcp-empty-icon"><Icon name="skills" /></span>
+    <h2>{t("getStartedWithSkills")}</h2>
+    <p>{t("getStartedWithSkillsDetail")}</p>
+    {props.error ? <Alert className="form-error skills-onboarding-error"><AlertDescription>{props.error}</AlertDescription></Alert> : null}
+    {props.installMenu}
+  </div>;
+}
+
+function SystemScanDialog(props: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  t: T;
+  onImported(skill: Skill): Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const scan = useQuery({
+    queryKey: ["system-skills"],
+    queryFn: () => window.piWork.skill.scanSystem(),
+    enabled: props.open,
+  });
+  const importSkill = useMutation({
+    mutationFn: (path: string) => window.piWork.skill.import(path),
+    onSuccess: async (skill) => {
+      setError(null);
+      await props.onImported(skill);
+      await scan.refetch();
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  return <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <DialogContent className="skill-scan-dialog">
+      <DialogHeader><DialogTitle>{props.t("scanSystemSkillsTitle")}</DialogTitle><DialogDescription>{props.t("scanSystemSkillsDetail")}</DialogDescription></DialogHeader>
+      <SystemSkillsPanel
+        skills={scan.data}
+        loading={scan.isFetching}
+        error={error ?? (scan.error instanceof Error ? scan.error.message : null)}
+        importingPath={importSkill.variables ?? null}
+        t={props.t}
+        onImport={(path) => importSkill.mutate(path)}
+      />
+      <DialogFooter><Button variant="ghost" onClick={() => props.onOpenChange(false)}>{props.t("close")}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
 function SystemSkillsPanel(props: {
   skills: SystemSkill[] | undefined;
   loading: boolean;
@@ -1037,11 +1089,9 @@ function SystemSkillsPanel(props: {
   onImport(path: string): void;
 }) {
   if (props.error) return <Alert className="form-error"><AlertDescription>{props.error}</AlertDescription></Alert>;
-  if (props.skills === undefined) return <div className="resource-detail-empty"><Icon name="search" /><p>{props.t("scanSystemSkillsDetail")}</p></div>;
-  if (props.loading) return <div className="page-loading"><span /><span /><span /></div>;
+  if (props.loading || props.skills === undefined) return <div className="page-loading"><span /><span /><span /></div>;
   if (props.skills.length === 0) return <div className="resource-detail-empty"><Icon name="skills" /><p>{props.t("noSystemSkills")}</p></div>;
-  return <div className="resource-editor-body system-skills-panel">
-    <Alert className="runtime-boundary"><AlertDescription>{props.t("scanSystemSkillsDetail")}</AlertDescription></Alert>
+  return <div className="system-skills-panel">
     <div className="system-skills-list">
       {props.skills.map((skill) => <div className="system-skill-row" key={skill.path}>
         <span className="resource-symbol"><Icon name="skills" /></span>

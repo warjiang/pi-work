@@ -462,11 +462,68 @@ function parseSkillFile(content: string): ParsedSkillFile {
   if (rawFrontmatter === undefined || instructions === undefined) {
     throw new Error("SKILL.md frontmatter could not be parsed.");
   }
-  const frontmatter = rawFrontmatter.split(/\r?\n/);
-  const name = frontmatter.find((line) => line.startsWith("name:"))?.slice("name:".length).trim() ?? "";
-  const description = frontmatter.find((line) => line.startsWith("description:"))?.slice("description:".length).trim() ?? "";
+  const lines = rawFrontmatter.split(/\r?\n/);
+  const nameField = extractFrontmatterField(lines, "name");
+  const descriptionField = extractFrontmatterField(lines, "description");
+  const name = nameField.value;
+  const description = descriptionField.value;
   if (name === "" || description === "") throw new Error("SKILL.md frontmatter requires name and description.");
+  const consumed = new Set<number>([...nameField.consumed, ...descriptionField.consumed]);
+  const frontmatter = lines.filter((_, index) => !consumed.has(index));
   return { name: unquote(name), description: unquote(description), instructions, frontmatter };
+}
+
+function extractFrontmatterField(lines: string[], key: string): { value: string; consumed: Set<number> } {
+  const consumed = new Set<number>();
+  const prefix = `${key}:`;
+  const index = lines.findIndex((line) => line.startsWith(prefix));
+  if (index === -1) return { value: "", consumed };
+  const header = lines[index] ?? "";
+  consumed.add(index);
+  const inline = header.slice(prefix.length).trim();
+  const blockMatch = inline.match(/^([|>])[+-]?\d*\s*$/);
+  if (blockMatch === null) {
+    return { value: inline, consumed };
+  }
+  const folded = blockMatch[1] === ">";
+  const keyIndent = (header.match(/^\s*/)?.[0].length) ?? 0;
+  const collected: string[] = [];
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const line = lines[cursor] ?? "";
+    if (line.trim() === "") {
+      collected.push("");
+      consumed.add(cursor);
+      continue;
+    }
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+    if (indent <= keyIndent) break;
+    collected.push(line);
+    consumed.add(cursor);
+  }
+  while (collected.length > 0 && collected[collected.length - 1] === "") collected.pop();
+  const contentIndent = collected
+    .filter((line) => line !== "")
+    .reduce((min, line) => Math.min(min, line.match(/^\s*/)?.[0].length ?? 0), Number.POSITIVE_INFINITY);
+  const dedent = Number.isFinite(contentIndent) ? contentIndent : 0;
+  const dedented = collected.map((line) => (line === "" ? "" : line.slice(dedent)));
+  let value: string;
+  if (folded) {
+    const paragraphs: string[] = [];
+    let buffer: string[] = [];
+    for (const line of dedented) {
+      if (line === "") {
+        paragraphs.push(buffer.join(" "));
+        buffer = [];
+      } else {
+        buffer.push(line);
+      }
+    }
+    paragraphs.push(buffer.join(" "));
+    value = paragraphs.join("\n");
+  } else {
+    value = dedented.join("\n");
+  }
+  return { value: value.trim(), consumed };
 }
 
 function serializeSkillFile(skill: Skill, previous: string[]): string {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useGSAP } from "@gsap/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gsap } from "gsap";
@@ -51,6 +51,14 @@ import {
 import { PiMark } from "@/components/pi-mark.js";
 import type { MessageKey } from "@/i18n.js";
 import type { SettingsSection } from "@/store.js";
+import {
+  clampSettingsNavWidth,
+  defaultSettingsNavWidth,
+  maximumSettingsNavWidth,
+  minimumSettingsNavWidth,
+  parseSettingsNavWidth,
+  settingsNavWidthStorageKey,
+} from "@/settings-nav-layout.js";
 import { BrowserPage } from "./browser-page.js";
 import { McpSettingsPage, SkillsPage } from "./workspace-pages.js";
 import {
@@ -122,8 +130,32 @@ export function SettingsPage(props: {
   const consoleOpen = props.consoleOpen ?? false;
   const activeSection = props.section === "appearance" || props.section === "shortcuts" ? "general" : props.section;
   const sectionTitle = props.t(activeSection);
+  const [navWidth, setNavWidth] = useState(() => {
+    if (typeof window === "undefined") return defaultSettingsNavWidth;
+    return parseSettingsNavWidth(window.localStorage.getItem(settingsNavWidthStorageKey));
+  });
+  const navResizeState = useRef<{ pointerId: number; startX: number; startWidth: number; latestWidth: number } | null>(null);
+  const [navResizing, setNavResizing] = useState(false);
+  const applyNavWidth = (width: number, commit: boolean): void => {
+    const clamped = clampSettingsNavWidth(width);
+    setNavWidth(clamped);
+    if (commit && typeof window !== "undefined") {
+      window.localStorage.setItem(settingsNavWidthStorageKey, String(clamped));
+    }
+  };
+  const finishNavResize = (pointerId: number): void => {
+    const state = navResizeState.current;
+    if (state === null || state.pointerId !== pointerId) return;
+    navResizeState.current = null;
+    setNavResizing(false);
+    applyNavWidth(state.latestWidth, true);
+  };
+  useEffect(() => {
+    document.documentElement.dataset.sidebarResizing = String(navResizing);
+    return () => { delete document.documentElement.dataset.sidebarResizing; };
+  }, [navResizing]);
   return (
-    <section className={`settings-shell${consoleOpen ? " pi-console-open" : ""}`} aria-label={props.t("settings")}>
+    <section className={`settings-shell${consoleOpen ? " pi-console-open" : ""}`} aria-label={props.t("settings")} style={{ "--settings-nav-width": `${navWidth}px` } as CSSProperties}>
       <header className="settings-titlebar">
         <Button variant="ghost" className="settings-back" onClick={props.onClose}>
           <Icon name="back" />
@@ -163,6 +195,43 @@ export function SettingsPage(props: {
             </section>
           ))}
         </nav>
+        <div
+          className="settings-nav-resize-handle"
+          role="separator"
+          aria-label={props.t("resizeSidebar")}
+          aria-orientation="vertical"
+          aria-valuemin={minimumSettingsNavWidth}
+          aria-valuemax={maximumSettingsNavWidth}
+          aria-valuenow={navWidth}
+          tabIndex={0}
+          onDoubleClick={() => applyNavWidth(defaultSettingsNavWidth, true)}
+          onKeyDown={(event) => {
+            let nextWidth = navWidth;
+            if (event.key === "ArrowLeft") nextWidth -= 16;
+            else if (event.key === "ArrowRight") nextWidth += 16;
+            else if (event.key === "Home") nextWidth = minimumSettingsNavWidth;
+            else if (event.key === "End") nextWidth = maximumSettingsNavWidth;
+            else return;
+            event.preventDefault();
+            applyNavWidth(nextWidth, true);
+          }}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            navResizeState.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: navWidth, latestWidth: navWidth };
+            setNavResizing(true);
+          }}
+          onPointerMove={(event) => {
+            const state = navResizeState.current;
+            if (state === null || state.pointerId !== event.pointerId) return;
+            const width = clampSettingsNavWidth(state.startWidth + event.clientX - state.startX);
+            state.latestWidth = width;
+            applyNavWidth(width, false);
+          }}
+          onPointerUp={(event) => finishNavResize(event.pointerId)}
+          onPointerCancel={(event) => finishNavResize(event.pointerId)}
+          onLostPointerCapture={(event) => finishNavResize(event.pointerId)}
+        />
         <main className={`settings-content ${props.section === "browser" ? "browser-settings-content" : ""}`}>
           {props.section === "browser" ? (
             <div className="settings-content-inner settings-content-inner--browser">
@@ -911,7 +980,7 @@ function ExtensionSettings({
                 <Button variant="ghost" className="extension-uninstall" size="sm" disabled={remove.isPending} onClick={() => requestRemove(extension.source)}>{removing ? <Spinner /> : <Icon name="trash" size={14} />}{removing ? t("uninstallingExtension") : t("removeExtension")}</Button>
               </div>;
             })}
-            {query.data?.length === 0 ? <div className="extension-store-empty"><Icon name="skills" /><strong>{t("noInstalledExtensions")}</strong><p>{t("noInstalledExtensionsDetail")}</p><Button variant="outline" size="sm" onClick={() => setView("explore")}>{t("exploreExtensions")}</Button></div> : null}
+            {query.data?.length === 0 ? <div className="extension-store-empty"><Icon name="extensions" /><strong>{t("noInstalledExtensions")}</strong><p>{t("noInstalledExtensionsDetail")}</p><Button variant="outline" size="sm" onClick={() => setView("explore")}>{t("exploreExtensions")}</Button></div> : null}
           </div>
         )}
         {!manualInstallOpen && error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
