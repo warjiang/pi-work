@@ -23,6 +23,7 @@ import type {
   Workspace,
 } from "@pi-work/protocol";
 import { MarkdownMessage } from "@/components/markdown-message.js";
+import { knownPlatformLinks, PlatformLinkCard } from "@/components/platform-link.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -467,6 +468,8 @@ export function TaskWorkbench(props: {
   const [liveProcess, setLiveProcess] = useState<LiveProcess>({ thoughts: [], tools: [], timeline: [], notice: null });
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(props.session.title);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [promotionOpen, setPromotionOpen] = useState(false);
@@ -770,6 +773,7 @@ export function TaskWorkbench(props: {
     ? `${props.t("toolRequest")}: ${approvals.map(({ tool }) => tool).join(", ")}`
     : props.session.status === "awaiting_plan_approval" ? props.t("planApprovalNeeded") : "";
   const retryContent = input.trim() || [...(messages.data ?? [])].reverse().find(({ role }) => role === "user")?.content.trim() || "";
+  const detectedPlatformLinks = useMemo(() => knownPlatformLinks(input), [input]);
   const canPromote = personal && !props.session.running && approvals.length === 0 && props.folders.length > 0;
   useEffect(() => {
     setTopbarActionsTarget(document.getElementById("topbar-task-actions"));
@@ -783,6 +787,11 @@ export function TaskWorkbench(props: {
         <DropdownMenuContent align="end">
           {personal ? <DropdownMenuItem disabled={!canPromote} onSelect={() => setPromotionOpen(true)}><Icon name="workspace" />{props.t("moveToWorkFolder")}</DropdownMenuItem> : null}
           {personal ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem onSelect={() => {
+            setTitleDraft(props.session.title);
+            setRenameOpen(true);
+          }}><Icon name="rename" />{props.t("rename")}</DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => updateSession.mutate({ archived: !props.session.archived })}><Icon name={props.session.archived ? "archive-restore" : "archive"} />{props.session.archived ? props.t("restore") : props.t("archive")}</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setDeleteOpen(true)}><Icon name="trash" />{props.t("delete")}</DropdownMenuItem>
@@ -875,7 +884,7 @@ export function TaskWorkbench(props: {
                 />
               )}
               {pendingPrompt !== null ? (
-                <article className="message user pending"><div>{pendingPrompt}</div></article>
+                <article className="message user pending"><UserMessageContent content={pendingPrompt} /></article>
               ) : null}
               {!liveResponsePersisted && hasLiveActivity ? (
                 <article className="message assistant"><LiveProcessView collapse={streamed !== ""} process={liveProcess} t={props.t} />{streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}</article>
@@ -948,6 +957,9 @@ export function TaskWorkbench(props: {
               event.currentTarget.form?.requestSubmit();
             }
           }} placeholder={props.t("messagePlaceholder")} rows={2} />
+          {detectedPlatformLinks.length > 0 ? <div className="composer-platform-links" aria-label="Recognized platform links">
+            {detectedPlatformLinks.map((link) => <PlatformLinkCard key={link.url} link={link} appearance="composer" />)}
+          </div> : null}
           <div className="composer-toolbar">
             <div className="composer-toolbar-start">
               <Button variant="ghost" size="icon" className="composer-attachment-trigger" type="button" aria-label={props.t("addAttachment")} onClick={() => void window.piWork.attachment.choose().then((selected) => setAttachments((current) => mergeAttachments(current, selected))).catch((cause: Error) => setError(cause.message))}><Icon name="paperclip" /></Button>
@@ -1039,6 +1051,29 @@ export function TaskWorkbench(props: {
           else complete.mutate();
         }}
       /> : null}
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogTitle>{props.t("rename")}</DialogTitle>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            const title = titleDraft.trim();
+            if (title === "") return;
+            updateSession.mutate({ title }, { onSuccess: () => setRenameOpen(false) });
+          }}>
+            <Input
+              autoFocus
+              aria-label={props.t("rename")}
+              value={titleDraft}
+              maxLength={160}
+              onChange={(event) => setTitleDraft(event.target.value)}
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setRenameOpen(false)}>{props.t("cancel")}</Button>
+              <Button type="submit" disabled={updateSession.isPending || titleDraft.trim() === ""}>{props.t("save")}</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent className="delete-session-dialog">
           <AlertDialogHeader className="delete-session-header">
@@ -1239,18 +1274,38 @@ function MessageList({ messages, activities, attachments, collapsingProcessMessa
       {messages.map((message) => {
         const startsTurn = message.role === "user";
         const visibleContent = visibleMessageContent(message.content);
+        const platformLinks = message.role === "user" ? knownPlatformLinks(visibleContent) : [];
         return (
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
-            <article className={`message ${message.role}`}>
+            <article className={`message ${message.role}${platformLinks.length > 0 ? " has-platform-links" : ""}`}>
               {message.role === "assistant"
                 ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} animateCollapse={message.id === collapsingProcessMessageId} t={t} />{visibleContent !== "" ? <AssistantResult content={visibleContent} t={t} /> : null}</>
-                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <div className="message-user-content">{visibleContent}</div> : null}</>}
+                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <UserMessageContent content={visibleContent} links={platformLinks} /> : null}</>}
             </article>
           </div>
         );
       })}
     </div>
   );
+}
+
+function UserMessageContent({ content, links = knownPlatformLinks(content) }: { content: string; links?: ReturnType<typeof knownPlatformLinks> }) {
+  if (links.length === 0) return <div className="message-user-content">{content}</div>;
+  const parts: Array<{ type: "text"; value: string } | { type: "link"; value: ReturnType<typeof knownPlatformLinks>[number] }> = [];
+  let cursor = 0;
+  for (const link of links) {
+    const index = content.indexOf(link.url, cursor);
+    if (index === -1) continue;
+    if (index > cursor) parts.push({ type: "text", value: content.slice(cursor, index) });
+    parts.push({ type: "link", value: link });
+    cursor = index + link.url.length;
+  }
+  if (cursor < content.length) parts.push({ type: "text", value: content.slice(cursor) });
+  return <div className="message-user-content has-platform-links">
+    {parts.map((part, index) => part.type === "link"
+      ? <PlatformLinkCard key={`${part.value.url}-${index}`} link={part.value} appearance="message" />
+      : part.value.trim() !== "" ? <span className="message-user-text" key={index}>{part.value}</span> : null)}
+  </div>;
 }
 
 function TurnNavigator(props: {

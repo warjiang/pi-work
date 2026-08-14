@@ -89,6 +89,7 @@ describe("command settings", () => {
       "workFolders",
       "permissions",
       "skills",
+      "mcp",
       "extensions",
       "browser",
       "about",

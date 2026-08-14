@@ -143,6 +143,10 @@ function isFolderDomain(domain: DomainName): domain is FolderDomainName {
   return domain === "status" || domain === "label" || domain === "source" || domain === "automation";
 }
 
+function isMcpSource(entity: DomainValue): entity is Source {
+  return "type" in entity && (entity.type === "mcp_stdio" || entity.type === "mcp_http");
+}
+
 export class PiWorkStore {
   private readonly sqlite: Database.Database;
   private readonly db;
@@ -432,7 +436,7 @@ export class PiWorkStore {
       updatedAt: now,
       ...(value as Record<string, unknown>),
     });
-    if (isFolderDomain(domain)) {
+    if (isFolderDomain(domain) && !(domain === "source" && isMcpSource(entity) && entity.workspaceId === null)) {
       const workspaceId = this.workspaceIdOf(entity);
       this.requireFolderWorkspace(workspaceId);
       if (domain === "automation") this.validateAutomationReferences(entity as Automation, workspaceId);
@@ -453,7 +457,7 @@ export class PiWorkStore {
     schema: { parse(value: unknown): T },
     workspaceId?: string | null,
   ): T[] {
-    if (isFolderDomain(domain)) {
+    if (isFolderDomain(domain) && !(domain === "source" && workspaceId === null)) {
       if (workspaceId === undefined || workspaceId === null) {
         throw new Error(`${domain} resources require a work folder.`);
       }
@@ -478,7 +482,7 @@ export class PiWorkStore {
     if (row === undefined) throw new Error(`Unknown ${domain}: ${id}`);
     const current = schema.parse(JSON.parse(row.value));
     const next = schema.parse({ ...current, ...input, id, ...("updatedAt" in current ? { updatedAt: timestamp() } : {}) });
-    if (isFolderDomain(domain)) {
+    if (isFolderDomain(domain) && !(domain === "source" && isMcpSource(current) && current.workspaceId === null)) {
       const workspaceId = this.workspaceIdOf(current);
       this.requireFolderWorkspace(workspaceId);
       if (this.workspaceIdOf(next) !== workspaceId) {
@@ -495,7 +499,14 @@ export class PiWorkStore {
   }
 
   removeDomainEntity(domain: DomainName, id: string): void {
-    if (isFolderDomain(domain)) this.requireFolderDomainEntity(domain, id);
+    if (isFolderDomain(domain)) {
+      const row = this.db.select().from(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).get();
+      if (row === undefined) throw new Error(`Unknown ${domain}: ${id}`);
+      const entity = domain === "source" ? sourceSchema.parse(JSON.parse(row.value)) : null;
+      if (!(domain === "source" && entity !== null && isMcpSource(entity) && entity.workspaceId === null)) {
+        this.requireFolderDomainEntity(domain, id);
+      }
+    }
     this.db.delete(domainEntities).where(and(eq(domainEntities.id, id), eq(domainEntities.domain, domain))).run();
   }
 
@@ -530,6 +541,30 @@ export class PiWorkStore {
   }
   listSources(workspaceId: string): Source[] {
     return this.listDomainEntities("source", sourceSchema, workspaceId);
+  }
+  listGlobalMcpSources(): Source[] {
+    return this.listDomainEntities("source", sourceSchema, null).filter(isMcpSource);
+  }
+  migrateMcpSourcesToGlobal(): Source[] {
+    const rows = this.db.select().from(domainEntities).where(eq(domainEntities.domain, "source")).orderBy(asc(domainEntities.createdAt)).all();
+    const migrated: Source[] = [];
+    const transaction = this.sqlite.transaction(() => {
+      for (const row of rows) {
+        const source = sourceSchema.parse(JSON.parse(row.value));
+        if (!isMcpSource(source)) continue;
+        const next = source.workspaceId === null ? source : { ...source, workspaceId: null, updatedAt: timestamp() };
+        if (source.workspaceId !== null) {
+          this.db.update(domainEntities).set({
+            workspaceId: null,
+            value: JSON.stringify(next),
+            updatedAt: next.updatedAt,
+          }).where(eq(domainEntities.id, source.id)).run();
+        }
+        migrated.push(next);
+      }
+    });
+    transaction();
+    return migrated;
   }
   createSkill(value: Omit<Skill, "id" | "createdAt" | "updatedAt">): Skill {
     return this.createDomainEntity("skill", skillSchema, value);

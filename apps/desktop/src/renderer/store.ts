@@ -18,6 +18,7 @@ export type SettingsSection =
   | "workFolders"
   | "permissions"
   | "skills"
+  | "mcp"
   | "extensions"
   | "browser"
   | "shortcuts"

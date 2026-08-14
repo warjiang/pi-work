@@ -12,6 +12,9 @@ import type {
   ExtensionPackage,
   ManagedCliExecutionResult,
   ManagedCliPackage,
+  McpAuthorizationStatus,
+  McpCallToolResult,
+  McpInspectResult,
   ModelCatalog,
   Label,
   Plan,
@@ -140,6 +143,16 @@ declare global {
       source: DomainApi<Source>;
       skill: SkillApi;
       automation: DomainApi<Automation>;
+      mcp: {
+        list(): Promise<Source[]>;
+        create(input: unknown): Promise<Source>;
+        update(input: unknown): Promise<Source>;
+        remove(sourceId: string): Promise<void>;
+        inspect(sourceId: string): Promise<McpInspectResult>;
+        callTool(input: { sourceId: string; toolName: string; arguments: Record<string, unknown> }): Promise<McpCallToolResult>;
+        authorizationStatus(sourceId: string): Promise<McpAuthorizationStatus>;
+        authorize(sourceId: string): Promise<McpAuthorizationStatus>;
+      };
       browser: BrowserApi;
     };
   }

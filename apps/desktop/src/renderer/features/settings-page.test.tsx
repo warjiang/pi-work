@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig } from "@pi-work/protocol";
+import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, Workspace } from "@pi-work/protocol";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { translator } from "@/i18n.js";
@@ -25,6 +25,15 @@ const buildInfo: BuildInfo = {
 };
 
 const providers: ProviderConfig[] = [{ providerId: "kimi-coding" }];
+const workspace: Workspace = {
+  id: "10000000-0000-4000-8000-000000000001",
+  name: "Demo workspace",
+  rootPath: "/tmp/demo",
+  directories: ["/tmp/demo"],
+  outputPath: "/tmp/demo/output",
+  kind: "folder",
+  createdAt: "2026-08-13T00:00:00.000Z",
+};
 const models: ModelCatalog = {
   diagnostics: [],
   models: [
@@ -48,6 +57,7 @@ describe("SettingsPage", () => {
       workFolders: "workspace",
       permissions: "permissions",
       skills: "skills",
+      mcp: "source",
       extensions: "extensions",
       browser: "browser",
       about: "info",
@@ -150,5 +160,34 @@ describe("SettingsPage", () => {
     expect(html).toContain("Search extensions");
     expect(html).toContain("Install from source");
     expect(html).toContain("pi-mcp-adapter");
+  });
+
+  it("keeps global MCP configuration in settings", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage
+          section="mcp"
+          settings={settings}
+          buildInfo={buildInfo}
+          workspaces={[workspace]}
+          providers={[]}
+          models={undefined}
+          t={translator("en")}
+          onSectionChange={() => undefined}
+          onClose={() => undefined}
+          onUpdate={async () => undefined}
+          onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
+          onProvidersChanged={async () => undefined}
+          onModelsRefresh={async () => undefined}
+          onRestartOnboarding={async () => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(html).toContain("Connect and debug MCP servers available across Pi Work.");
+    expect(html).toContain("Global servers are available to every Agent run when enabled.");
+    expect(html).not.toContain("Demo workspace");
+    expect(html).toContain("Add server");
   });
 });

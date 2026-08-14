@@ -9,6 +9,9 @@ import {
   extensionSourceSchema,
   importSkillInputSchema,
   inspectAttachmentPathsSchema,
+  mcpCallToolInputSchema,
+  mcpHttpConfigSchema,
+  mcpStdioConfigSchema,
   promoteSessionInputSchema,
   sendChatInputSchema,
   sessionSearchInputSchema,
@@ -70,6 +73,81 @@ describe("protocol schemas", () => {
       runtime: { cwd: "/workspace", agentDir: "/user/pi-agent" },
     }).success).toBe(true);
     expect(extensionSourceSchema.safeParse("  ").success).toBe(false);
+  });
+
+  it("validates local and remote MCP configurations", () => {
+    expect(mcpStdioConfigSchema.parse({
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    })).toEqual({
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      env: {},
+    });
+    expect(mcpHttpConfigSchema.parse({
+      url: "https://mcp.notion.com/mcp",
+      auth: "oauth",
+    })).toEqual({
+      url: "https://mcp.notion.com/mcp",
+      transport: "auto",
+      headers: {},
+      auth: "oauth",
+    });
+    expect(mcpHttpConfigSchema.safeParse({ url: "not-a-url" }).success).toBe(false);
+    expect(mcpHttpConfigSchema.safeParse({ url: "file:///tmp/mcp" }).success).toBe(false);
+    expect(mcpHttpConfigSchema.safeParse({
+      url: "https://example.com/mcp",
+      auth: "bearer",
+    }).success).toBe(false);
+    expect(mcpCallToolInputSchema.safeParse({
+      sourceId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      toolName: "search",
+      arguments: { query: "MCP" },
+    }).success).toBe(true);
+  });
+
+  it("carries enabled MCP servers into chat agent requests", () => {
+    expect(agentRequestSchema.safeParse({
+      type: "chat",
+      requestId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      sessionId: "018f88d1-1eb5-709a-90ef-4325747e294d",
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      messages: [{ role: "user", content: "Search Notion" }],
+      credential: { providerId: "anthropic", apiKey: "test" },
+      thinkingLevel: "medium",
+      permissionMode: "ask",
+      runtime: { cwd: "/workspace", agentDir: "/user/pi-agent" },
+      mcpServers: [{
+        id: "018f88d1-1eb5-709a-90ef-4325747e294e",
+        name: "Notion",
+        type: "mcp_http",
+        config: {
+          url: "https://mcp.notion.com/mcp",
+          transport: "auto",
+          auth: "oauth",
+          bearerToken: "token",
+        },
+      }],
+    }).success).toBe(true);
+  });
+
+  it("validates model-backed conversation title requests", () => {
+    expect(agentRequestSchema.safeParse({
+      type: "title",
+      requestId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      prompt: "https://app.notion.com/p/example 帮我读取这个文档",
+      response: "我已读取文档并总结了重点。",
+      provider: { providerId: "anthropic", apiKey: "test" },
+      modelId: "claude-sonnet-4-5",
+      thinkingLevel: "minimal",
+      runtime: { cwd: "/workspace", agentDir: "/user/pi-agent" },
+    }).success).toBe(true);
+    expect(agentMessageSchema.safeParse({
+      type: "title",
+      requestId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      title: "Notion 文档摘要",
+    }).success).toBe(true);
   });
 
   it("allows only absolute HTTP and HTTPS external URLs", () => {

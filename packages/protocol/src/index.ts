@@ -162,6 +162,32 @@ export type Subtask = z.infer<typeof subtaskSchema>;
 
 export const sourceTypes = ["mcp_stdio", "mcp_http", "openapi", "local", "google", "microsoft", "slack"] as const;
 export const sourceTypeSchema = z.enum(sourceTypes);
+export const mcpStdioConfigSchema = z.object({
+  command: z.string().trim().min(1).max(4_096),
+  args: z.array(z.string().max(10_000)).max(200).default([]),
+  env: z.record(z.string().min(1).max(256), z.string().max(100_000)).default({}),
+  cwd: z.string().trim().min(1).max(4_096).optional(),
+});
+export const mcpHttpConfigSchema = z.object({
+  url: z.url().refine((url) => url.startsWith("http://") || url.startsWith("https://"), {
+    message: "Remote MCP URL must use HTTP or HTTPS.",
+  }),
+  transport: z.enum(["auto", "streamable_http", "sse"]).default("auto"),
+  headers: z.record(z.string().min(1).max(256), z.string().max(100_000)).default({}),
+  auth: z.enum(["none", "bearer", "oauth"]).default("none"),
+  bearerToken: z.string().max(100_000).optional(),
+}).superRefine((config, context) => {
+  if (config.auth === "bearer" && !config.bearerToken?.trim()) {
+    context.addIssue({
+      code: "custom",
+      path: ["bearerToken"],
+      message: "Bearer authentication requires a token.",
+    });
+  }
+});
+export const mcpSourceConfigSchema = z.union([mcpStdioConfigSchema, mcpHttpConfigSchema]);
+export type McpSourceConfig = z.infer<typeof mcpSourceConfigSchema>;
+
 export const sourceSchema = z.object({
   id: z.uuid(),
   workspaceId: z.uuid().nullable(),
@@ -173,6 +199,51 @@ export const sourceSchema = z.object({
   updatedAt: z.string().datetime(),
 });
 export type Source = z.infer<typeof sourceSchema>;
+
+export const mcpRuntimeServerSchema = z.object({
+  id: z.uuid(),
+  name: z.string().trim().min(1).max(120),
+  type: z.enum(["mcp_stdio", "mcp_http"]),
+  config: z.record(z.string(), z.unknown()),
+});
+export type McpRuntimeServer = z.infer<typeof mcpRuntimeServerSchema>;
+
+export const mcpToolSummarySchema = z.object({
+  name: z.string(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  inputSchema: z.record(z.string(), z.unknown()),
+});
+export const mcpInspectResultSchema = z.object({
+  connected: z.boolean(),
+  transport: z.enum(["stdio", "streamable_http", "sse"]),
+  serverName: z.string().optional(),
+  serverVersion: z.string().optional(),
+  instructions: z.string().optional(),
+  tools: z.array(mcpToolSummarySchema),
+  resourceCount: z.number().int().nonnegative(),
+  promptCount: z.number().int().nonnegative(),
+  logs: z.array(z.string()),
+});
+export type McpInspectResult = z.infer<typeof mcpInspectResultSchema>;
+export const mcpInspectInputSchema = z.object({ sourceId: z.uuid() });
+export const mcpCallToolInputSchema = z.object({
+  sourceId: z.uuid(),
+  toolName: z.string().trim().min(1).max(240),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+});
+export const mcpCallToolResultSchema = z.object({
+  content: z.array(z.record(z.string(), z.unknown())),
+  isError: z.boolean().default(false),
+  structuredContent: z.record(z.string(), z.unknown()).optional(),
+});
+export type McpCallToolResult = z.infer<typeof mcpCallToolResultSchema>;
+export const mcpAuthorizeInputSchema = z.object({ sourceId: z.uuid() });
+export const mcpAuthorizationStatusSchema = z.object({
+  authorized: z.boolean(),
+  message: z.string(),
+});
+export type McpAuthorizationStatus = z.infer<typeof mcpAuthorizationStatusSchema>;
 
 export const skillSchema = z.object({
   id: z.uuid(),
@@ -594,6 +665,16 @@ export const agentRequestSchema = z.discriminatedUnion("type", [
     runtime: agentRuntimeSchema,
   }),
   z.object({
+    type: z.literal("title"),
+    requestId: z.uuid(),
+    prompt: z.string().min(1).max(100_000),
+    response: z.string().min(1).max(100_000),
+    provider: setProviderCredentialInputSchema.optional(),
+    modelId: z.string().min(1),
+    thinkingLevel: thinkingLevelSchema,
+    runtime: agentRuntimeSchema,
+  }),
+  z.object({
     type: z.literal("chat"),
     requestId: z.uuid(),
     sessionId: z.uuid(),
@@ -604,6 +685,7 @@ export const agentRequestSchema = z.discriminatedUnion("type", [
     thinkingLevel: thinkingLevelSchema,
     permissionMode: permissionModeSchema.default("ask"),
     runtime: agentRuntimeSchema,
+    mcpServers: z.array(mcpRuntimeServerSchema).default([]),
   }),
   z.object({
     type: z.literal("cancel"),
@@ -630,6 +712,20 @@ export const agentRequestSchema = z.discriminatedUnion("type", [
     source: extensionSourceSchema,
   }),
   z.object({ type: z.literal("model.list"), requestId: z.uuid(), runtime: agentRuntimeSchema }),
+  z.object({
+    type: z.literal("mcp.inspect"),
+    requestId: z.uuid(),
+    server: mcpRuntimeServerSchema,
+    runtime: agentRuntimeSchema,
+  }),
+  z.object({
+    type: z.literal("mcp.call-tool"),
+    requestId: z.uuid(),
+    server: mcpRuntimeServerSchema,
+    runtime: agentRuntimeSchema,
+    toolName: z.string().min(1),
+    arguments: z.record(z.string(), z.unknown()),
+  }),
 ]);
 export type AgentRequest = z.infer<typeof agentRequestSchema>;
 
@@ -645,6 +741,11 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     plan: planSchema,
   }),
   z.object({
+    type: z.literal("title"),
+    requestId: z.uuid(),
+    title: z.string().min(1).max(160),
+  }),
+  z.object({
     type: z.literal("chat"),
     requestId: z.uuid(),
     sessionId: z.uuid(),
@@ -655,6 +756,16 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("cancelled"),
     requestId: z.uuid(),
     sessionId: z.uuid(),
+  }),
+  z.object({
+    type: z.literal("mcp.inspect"),
+    requestId: z.uuid(),
+    result: mcpInspectResultSchema,
+  }),
+  z.object({
+    type: z.literal("mcp.call-tool"),
+    requestId: z.uuid(),
+    result: mcpCallToolResultSchema,
   }),
   z.object({
     type: z.literal("extensions"),

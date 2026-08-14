@@ -1,3 +1,4 @@
+import { faSlack } from "@fortawesome/free-brands-svg-icons";
 import {
   AlertCircle,
   Archive,
@@ -43,6 +44,7 @@ import {
   PencilLine,
   Play,
   Plus,
+  RadioTower,
   RefreshCw,
   Search,
   Settings,
@@ -60,6 +62,8 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon, LucideProps } from "lucide-react";
+import { siFigma, siGithub, siGoogledocs, siGoogledrive, siNotion, type SimpleIcon } from "simple-icons";
+import type { SVGProps } from "react";
 import { cn } from "@/lib/utils.js";
 
 const icons = {
@@ -105,6 +109,7 @@ const icons = {
   plan: ClipboardList,
   play: Play,
   plus: Plus,
+  radio: RadioTower,
   refresh: RefreshCw,
   rename: PencilLine,
   search: Search,
@@ -143,5 +148,45 @@ export function Icon({ name, className, size = 16, strokeWidth = 1.75, ...props 
       strokeWidth={strokeWidth}
       {...props}
     />
+  );
+}
+
+type BrandIconDefinition = {
+  viewBox: string;
+  paths: ReadonlyArray<{ d: string; fill: string }>;
+};
+
+function simpleBrandIcon(icon: SimpleIcon): BrandIconDefinition {
+  return {
+    viewBox: "0 0 24 24",
+    paths: [{ d: icon.path, fill: `#${icon.hex}` }],
+  };
+}
+
+const slackPath = faSlack.icon[4];
+const brandIcons = {
+  notion: simpleBrandIcon(siNotion),
+  figma: simpleBrandIcon(siFigma),
+  github: simpleBrandIcon(siGithub),
+  "google-docs": simpleBrandIcon(siGoogledocs),
+  google: simpleBrandIcon(siGoogledrive),
+  slack: {
+    viewBox: `0 0 ${faSlack.icon[0]} ${faSlack.icon[1]}`,
+    paths: (Array.isArray(slackPath) ? slackPath : [slackPath]).map((d) => ({ d, fill: "#4A154B" })),
+  },
+} satisfies Record<string, BrandIconDefinition>;
+
+export type BrandIconName = keyof typeof brandIcons;
+
+export interface BrandIconProps extends Omit<SVGProps<SVGSVGElement>, "ref"> {
+  name: BrandIconName;
+}
+
+export function BrandIcon({ name, className, ...props }: BrandIconProps) {
+  const icon = brandIcons[name];
+  return (
+    <svg aria-hidden="true" className={cn("brand-icon", className)} focusable="false" viewBox={icon.viewBox} {...props}>
+      {icon.paths.map((path, index) => <path d={path.d} fill={path.fill} key={index} />)}
+    </svg>
   );
 }

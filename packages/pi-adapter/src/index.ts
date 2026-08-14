@@ -26,6 +26,10 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type {
   AgentRuntime,
   AgentImageAttachment,
@@ -34,6 +38,9 @@ import type {
   ModelOption,
   Plan,
   PermissionMode,
+  McpCallToolResult,
+  McpInspectResult,
+  McpRuntimeServer,
   Task,
   ThinkingLevel,
 } from "@pi-work/protocol";
@@ -59,6 +66,14 @@ export type AgentStreamListener = (
   kind: "text_delta" | "thinking" | "tool_call" | "tool_update" | "tool_result" | "file_change" | "runtime",
   payload: Record<string, unknown>,
 ) => void;
+
+type ConnectedMcpServer = {
+  client: Client;
+  transport: { close(): Promise<void> };
+  transportName: McpInspectResult["transport"];
+  logs: string[];
+  close(): Promise<void>;
+};
 
 const generatedPlanSchema = z.object({
   summary: z.string().min(1),
@@ -216,6 +231,62 @@ export class PiAdapter {
     };
   }
 
+  async createConversationTitle(
+    prompt: string,
+    response: string,
+    provider: PiProviderCredential | null,
+    modelId: string,
+    thinkingLevel: ThinkingLevel,
+    runtime: AgentRuntime,
+  ): Promise<string> {
+    if (provider === null) throw new Error("No provider is configured.");
+
+    const credentials = this.credentials(runtime);
+    const modelRuntime = await this.modelRuntime(runtime, credentials);
+    const services = await createAgentSessionServices({
+      cwd: runtime.cwd,
+      agentDir: runtime.agentDir,
+      modelRuntime,
+      settingsManager: this.settingsManager(runtime),
+    });
+    await modelRuntime.setRuntimeApiKey(provider.providerId, provider.apiKey);
+    const modelResolution = resolveCliModel({
+      cliModel: `${provider.providerId}/${modelId}`,
+      modelRuntime,
+    });
+    if (modelResolution.error !== undefined) throw new Error(modelResolution.error);
+    if (modelResolution.model === undefined) throw new Error(`Pi could not resolve ${provider.providerId}/${modelId}.`);
+
+    const chunks: string[] = [];
+    const { session } = await createAgentSessionFromServices({
+      services,
+      model: modelResolution.model,
+      thinkingLevel,
+      sessionManager: SessionManager.inMemory(),
+      tools: [],
+    });
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        chunks.push(event.assistantMessageEvent.delta);
+      }
+    });
+    try {
+      await session.prompt([
+        "Write a concise title for this conversation.",
+        "Use the user's language. Return only the title, with no quotes, markdown, or punctuation decoration.",
+        "Keep it under 36 characters and describe the task rather than copying a URL.",
+        `User: ${prompt}`,
+        `Assistant: ${response}`,
+      ].join("\n\n"));
+    } finally {
+      unsubscribe();
+      session.dispose();
+    }
+    const title = chunks.join("").replace(/\s+/g, " ").replace(/^["'`#\-\s]+|["'`#\-\s]+$/g, "").trim();
+    if (title.length === 0) throw new Error("Pi returned an empty conversation title.");
+    return title.slice(0, 160);
+  }
+
   async chat(
     sessionId: string,
     messages: Pick<ChatMessage, "role" | "content">[],
@@ -227,6 +298,7 @@ export class PiAdapter {
     requestApproval: ToolApprovalRequester,
     permissionMode: PermissionMode = "ask",
     onEvent?: AgentStreamListener,
+    mcpServers: McpRuntimeServer[] = [],
   ): Promise<{ content: string; cancelled: boolean }> {
     if (provider === null) {
       return {
@@ -287,55 +359,62 @@ export class PiAdapter {
         onEvent,
       ),
     ];
-    const customTools: ToolDefinition<any, any, any>[] = [...readTools, ...writeTools];
-    const enabledTools = [
-      ...(permissionMode === "explore"
-      ? ["read", "grep", "find", "ls"]
-      : ["read", "grep", "find", "ls", "edit", "write", "bash"]),
-      ...extensionToolNames(services.resourceLoader.getExtensions().extensions),
-    ];
-    const sessionDirectory = join(runtime.agentDir, "sessions");
-    const existing = (await SessionManager.list(runtime.cwd, sessionDirectory))
-      .find(({ id }) => id === sessionId);
-    const sessionManager = existing === undefined
-      ? SessionManager.create(runtime.cwd, sessionDirectory, { id: sessionId })
-      : SessionManager.open(existing.path, sessionDirectory, runtime.cwd);
-    const hasHistory = sessionManager.getEntries().length > 0;
-    const { session } = await createAgentSessionFromServices({
-      services,
-      model: modelResolution.model,
-      thinkingLevel,
-      sessionManager,
-      tools: enabledTools,
-      customTools,
-    });
-    this.cancelledSessions.delete(sessionId);
-    this.activeSessions.set(sessionId, session);
-    const thinking = new Map<number, string>();
-    const unsubscribe = session.subscribe((event) => {
-      consumeSessionEvent(event, textDeltas, thinking, onEvent);
-    });
-
+    const mcp = await connectMcpTools(mcpServers, runtime);
+    let session: AgentSession | undefined;
+    let unsubscribe: (() => void) | undefined;
     try {
-      const latest = messages.at(-1)?.content ?? "";
-      const images: ImageContent[] = imageAttachments.map((attachment) => ({
-        type: "image",
-        data: attachment.data,
-        mimeType: attachment.mimeType,
+      const customTools: ToolDefinition<any, any, any>[] = [...readTools, ...writeTools, ...mcp.tools];
+      const enabledTools = [
+        ...(permissionMode === "explore"
+        ? ["read", "grep", "find", "ls"]
+        : ["read", "grep", "find", "ls", "edit", "write", "bash"]),
+        ...extensionToolNames(services.resourceLoader.getExtensions().extensions),
+        ...mcp.tools.map(({ name }) => name),
+      ];
+      const sessionDirectory = join(runtime.agentDir, "sessions");
+      const existing = (await SessionManager.list(runtime.cwd, sessionDirectory))
+        .find(({ id }) => id === sessionId);
+      const sessionManager = existing === undefined
+        ? SessionManager.create(runtime.cwd, sessionDirectory, { id: sessionId })
+        : SessionManager.open(existing.path, sessionDirectory, runtime.cwd);
+      const hasHistory = sessionManager.getEntries().length > 0;
+      ({ session } = await createAgentSessionFromServices({
+        services,
+        model: modelResolution.model,
+        thinkingLevel,
+        sessionManager,
+        tools: enabledTools,
+        customTools,
       }));
-      await session.prompt(hasHistory ? latest : [
-        "You are Pi Work, a concise assistant discussing work in the current local workspace.",
-        "Use read/search tools directly. Editing, writing, and shell commands follow the selected permission mode.",
-        "Conversation:",
-        ...messages.map((message) => `${message.role}: ${message.content}`),
-        "assistant:",
-      ].join("\n\n"), images.length > 0 ? { images } : undefined);
-    } catch (error) {
-      if (!this.cancelledSessions.has(sessionId)) throw error;
+      this.cancelledSessions.delete(sessionId);
+      this.activeSessions.set(sessionId, session);
+      const thinking = new Map<number, string>();
+      unsubscribe = session.subscribe((event) => {
+        consumeSessionEvent(event, textDeltas, thinking, onEvent);
+      });
+
+      try {
+        const latest = messages.at(-1)?.content ?? "";
+        const images: ImageContent[] = imageAttachments.map((attachment) => ({
+          type: "image",
+          data: attachment.data,
+          mimeType: attachment.mimeType,
+        }));
+        await session.prompt(hasHistory ? latest : [
+          "You are Pi Work, a concise assistant discussing work in the current local workspace.",
+          "Use read/search tools directly. Editing, writing, and shell commands follow the selected permission mode.",
+          "Conversation:",
+          ...messages.map((message) => `${message.role}: ${message.content}`),
+          "assistant:",
+        ].join("\n\n"), images.length > 0 ? { images } : undefined);
+      } catch (error) {
+        if (!this.cancelledSessions.has(sessionId)) throw error;
+      }
     } finally {
       this.activeSessions.delete(sessionId);
-      unsubscribe();
-      session.dispose();
+      unsubscribe?.();
+      session?.dispose();
+      await mcp.close();
     }
 
     const content = textDeltas.join("").trim();
@@ -344,6 +423,57 @@ export class PiAdapter {
       throw new Error("Pi returned an empty chat response.");
     }
     return { content, cancelled };
+  }
+
+  async inspectMcp(server: McpRuntimeServer, runtime: AgentRuntime): Promise<McpInspectResult> {
+    const connection = await connectMcpServer(server, runtime);
+    try {
+      const [tools, resources, prompts] = await Promise.all([
+        connection.client.listTools(),
+        optionalMcpList(() => connection.client.listResources(), "resources"),
+        optionalMcpList(() => connection.client.listPrompts(), "prompts"),
+      ]);
+      const version = connection.client.getServerVersion();
+      return {
+        connected: true,
+        transport: connection.transportName,
+        serverName: version?.name,
+        serverVersion: version?.version,
+        instructions: connection.client.getInstructions(),
+        tools: tools.tools.map((tool) => ({
+          name: tool.name,
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.inputSchema as Record<string, unknown>,
+        })),
+        resourceCount: resources.length,
+        promptCount: prompts.length,
+        logs: connection.logs,
+      };
+    } finally {
+      await connection.close();
+    }
+  }
+
+  async callMcpTool(
+    server: McpRuntimeServer,
+    runtime: AgentRuntime,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<McpCallToolResult> {
+    const connection = await connectMcpServer(server, runtime);
+    try {
+      const result = await connection.client.callTool({ name: toolName, arguments: args });
+      return {
+        content: result.content as Array<Record<string, unknown>>,
+        isError: result.isError === true,
+        ...(result.structuredContent === undefined
+          ? {}
+          : { structuredContent: result.structuredContent as Record<string, unknown> }),
+      };
+    } finally {
+      await connection.close();
+    }
   }
 
   async cancel(sessionId: string): Promise<boolean> {
@@ -640,6 +770,224 @@ export function extensionToolNames(
   extensions: Iterable<{ tools: ReadonlyMap<string, unknown> }>,
 ): string[] {
   return [...new Set(Array.from(extensions, ({ tools }) => [...tools.keys()]).flat())];
+}
+
+async function connectMcpTools(
+  servers: McpRuntimeServer[],
+  runtime: AgentRuntime,
+): Promise<{ tools: ToolDefinition<any, any, any>[]; close(): Promise<void> }> {
+  const connections: ConnectedMcpServer[] = [];
+  const tools: ToolDefinition<any, any, any>[] = [];
+  try {
+    for (const server of servers) {
+      const connection = await connectMcpServer(server, runtime);
+      connections.push(connection);
+      const listed = await connection.client.listTools();
+      for (const remoteTool of listed.tools) {
+        const name = mcpToolName(server, remoteTool.name);
+        tools.push({
+          name,
+          label: `${server.name} · ${remoteTool.title ?? remoteTool.name}`,
+          description: remoteTool.description ?? `Run ${remoteTool.name} on the ${server.name} MCP server.`,
+          promptSnippet: `${name}: ${remoteTool.description ?? remoteTool.name}`,
+          parameters: remoteTool.inputSchema as any,
+          execute: async (_toolCallId, params, signal) => {
+            const result = await connection.client.callTool(
+              { name: remoteTool.name, arguments: params as Record<string, unknown> },
+              undefined,
+              signal === undefined ? undefined : { signal },
+            );
+            if (result.isError === true) {
+              throw new Error(mcpResultText(result.content) || `${server.name}/${remoteTool.name} failed.`);
+            }
+            return {
+              content: mcpAgentContent(result.content),
+              details: {
+                serverId: server.id,
+                serverName: server.name,
+                remoteToolName: remoteTool.name,
+                structuredContent: result.structuredContent,
+              },
+            };
+          },
+        });
+      }
+    }
+  } catch (error) {
+    await Promise.allSettled(connections.map(({ close }) => close()));
+    throw error;
+  }
+  return {
+    tools,
+    close: async () => {
+      await Promise.allSettled(connections.map(({ close }) => close()));
+    },
+  };
+}
+
+async function connectMcpServer(
+  server: McpRuntimeServer,
+  runtime: AgentRuntime,
+): Promise<ConnectedMcpServer> {
+  if (server.type === "mcp_stdio") {
+    const command = stringConfig(server.config, "command");
+    const logs: string[] = [];
+    const transport = new StdioClientTransport({
+      command,
+      args: stringArrayConfig(server.config, "args"),
+      cwd: optionalStringConfig(server.config, "cwd") ?? runtime.cwd,
+      env: {
+        ...stringEnvironment(process.env),
+        ...recordStringConfig(server.config, "env"),
+        ...(runtime.environment ?? {}),
+      },
+      stderr: "pipe",
+    });
+    transport.stderr?.on("data", (chunk) => {
+      const text = String(chunk).trim();
+      if (text) logs.push(text);
+    });
+    return connectTransport(server, transport, "stdio", logs);
+  }
+
+  const url = new URL(stringConfig(server.config, "url"));
+  const configuredTransport = optionalStringConfig(server.config, "transport") ?? "auto";
+  const headers = new Headers(recordStringConfig(server.config, "headers"));
+  const bearerToken = optionalStringConfig(server.config, "bearerToken");
+  if (bearerToken) headers.set("Authorization", `Bearer ${bearerToken}`);
+  const requestInit = { headers };
+  if (configuredTransport === "sse") {
+    return connectTransport(server, new SSEClientTransport(url, { requestInit }), "sse", []);
+  }
+  if (configuredTransport === "streamable_http") {
+    return connectTransport(
+      server,
+      new StreamableHTTPClientTransport(url, { requestInit }),
+      "streamable_http",
+      [],
+    );
+  }
+  try {
+    return await connectTransport(
+      server,
+      new StreamableHTTPClientTransport(url, { requestInit }),
+      "streamable_http",
+      [],
+    );
+  } catch (streamableError) {
+    try {
+      return await connectTransport(server, new SSEClientTransport(url, { requestInit }), "sse", [
+        `Streamable HTTP unavailable: ${errorMessage(streamableError)}`,
+      ]);
+    } catch (sseError) {
+      throw new Error(
+        `Could not connect to MCP source "${server.name}". Streamable HTTP: ${errorMessage(streamableError)}; SSE: ${errorMessage(sseError)}`,
+      );
+    }
+  }
+}
+
+async function connectTransport(
+  server: McpRuntimeServer,
+  transport: any,
+  transportName: McpInspectResult["transport"],
+  logs: string[],
+): Promise<ConnectedMcpServer> {
+  const client = new Client({ name: "pi-work", version: "0.1.0" }, { capabilities: {} });
+  try {
+    await client.connect(transport, { timeout: 20_000 });
+  } catch (error) {
+    await transport.close().catch(() => undefined);
+    const hint = server.type === "mcp_http" && /401|unauthor|authorization/i.test(errorMessage(error))
+      ? " Authorize the remote source or configure a bearer token."
+      : "";
+    throw new Error(`${errorMessage(error)}${hint}`);
+  }
+  return {
+    client,
+    transport,
+    transportName,
+    logs,
+    close: async () => {
+      await client.close();
+    },
+  };
+}
+
+async function optionalMcpList(
+  list: () => Promise<unknown>,
+  key: "resources" | "prompts",
+): Promise<unknown[]> {
+  try {
+    const result = await list() as Record<string, unknown>;
+    return Array.isArray(result[key]) ? result[key] : [];
+  } catch {
+    return [];
+  }
+}
+
+function mcpToolName(server: McpRuntimeServer, toolName: string): string {
+  const prefix = server.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32) || "server";
+  const tool = toolName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 48) || "tool";
+  return `mcp_${prefix}_${server.id.slice(0, 6)}_${tool}`;
+}
+
+function mcpAgentContent(content: unknown): Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> {
+  if (!Array.isArray(content)) return [{ type: "text", text: JSON.stringify(content) }];
+  const converted: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+  for (const item of content) {
+    if (typeof item !== "object" || item === null) {
+      converted.push({ type: "text", text: String(item) });
+      continue;
+    }
+    const value = item as Record<string, unknown>;
+    if (value.type === "text" && typeof value.text === "string") {
+      converted.push({ type: "text", text: value.text });
+      continue;
+    }
+    if (value.type === "image" && typeof value.data === "string" && typeof value.mimeType === "string") {
+      converted.push({ type: "image", data: value.data, mimeType: value.mimeType });
+      continue;
+    }
+    converted.push({ type: "text", text: JSON.stringify(value) });
+  }
+  return converted;
+}
+
+function mcpResultText(content: unknown): string {
+  return mcpAgentContent(content).map((item) => item.type === "text" ? item.text : `[image ${item.mimeType}]`).join("\n");
+}
+
+function stringConfig(config: Record<string, unknown>, key: string): string {
+  const value = config[key];
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`MCP configuration requires "${key}".`);
+  return value;
+}
+
+function optionalStringConfig(config: Record<string, unknown>, key: string): string | undefined {
+  const value = config[key];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function stringArrayConfig(config: Record<string, unknown>, key: string): string[] {
+  const value = config[key];
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+function recordStringConfig(config: Record<string, unknown>, key: string): Record<string, string> {
+  const value = config[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, String(item)]));
+}
+
+function stringEnvironment(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

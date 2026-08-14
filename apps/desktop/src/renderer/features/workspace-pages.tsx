@@ -7,6 +7,7 @@ import type {
   Session,
   Skill,
   Source,
+  McpInspectResult,
   StatusDefinition,
   SystemSkill,
   Workspace,
@@ -32,6 +33,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
 import { Icon } from "@/components/ui/icon.js";
 import type { IconName } from "@/components/ui/icon.js";
@@ -52,6 +59,14 @@ import type { MessageKey } from "@/i18n.js";
 
 type T = (key: MessageKey) => string;
 type SkillFolderEntry = { name: string; path: string; type: "directory" | "file" };
+type McpPreset = "stdio" | "streamable_http" | "sse";
+type McpTransport = "stdio" | "streamable_http" | "sse";
+const mcpSourceTypes: Source["type"][] = ["mcp_stdio", "mcp_http"];
+const regularSourceTypes: Source["type"][] = ["local", "openapi", "google", "microsoft", "slack"];
+
+function isMcpSource(source: Source): boolean {
+  return mcpSourceTypes.includes(source.type);
+}
 
 export function PageHeader(props: { eyebrow?: string; title: string; detail?: string; action?: ReactNode }) {
   return (
@@ -231,46 +246,472 @@ export function SourcesPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["sources", workspaceId], queryFn: () => window.piWork.source.list(workspaceId) });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = query.data?.find(({ id }) => id === selectedId) ?? null;
+  const sources = (query.data ?? []).filter((source) => !isMcpSource(source));
+  const selected = sources.find(({ id }) => id === selectedId) ?? null;
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
   const create = useMutation({ mutationFn: () => window.piWork.source.create({ workspaceId, value: { name: t("newSource"), type: "local", enabled: false, config: {} } }), onSuccess: async (source) => { await refresh(); setSelectedId(source.id); } });
   return (
     <LibraryLayout
       title={t("sources")}
       t={t}
-      detail={t("notUsedForExecution")}
+      detail={t("sourcesDetail")}
       icon="source"
-      items={query.data ?? []}
+      items={sources}
       selectedId={selectedId}
       loading={query.isLoading}
       empty={t("noItems")}
       addLabel={t("add")}
       onAdd={() => create.mutate()}
       onSelect={setSelectedId}
-      renderItem={(source) => <><strong>{source.name}</strong><small>{sourceTypeLabel(source.type, t)}</small><Badge>{t("notUsed")}</Badge></>}
-      detailPane={selected ? <SourceEditor source={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : null}
+      renderItem={(source) => <><strong>{source.name}</strong><small>{sourceTypeLabel(source.type, t)}</small><Badge>{source.enabled ? t("enabled") : t("disabled")}</Badge></>}
+      detailPane={selected ? <SourceEditor source={selected} allowedTypes={regularSourceTypes} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : null}
     />
   );
 }
 
-function SourceEditor({ source, t, onSaved, onDeleted }: { source: Source; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
-  const [name, setName] = useState(source.name);
-  const [type, setType] = useState<Source["type"]>(source.type);
-  const [config, setConfig] = useState(JSON.stringify(source.config, null, 2));
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setName(source.name); setType(source.type); setConfig(JSON.stringify(source.config, null, 2)); }, [source]);
-  const save = useMutation({
-    mutationFn: async () => {
-      let value: Record<string, unknown>;
-      try { value = JSON.parse(config) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
-      return window.piWork.source.update({ id: source.id, value: { name, type, config: value, enabled: source.enabled } });
+export function McpSettingsPage({ t }: { t: T }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: ["mcp-sources"],
+    queryFn: () => window.piWork.mcp.list(),
+  });
+  const sources = (query.data ?? []).filter(isMcpSource);
+  const selected = sources.find(({ id }) => id === selectedId) ?? null;
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["mcp-sources"] });
+  useEffect(() => {
+    if (selectedId !== null && sources.some(({ id }) => id === selectedId)) return;
+    setSelectedId(sources[0]?.id ?? null);
+  }, [selectedId, sources]);
+  const create = useMutation({
+    mutationFn: (preset: McpPreset) => {
+      const type = preset === "stdio" ? "mcp_stdio" : "mcp_http";
+      const config = preset === "stdio"
+        ? { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."], env: {} }
+        : { url: "", transport: preset, headers: {}, auth: "none" };
+      const name = preset === "stdio"
+        ? t("newMcpLocal")
+        : preset === "sse" ? t("newMcpSse") : t("newMcpRemote");
+      return window.piWork.mcp.create({ name, type, enabled: false, config });
     },
-    onSuccess: onSaved,
+    onSuccess: async (source) => {
+      await refresh();
+      setSelectedId(source.id);
+    },
+  });
+  const addMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button disabled={create.isPending}><Icon name="plus" />{t("addMcpServer")}<Icon name="chevron-down" /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="mcp-add-menu">
+        <DropdownMenuItem onSelect={() => create.mutate("stdio")}>
+          <Icon name="terminal" />
+          <span><strong>{t("addMcpLocal")}</strong><small>{t("addMcpLocalDetail")}</small></span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => create.mutate("streamable_http")}>
+          <Icon name="browser" />
+          <span><strong>{t("addMcpStreamable")}</strong><small>{t("addMcpStreamableDetail")}</small></span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => create.mutate("sse")}>
+          <Icon name="radio" />
+          <span><strong>{t("addMcpSse")}</strong><small>{t("addMcpSseDetail")}</small></span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+  return (
+    <LibraryLayout
+      className="settings-mcp-page"
+      showHeader={false}
+      title={t("mcp")}
+      detail={t("mcpSettingsDetail")}
+      t={t}
+      icon="source"
+      items={sources}
+      selectedId={selectedId}
+      loading={query.isLoading}
+      empty={t("noMcpServers")}
+      addLabel={t("add")}
+      onSelect={setSelectedId}
+      toolbar={<div className="settings-mcp-toolbar">
+        <span className="settings-mcp-toolbar-detail">{t("mcpGlobalDetail")}</span>
+        {addMenu}
+        {query.isError || create.isError ? <div className="settings-mcp-error"><Icon name="alert" /><span>{query.error?.message ?? create.error?.message}</span>{query.isError ? <Button variant="ghost" size="sm" onClick={() => void query.refetch()}>{t("retry")}</Button> : null}</div> : null}
+      </div>}
+      renderItem={(source) => <><strong>{source.name}</strong><span className="mcp-source-meta"><small>{mcpTransportLabel(source, t)}</small><span className={source.enabled ? "mcp-status enabled" : "mcp-status"}>{source.enabled ? t("enabled") : t("disabled")}</span></span></>}
+      detailPane={selected
+        ? <McpSourceEditor source={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} />
+        : sources.length === 0
+          ? <div className="mcp-empty-state"><span className="mcp-empty-icon"><Icon name="source" /></span><h2>{t("mcpEmptyTitle")}</h2><p>{t("mcpEmptyDetail")}</p>{addMenu}</div>
+          : null}
+    />
+  );
+}
+
+function mcpTransport(source: Source): McpTransport {
+  if (source.type === "mcp_stdio") return "stdio";
+  const transport = source.config.transport;
+  return transport === "sse" ? "sse" : "streamable_http";
+}
+
+function mcpTransportLabel(source: Source, t: T): string {
+  const transport = mcpTransport(source);
+  if (transport === "stdio") return t("mcpTransportStdio");
+  if (transport === "sse") return t("mcpTransportSse");
+  return t("mcpTransportStreamable");
+}
+
+function jsonRecord(value: string, label: string): Record<string, string> {
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`${label} must be a JSON object.`);
+  return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [key, String(item)]));
+}
+
+function jsonArguments(value: string): string[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    throw new Error("Arguments must be a JSON string array.");
+  }
+  return parsed;
+}
+
+function McpSourceEditor({ source, t, onSaved, onDeleted }: {
+  source: Source;
+  t: T;
+  onSaved(): Promise<unknown>;
+  onDeleted(): Promise<void>;
+}) {
+  const queryClient = useQueryClient();
+  const initialTransport = mcpTransport(source);
+  const [name, setName] = useState(source.name);
+  const [enabled, setEnabled] = useState(source.enabled);
+  const [transport, setTransport] = useState<McpTransport>(initialTransport);
+  const [command, setCommand] = useState(String(source.config.command ?? ""));
+  const [args, setArgs] = useState(JSON.stringify(source.config.args ?? [], null, 2));
+  const [cwd, setCwd] = useState(String(source.config.cwd ?? ""));
+  const [env, setEnv] = useState(JSON.stringify(source.config.env ?? {}, null, 2));
+  const [url, setUrl] = useState(String(source.config.url ?? ""));
+  const [auth, setAuth] = useState<"none" | "bearer" | "oauth">(
+    source.config.auth === "bearer" || source.config.auth === "oauth" ? source.config.auth : "none",
+  );
+  const [bearerToken, setBearerToken] = useState(String(source.config.bearerToken ?? ""));
+  const [headers, setHeaders] = useState(JSON.stringify(source.config.headers ?? {}, null, 2));
+  const [error, setError] = useState<string | null>(null);
+  const [inspectResult, setInspectResult] = useState<McpInspectResult | null>(null);
+  const [toolName, setToolName] = useState("");
+  const [toolArguments, setToolArguments] = useState("{}");
+  const [toolResult, setToolResult] = useState("");
+  const [saved, setSaved] = useState(false);
+  const savedOAuthConfigurationMatches = source.type === "mcp_http"
+    && source.config.auth === "oauth"
+    && mcpTransport(source) === transport
+    && source.config.url === url.trim();
+  const authorizationStatus = useQuery({
+    queryKey: ["mcp-authorization", source.id],
+    queryFn: () => window.piWork.mcp.authorizationStatus(source.id),
+    enabled: source.type === "mcp_http" && source.config.auth === "oauth",
+    retry: false,
+  });
+
+  useEffect(() => {
+    const nextTransport = mcpTransport(source);
+    setName(source.name);
+    setEnabled(source.enabled);
+    setTransport(nextTransport);
+    setCommand(String(source.config.command ?? ""));
+    setArgs(JSON.stringify(source.config.args ?? [], null, 2));
+    setCwd(String(source.config.cwd ?? ""));
+    setEnv(JSON.stringify(source.config.env ?? {}, null, 2));
+    setUrl(String(source.config.url ?? ""));
+    setAuth(source.config.auth === "bearer" || source.config.auth === "oauth" ? source.config.auth : "none");
+    setBearerToken(String(source.config.bearerToken ?? ""));
+    setHeaders(JSON.stringify(source.config.headers ?? {}, null, 2));
+    setInspectResult(null);
+    setToolName("");
+    setToolArguments("{}");
+    setToolResult("");
+    setSaved(false);
+  }, [source.id]);
+
+  function markChanged() {
+    setSaved(false);
+    setInspectResult(null);
+  }
+
+  async function persistSource() {
+    const config = transport === "stdio"
+      ? {
+          command: command.trim(),
+          args: jsonArguments(args),
+          env: jsonRecord(env, t("mcpEnvironment")),
+          ...(cwd.trim() ? { cwd: cwd.trim() } : {}),
+        }
+      : {
+          url: url.trim(),
+          transport,
+          headers: jsonRecord(headers, t("mcpHeaders")),
+          auth,
+          ...(auth === "bearer" ? { bearerToken } : {}),
+        };
+    return window.piWork.mcp.update({
+      id: source.id,
+      value: {
+        name: name.trim(),
+        type: transport === "stdio" ? "mcp_stdio" : "mcp_http",
+        config,
+        enabled,
+      },
+    });
+  }
+
+  const save = useMutation({
+    mutationFn: persistSource,
+    onSuccess: async () => {
+      setError(null);
+      setSaved(true);
+      await onSaved();
+      if (transport !== "stdio" && auth === "oauth") await authorizationStatus.refetch();
+    },
     onError: (cause: Error) => setError(cause.message),
   });
-  return <ResourceEditor title={source.name} status={t("notUsedForExecution")} t={t} onDelete={() => void window.piWork.source.remove(source.id).then(onDeleted)}>
-    <Alert className="runtime-boundary"><AlertDescription>{t("notUsedForExecution")}</AlertDescription></Alert>
-    <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("sourceType")}</FieldLabel><Select value={type} onValueChange={(value) => setType(value as Source["type"])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{(["local", "mcp_stdio", "mcp_http", "openapi", "google", "microsoft", "slack"] as Source["type"][]).map((value) => <SelectItem key={value} value={value}>{sourceTypeLabel(value, t)}</SelectItem>)}</SelectGroup></SelectContent></Select></Field><Field><FieldLabel>{t("configuration")}</FieldLabel><Textarea className="code-textarea" value={config} onChange={(event) => setConfig(event.target.value)} rows={12} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button disabled={save.isPending || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
+  const inspect = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      return window.piWork.mcp.inspect(source.id);
+    },
+    onSuccess: async (result) => {
+      setError(null);
+      setSaved(true);
+      setInspectResult(result);
+      setToolName(result.tools[0]?.name ?? "");
+      await onSaved();
+      if (transport !== "stdio" && auth === "oauth") await authorizationStatus.refetch();
+    },
+    onError: async (cause: Error) => {
+      setError(cause.message);
+      if (transport !== "stdio" && auth === "oauth") await authorizationStatus.refetch();
+    },
+  });
+  const authorize = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      const status = await window.piWork.mcp.authorize(source.id);
+      const result = await window.piWork.mcp.inspect(source.id);
+      return { status, result };
+    },
+    onSuccess: async ({ status, result }) => {
+      setError(null);
+      setSaved(true);
+      setInspectResult(result);
+      setToolName(result.tools[0]?.name ?? "");
+      queryClient.setQueryData(["mcp-authorization", source.id], status);
+      await onSaved();
+    },
+    onError: async (cause: Error) => {
+      setError(cause.message);
+      await authorizationStatus.refetch();
+    },
+  });
+  const callTool = useMutation({
+    mutationFn: async () => {
+      let input: Record<string, unknown>;
+      try { input = JSON.parse(toolArguments) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
+      return window.piWork.mcp.callTool({ sourceId: source.id, toolName, arguments: input });
+    },
+    onSuccess: (result) => { setError(null); setToolResult(JSON.stringify(result, null, 2)); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const busy = save.isPending || inspect.isPending || authorize.isPending;
+  const change = <Value,>(setter: (value: Value) => void) => (value: Value) => { setter(value); markChanged(); };
+  const oauthAuthorized = savedOAuthConfigurationMatches && authorizationStatus.data?.authorized === true;
+  const oauthStatusLabel = !savedOAuthConfigurationMatches
+    ? t("mcpAuthorizationSaveFirst")
+    : authorizationStatus.isFetching
+      ? t("mcpAuthorizationChecking")
+      : oauthAuthorized
+        ? t("mcpAuthorized")
+        : t("mcpNotAuthorized");
+
+  return <ResourceEditor
+    title={name || source.name}
+    status={`${transport === "stdio" ? t("mcpTransportStdio") : transport === "sse" ? t("mcpTransportSse") : t("mcpTransportStreamable")} · ${enabled ? t("enabled") : t("disabled")}`}
+    t={t}
+    onDelete={() => void window.piWork.mcp.remove(source.id).then(onDeleted)}
+  >
+    <FieldGroup className="mcp-editor-fields mcp-editor-compact">
+      <div className="mcp-editor-summary">
+        <Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => change(setName)(event.target.value)} /></Field>
+        <Field><FieldLabel>{t("mcpTransport")}</FieldLabel><Select value={transport} onValueChange={(value) => change(setTransport)(value as McpTransport)}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent><SelectGroup>
+            <SelectItem value="stdio">{t("mcpTransportStdio")}</SelectItem>
+            <SelectItem value="streamable_http">{t("mcpTransportStreamable")}</SelectItem>
+            <SelectItem value="sse">{t("mcpTransportSse")}</SelectItem>
+          </SelectGroup></SelectContent>
+        </Select></Field>
+        <Field className="mcp-enabled-inline">
+          <span><FieldLabel>{t("enabled")}</FieldLabel><small>{t("mcpGlobalAvailability")}</small></span>
+          <Switch checked={enabled} onCheckedChange={change(setEnabled)} />
+        </Field>
+      </div>
+
+      <section className="mcp-config-card">
+        <header><div><strong>{t("mcpConnection")}</strong><small>{transport === "stdio" ? t("mcpStdioDetail") : transport === "sse" ? t("mcpSseDetail") : t("mcpStreamableDetail")}</small></div><span className="mcp-transport-chip">{transport === "stdio" ? "stdio" : transport === "sse" ? "SSE" : "HTTP"}</span></header>
+        {transport === "stdio" ? <div className="mcp-config-grid">
+          <Field><FieldLabel>{t("mcpCommand")}</FieldLabel><Input value={command} onChange={(event) => change(setCommand)(event.target.value)} placeholder="npx" /></Field>
+          <Field><FieldLabel>{t("mcpWorkingDirectory")}</FieldLabel><Input value={cwd} onChange={(event) => change(setCwd)(event.target.value)} placeholder={t("mcpOptional")} /></Field>
+          <Field><FieldLabel>{t("mcpArguments")}</FieldLabel><Textarea className="code-textarea" rows={4} value={args} onChange={(event) => change(setArgs)(event.target.value)} spellCheck={false} /></Field>
+          <Field><FieldLabel>{t("mcpEnvironment")}</FieldLabel><Textarea className="code-textarea" rows={4} value={env} onChange={(event) => change(setEnv)(event.target.value)} spellCheck={false} /></Field>
+        </div> : <div className="mcp-config-grid">
+          <Field className="mcp-field-wide"><FieldLabel>{t("mcpEndpoint")}</FieldLabel><Input value={url} onChange={(event) => change(setUrl)(event.target.value)} placeholder="https://example.com/mcp" /></Field>
+          <Field className="mcp-auth-field mcp-field-wide"><FieldLabel>{t("mcpAuthentication")}</FieldLabel><div className={`mcp-auth-controls${auth === "oauth" ? " has-feedback" : ""}${auth === "bearer" ? " has-token" : ""}`}>
+            <Select value={auth} onValueChange={(value) => change(setAuth)(value as typeof auth)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value="none">{t("mcpAuthNone")}</SelectItem>
+                <SelectItem value="bearer">{t("mcpAuthBearer")}</SelectItem>
+                <SelectItem value="oauth">{t("mcpAuthOAuth")}</SelectItem>
+              </SelectGroup></SelectContent>
+            </Select>{auth === "bearer" ? <Input type="password" value={bearerToken} onChange={(event) => change(setBearerToken)(event.target.value)} aria-label={t("mcpBearerToken")} placeholder={t("mcpBearerToken")} /> : null}{auth === "oauth" ? <div className={oauthAuthorized ? "mcp-auth-feedback authorized" : "mcp-auth-feedback"}>
+              <span className="mcp-auth-state"><Icon name={oauthAuthorized ? "check-circle" : "alert"} />{oauthStatusLabel}</span>
+              <Button variant="ghost" size="sm" className="mcp-auth-action" disabled={busy || !name.trim()} onClick={() => authorize.mutate()}>{authorize.isPending ? t("mcpAuthorizing") : oauthAuthorized ? t("mcpReauthorize") : t("mcpAuthorize")}</Button>
+            </div> : null}</div></Field>
+          <Field className={auth === "none" ? undefined : "mcp-field-wide"}><FieldLabel>{t("mcpHeaders")}</FieldLabel><Textarea className="code-textarea" rows={4} value={headers} onChange={(event) => change(setHeaders)(event.target.value)} spellCheck={false} /></Field>
+        </div>}
+      </section>
+
+      {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      <div className="resource-editor-actions mcp-action-bar">
+        <Button disabled={busy || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button>
+        <Button variant="outline" disabled={busy || !name.trim()} onClick={() => inspect.mutate()}>{inspect.isPending ? t("mcpConnecting") : t("mcpSaveConnect")}</Button>
+        {saved && !busy ? <span className="mcp-save-state"><Icon name="check" />{t("saved")}</span> : null}
+      </div>
+
+      <section className="mcp-debug-section">
+        <div className="mcp-debug-heading"><div><strong>{t("mcpTestConnection")}</strong><small>{t("mcpTestConnectionDetail")}</small></div>{inspectResult ? <span className="mcp-connection-ok"><Icon name="check-circle" />{t("mcpConnected")}</span> : null}</div>
+        {!inspectResult ? <div className="mcp-test-empty"><Icon name="terminal" /><span>{t("mcpNoInspection")}</span></div> : <div className="mcp-debug-panel">
+          <header><strong>{inspectResult.serverName ?? source.name}</strong><span>{inspectResult.serverVersion}</span><span>{inspectResult.transport}</span><span>{inspectResult.tools.length} {t("mcpTools")}</span><span>{inspectResult.resourceCount} {t("mcpResources")}</span><span>{inspectResult.promptCount} {t("mcpPrompts")}</span></header>
+          {inspectResult.instructions ? <p>{inspectResult.instructions}</p> : null}
+          <div className="mcp-tool-grid">
+            <Field><FieldLabel>{t("mcpTool")}</FieldLabel><Select value={toolName} onValueChange={setToolName}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{inspectResult.tools.map((tool) => <SelectItem key={tool.name} value={tool.name}>{tool.title ?? tool.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+            <Field><FieldLabel>{t("mcpArguments")}</FieldLabel><Textarea className="code-textarea" rows={3} value={toolArguments} onChange={(event) => setToolArguments(event.target.value)} spellCheck={false} /></Field>
+          </div>
+          <Button variant="outline" disabled={!toolName || callTool.isPending} onClick={() => callTool.mutate()}><Icon name="play" />{callTool.isPending ? t("mcpRunning") : t("mcpRunTool")}</Button>
+          {toolResult ? <Field><FieldLabel>{t("mcpResult")}</FieldLabel><Textarea className="code-textarea" readOnly rows={6} value={toolResult} /></Field> : null}
+          {inspectResult.logs.length > 0 ? <div className="mcp-log"><span>{t("mcpLogs")}</span><pre>{inspectResult.logs.join("\n")}</pre></div> : null}
+        </div>}
+      </section>
+    </FieldGroup>
+  </ResourceEditor>;
+}
+
+function SourceEditor({ source, allowedTypes, t, onSaved, onDeleted }: { source: Source; allowedTypes: Source["type"][]; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
+  const [name, setName] = useState(source.name);
+  const [type, setType] = useState<Source["type"]>(source.type);
+  const [enabled, setEnabled] = useState(source.enabled);
+  const [config, setConfig] = useState(JSON.stringify(source.config, null, 2));
+  const [error, setError] = useState<string | null>(null);
+  const [inspectResult, setInspectResult] = useState<McpInspectResult | null>(null);
+  const [toolName, setToolName] = useState("");
+  const [toolArguments, setToolArguments] = useState("{}");
+  const [toolResult, setToolResult] = useState("");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    setName(source.name);
+    setType(source.type);
+    setEnabled(source.enabled);
+    setConfig(JSON.stringify(source.config, null, 2));
+    setInspectResult(null);
+    setToolName("");
+    setToolArguments("{}");
+    setToolResult("");
+    setSaved(false);
+  }, [source.id]);
+  async function persistSource() {
+    let value: Record<string, unknown>;
+    try { value = JSON.parse(config) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
+    return window.piWork.source.update({ id: source.id, value: { name: name.trim(), type, config: value, enabled } });
+  }
+  const save = useMutation({
+    mutationFn: persistSource,
+    onSuccess: async () => { setError(null); setSaved(true); await onSaved(); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const inspect = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      return window.piWork.mcp.inspect(source.id);
+    },
+    onSuccess: async (result) => { setError(null); setSaved(true); setInspectResult(result); setToolName(result.tools[0]?.name ?? ""); await onSaved(); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const authorize = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      await window.piWork.mcp.authorize(source.id);
+      return window.piWork.mcp.inspect(source.id);
+    },
+    onSuccess: async (result) => { setError(null); setSaved(true); setInspectResult(result); setToolName(result.tools[0]?.name ?? ""); await onSaved(); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const callTool = useMutation({
+    mutationFn: async () => {
+      let args: Record<string, unknown>;
+      try { args = JSON.parse(toolArguments) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
+      return window.piWork.mcp.callTool({ sourceId: source.id, toolName, arguments: args });
+    },
+    onSuccess: (result) => { setError(null); setToolResult(JSON.stringify(result, null, 2)); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const isMcp = type === "mcp_stdio" || type === "mcp_http";
+  const isOAuthMcp = type === "mcp_http" && (() => {
+    try {
+      const value = JSON.parse(config) as Record<string, unknown>;
+      return value.auth === "oauth";
+    } catch {
+      return false;
+    }
+  })();
+  const busy = save.isPending || inspect.isPending || authorize.isPending;
+  return <ResourceEditor title={name || source.name} status={enabled ? t("enabled") : t("disabled")} t={t} onDelete={() => void window.piWork.source.remove(source.id).then(onDeleted)}>
+    <FieldGroup className={isMcp ? "mcp-editor-fields" : undefined}>
+      {isMcp ? <div className="mcp-section-heading"><span>{t("mcpBasicInfo")}</span></div> : null}
+      <div className={isMcp ? "mcp-basic-grid" : undefined}>
+        <Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} /></Field>
+        <Field><FieldLabel>{t("sourceType")}</FieldLabel><Select value={type} onValueChange={(value) => {
+        const next = value as Source["type"];
+        setType(next);
+        setSaved(false);
+        if (next === "mcp_stdio") setConfig(JSON.stringify({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."], env: {} }, null, 2));
+        if (next === "mcp_http") setConfig(JSON.stringify({ url: "", transport: "auto", headers: {}, auth: "none" }, null, 2));
+      }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{allowedTypes.map((value) => <SelectItem key={value} value={value}>{sourceTypeLabel(value, t)}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+      </div>
+      {isMcp ? <div className="mcp-section-heading"><span>{t("mcpAvailability")}</span></div> : null}
+      <Field className="mcp-enabled-field"><div><FieldLabel>{t("enabled")}</FieldLabel><small>{t(isMcp ? "mcpEnabledDetail" : "sourceEnabledDetail")}</small></div><Switch checked={enabled} onCheckedChange={(value) => { setEnabled(value); setSaved(false); }} /></Field>
+      {isMcp ? <div className="mcp-section-heading"><span>{t("mcpConnection")}</span><small>{t("mcpConfigurationDetail")}</small></div> : null}
+      <Field><FieldLabel>{t("configuration")}</FieldLabel><Textarea className="code-textarea mcp-config-editor" value={config} onChange={(event) => { setConfig(event.target.value); setSaved(false); }} rows={isMcp ? 9 : 12} spellCheck={false} /></Field>
+      {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      <div className="resource-editor-actions">
+        <Button disabled={busy || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button>
+        {isMcp ? <Button variant="outline" disabled={busy || !name.trim()} onClick={() => inspect.mutate()}>{inspect.isPending ? t("mcpConnecting") : t("mcpSaveConnect")}</Button> : null}
+        {isOAuthMcp ? <Button variant="ghost" disabled={busy || !name.trim()} onClick={() => authorize.mutate()}>{authorize.isPending ? t("mcpAuthorizing") : t("mcpAuthorize")}</Button> : null}
+        {saved && !busy ? <span className="mcp-save-state"><Icon name="check" />{t("saved")}</span> : null}
+      </div>
+      {isMcp ? <div className="mcp-section-heading mcp-test-heading"><span>{t("mcpTestConnection")}</span><small>{t("mcpTestConnectionDetail")}</small></div> : null}
+      {isMcp && !inspectResult ? <div className="mcp-test-empty"><Icon name="terminal" /><span>{t("mcpNoInspection")}</span></div> : null}
+      {inspectResult ? <section className="mcp-debug-panel">
+        <header><span className="mcp-connection-ok"><Icon name="check-circle" />{t("mcpConnected")}</span><strong>{inspectResult.serverName ?? source.name}</strong><span>{inspectResult.transport}</span><span>{inspectResult.tools.length} {t("mcpTools")}</span></header>
+        {inspectResult.instructions ? <p>{inspectResult.instructions}</p> : null}
+        <div className="mcp-tool-grid">
+          <Field><FieldLabel>{t("mcpTool")}</FieldLabel><Select value={toolName} onValueChange={setToolName}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{inspectResult.tools.map((tool) => <SelectItem key={tool.name} value={tool.name}>{tool.title ?? tool.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+          <Field><FieldLabel>{t("mcpArguments")}</FieldLabel><Textarea className="code-textarea" rows={4} value={toolArguments} onChange={(event) => setToolArguments(event.target.value)} spellCheck={false} /></Field>
+        </div>
+        <Button variant="outline" disabled={!toolName || callTool.isPending} onClick={() => callTool.mutate()}><Icon name="play" />{callTool.isPending ? t("mcpRunning") : t("mcpRunTool")}</Button>
+        {toolResult ? <Field><FieldLabel>{t("mcpResult")}</FieldLabel><Textarea className="code-textarea" readOnly rows={7} value={toolResult} /></Field> : null}
+        {inspectResult.logs.length > 0 ? <div className="mcp-log"><span>{t("mcpLogs")}</span><pre>{inspectResult.logs.join("\n")}</pre></div> : null}
+      </section> : null}
+    </FieldGroup>
   </ResourceEditor>;
 }
 

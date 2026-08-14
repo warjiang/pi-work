@@ -128,6 +128,16 @@ const piWork = {
     chooseImport: () => ipcRenderer.invoke("skill:choose-import"),
   },
   automation: domainApi("automation"),
+  mcp: {
+    list: () => ipcRenderer.invoke("mcp:list"),
+    create: (input: unknown) => ipcRenderer.invoke("mcp:create", input),
+    update: (input: unknown) => ipcRenderer.invoke("mcp:update", input),
+    remove: (sourceId: string) => ipcRenderer.invoke("mcp:remove", { id: sourceId }),
+    inspect: (sourceId: string) => ipcRenderer.invoke("mcp:inspect", { sourceId }),
+    callTool: (input: unknown) => ipcRenderer.invoke("mcp:call-tool", input),
+    authorizationStatus: (sourceId: string) => ipcRenderer.invoke("mcp:authorization-status", { sourceId }),
+    authorize: (sourceId: string) => ipcRenderer.invoke("mcp:authorize", { sourceId }),
+  },
   browser: {
     open: (url: string) => ipcRenderer.invoke("browser:open", { url }),
     navigate: (url: string) => ipcRenderer.invoke("browser:navigate", { url }),

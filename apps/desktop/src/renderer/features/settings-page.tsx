@@ -50,7 +50,7 @@ import { PiMark } from "@/components/pi-mark.js";
 import type { MessageKey } from "@/i18n.js";
 import type { SettingsSection } from "@/store.js";
 import { BrowserPage } from "./browser-page.js";
-import { SkillsPage } from "./workspace-pages.js";
+import { McpSettingsPage, SkillsPage } from "./workspace-pages.js";
 import {
   extensionCatalog,
   isCatalogExtensionInstalled,
@@ -80,6 +80,7 @@ export const settingsNavigationGroups = [
     label: "settingsGroupTools",
     sections: [
       { id: "skills", icon: "skills" },
+      { id: "mcp", icon: "source" },
       { id: "extensions", icon: "extensions" },
       { id: "browser", icon: "browser" },
     ],
@@ -169,12 +170,14 @@ export function SettingsPage(props: {
             <div className={`settings-content-inner settings-content-inner--${activeSection}`}>
               <header className="settings-page-heading">
                 <h1>{sectionTitle}</h1>
+                {activeSection === "mcp" ? <p>{props.t("mcpSettingsDetail")}</p> : null}
               </header>
               {activeSection === "general" ? <GeneralSettings {...props} /> : null}
               {activeSection === "modelsCredentials" ? <ModelSettings {...props} /> : null}
               {activeSection === "workFolders" ? <FolderSettings {...props} /> : null}
               {activeSection === "permissions" ? <PermissionSettings {...props} /> : null}
               {activeSection === "skills" ? <SkillsPage embedded t={props.t} /> : null}
+              {activeSection === "mcp" ? <McpSettingsPage t={props.t} /> : null}
               {activeSection === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} onOpenConsole={(command) => props.onOpenConsole?.(command)} /> : null}
               {activeSection === "about" ? <AboutSettings buildInfo={props.buildInfo} t={props.t} /> : null}
             </div>
