@@ -15,7 +15,6 @@ export type SettingsSection =
   | "general"
   | "appearance"
   | "modelsCredentials"
-  | "workFolders"
   | "permissions"
   | "skills"
   | "mcp"

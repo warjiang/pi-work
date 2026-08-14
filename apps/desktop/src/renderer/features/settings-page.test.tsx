@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, Workspace } from "@pi-work/protocol";
+import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig } from "@pi-work/protocol";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { translator } from "@/i18n.js";
@@ -16,6 +16,8 @@ const settings: AppSettings = {
   sidebarCollapsed: false,
   focusMode: false,
   compactMode: false,
+  disabledModelKeys: [],
+  modelTestResults: {},
 };
 
 const buildInfo: BuildInfo = {
@@ -25,15 +27,6 @@ const buildInfo: BuildInfo = {
 };
 
 const providers: ProviderConfig[] = [{ providerId: "kimi-coding" }];
-const workspace: Workspace = {
-  id: "10000000-0000-4000-8000-000000000001",
-  name: "Demo workspace",
-  rootPath: "/tmp/demo",
-  directories: ["/tmp/demo"],
-  outputPath: "/tmp/demo/output",
-  kind: "folder",
-  createdAt: "2026-08-13T00:00:00.000Z",
-};
 const models: ModelCatalog = {
   diagnostics: [],
   models: [
@@ -54,7 +47,6 @@ describe("SettingsPage", () => {
     expect(icons).toMatchObject({
       general: "sliders",
       modelsCredentials: "models",
-      workFolders: "workspace",
       permissions: "permissions",
       skills: "skills",
       mcp: "source",
@@ -62,6 +54,7 @@ describe("SettingsPage", () => {
       browser: "browser",
       about: "info",
     });
+    expect(icons).not.toHaveProperty("workFolders");
     expect(icons).not.toHaveProperty("appearance");
     expect(icons).not.toHaveProperty("shortcuts");
   });
@@ -72,15 +65,12 @@ describe("SettingsPage", () => {
         section="about"
         settings={settings}
         buildInfo={buildInfo}
-        workspaces={[]}
         providers={[]}
         models={undefined}
         t={translator("en")}
         onSectionChange={() => undefined}
         onClose={() => undefined}
         onUpdate={async () => undefined}
-        onAddWorkspace={async () => null}
-        onAddWorkspaceDirectory={async () => null}
         onProvidersChanged={async () => undefined}
         onModelsRefresh={async () => undefined}
         onRestartOnboarding={async () => undefined}
@@ -111,15 +101,12 @@ describe("SettingsPage", () => {
           section="modelsCredentials"
           settings={settings}
           buildInfo={buildInfo}
-          workspaces={[]}
           providers={providers}
           models={models}
           t={translator("en")}
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
-          onAddWorkspace={async () => null}
-          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
@@ -127,10 +114,47 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(html).toContain("Available models");
+    expect(html).toContain("Model");
     expect(html).toContain("Kimi K2.5");
     expect(html).toContain("Refresh models");
     expect(html).toContain("model-refresh-button");
+  });
+
+  it("uses the provider alias and gives every model a real enable switch", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage
+          section="modelsCredentials"
+          settings={{
+            ...settings,
+            providerId: "newapi",
+            modelId: "gpt-5",
+            disabledModelKeys: ["newapi/gpt-5-mini"],
+          }}
+          buildInfo={buildInfo}
+          providers={[{ providerId: "newapi" }]}
+          models={{
+            diagnostics: [],
+            models: [
+              { providerId: "newapi", providerName: "NewAPI (ida)", modelId: "gpt-5", modelName: "GPT-5", thinkingLevels: ["off"] },
+              { providerId: "newapi", providerName: "NewAPI (ida)", modelId: "gpt-5-mini", modelName: "GPT-5 mini", thinkingLevels: ["off"] },
+            ],
+          }}
+          t={translator("en")}
+          onSectionChange={() => undefined}
+          onClose={() => undefined}
+          onUpdate={async () => undefined}
+          onProvidersChanged={async () => undefined}
+          onModelsRefresh={async () => undefined}
+          onRestartOnboarding={async () => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(html).toContain("ida · GPT-5");
+    expect(html).not.toContain("NewAPI (ida) · GPT-5");
+    expect(html).toContain('aria-label="Enabled: GPT-5"');
+    expect(html).toContain('aria-label="Disabled: GPT-5 mini"');
   });
 
   it("renders the extension catalog and keeps manual installation available", () => {
@@ -140,15 +164,12 @@ describe("SettingsPage", () => {
           section="extensions"
           settings={settings}
           buildInfo={buildInfo}
-          workspaces={[]}
           providers={[]}
           models={undefined}
           t={translator("en")}
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
-          onAddWorkspace={async () => null}
-          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
@@ -169,15 +190,12 @@ describe("SettingsPage", () => {
           section="mcp"
           settings={settings}
           buildInfo={buildInfo}
-          workspaces={[workspace]}
           providers={[]}
           models={undefined}
           t={translator("en")}
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
-          onAddWorkspace={async () => null}
-          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}

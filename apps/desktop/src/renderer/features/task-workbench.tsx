@@ -527,7 +527,10 @@ export function TaskWorkbench(props: {
   const unpublished = (artifacts.data ?? []).filter(({ publishedPath }) => publishedPath === null);
   const configuredProviders = useQuery({ queryKey: ["providers"], queryFn: () => window.piWork.provider.list() });
   const configured = new Set((configuredProviders.data ?? []).map(({ providerId: id }) => id));
-  const availableModels = (props.models?.models ?? []).filter((model) => configured.has(model.providerId));
+  const disabledModelKeys = new Set(props.settings?.disabledModelKeys ?? []);
+  const availableModels = (props.models?.models ?? []).filter((model) => (
+    configured.has(model.providerId) && !disabledModelKeys.has(`${model.providerId}/${model.modelId}`)
+  ));
   const activeModel = selectedModel(availableModels, providerId, modelId);
   const activeModelKey = activeModel === undefined ? "" : `${activeModel.providerId}/${activeModel.modelId}`;
   const thinkingLevels: ThinkingLevel[] = activeModel?.thinkingLevels.length ? activeModel.thinkingLevels : ["off"];

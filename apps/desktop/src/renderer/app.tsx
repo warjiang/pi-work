@@ -643,15 +643,12 @@ export function App() {
           section={ui.settingsSection}
           settings={appSettings}
           buildInfo={buildInfo.data}
-          workspaces={workspaces.data ?? []}
           providers={providers.data ?? []}
           models={models.data}
           t={t}
           onSectionChange={ui.setSettingsSection}
           onClose={ui.closeSettings}
           onUpdate={updateSettings}
-          onAddWorkspace={addWorkspace}
-          onAddWorkspaceDirectory={addWorkspaceDirectory}
           onProvidersChanged={async () => {
             await Promise.all([
               queryClient.invalidateQueries({ queryKey: ["providers"] }),

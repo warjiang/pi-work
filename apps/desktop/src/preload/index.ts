@@ -53,6 +53,7 @@ const piWork = {
   },
   model: {
     list: () => ipcRenderer.invoke("model:list"),
+    test: (input: unknown) => ipcRenderer.invoke("model:test", input),
   },
   conversation: {
     list: () => ipcRenderer.invoke("conversation:list"),

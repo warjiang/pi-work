@@ -26,6 +26,7 @@ import {
   taskSchema,
   taskStatusSchema,
   updateSessionInputSchema,
+  updateAppSettingsInputSchema,
 } from "./index.js";
 
 describe("protocol schemas", () => {
@@ -162,6 +163,16 @@ describe("protocol schemas", () => {
     expect(externalUrlInputSchema.safeParse({ url: "javascript:alert(1)" }).success).toBe(false);
     expect(externalUrlInputSchema.safeParse({ url: "file:///tmp/secret" }).success).toBe(false);
     expect(externalUrlInputSchema.safeParse({ url: "/relative/path" }).success).toBe(false);
+  });
+
+  it("does not expand defaults when applying a partial app-settings update", () => {
+    expect(updateAppSettingsInputSchema.parse({
+      providerId: "ida",
+      modelId: "gpt-5.6-luna",
+    })).toEqual({
+      providerId: "ida",
+      modelId: "gpt-5.6-luna",
+    });
   });
 
   it("validates global Skill names, imports, and enabled state changes", () => {
