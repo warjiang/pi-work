@@ -153,6 +153,7 @@ export class LangfuseExporter {
           type: "event-create",
           timestamp: event.timestamp,
           body: {
+            id: randomUUID(),
             traceId: state.traceId,
             name: `runtime.${notice}`,
             startTime: event.timestamp,
@@ -170,6 +171,7 @@ export class LangfuseExporter {
           type: "event-create",
           timestamp: event.timestamp,
           body: {
+            id: randomUUID(),
             traceId: state.traceId,
             name: "approval.requested",
             startTime: event.timestamp,
@@ -232,6 +234,7 @@ export class LangfuseExporter {
       type: "generation-create",
       timestamp,
       body: {
+        id: randomUUID(),
         traceId: state.traceId,
         name: "assistant-message",
         startTime: state.startTime,
@@ -276,6 +279,7 @@ export class LangfuseExporter {
       type: "span-create",
       timestamp,
       body: {
+        id: randomUUID(),
         traceId: state.traceId,
         name: typeof payload.toolName === "string" ? payload.toolName : pending?.toolName ?? "tool",
         startTime: pending?.startTime ?? timestamp,
@@ -413,7 +417,13 @@ export class LangfuseExporter {
         body: JSON.stringify({ batch: items }),
       });
       // 207 multi-status is the normal success code for the ingestion endpoint.
-      if (response.status === 207 || (response.status >= 200 && response.status < 300)) {
+      // The batch is accepted transport-wise, but individual items can still fail
+      // validation, so surface any per-item errors instead of silently dropping.
+      if (response.status === 207) {
+        await this.reportItemErrors(response);
+        return true;
+      }
+      if (response.status >= 200 && response.status < 300) {
         return true;
       }
       // 4xx (except 429) are permanent: dropping avoids poisoning the outbox.
@@ -425,6 +435,20 @@ export class LangfuseExporter {
     } catch (error) {
       this.log("Telemetry request failed.", error);
       return false;
+    }
+  }
+
+  private async reportItemErrors(response: Response): Promise<void> {
+    try {
+      const parsed = (await response.clone().json()) as { errors?: Array<{ id?: string; status?: number; message?: string }> };
+      if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+        const detail = parsed.errors
+          .map((error) => `${error.id ?? "?"}: ${error.status ?? "?"} ${error.message ?? ""}`.trim())
+          .join("; ");
+        this.log(`Telemetry batch partially rejected: ${redactSecrets(detail)}`);
+      }
+    } catch {
+      // A non-JSON 207 body is unusual but not fatal; treat the batch as delivered.
     }
   }
 

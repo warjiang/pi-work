@@ -116,6 +116,9 @@ describe("LangfuseExporter", () => {
     expect(types).toContain("generation-create");
 
     const generation = body.batch.find((item) => item.type === "generation-create")!;
+    expect(typeof generation.body.id).toBe("string");
+    expect((generation.body.id as string).length).toBeGreaterThan(0);
+    expect(generation.body.traceId).toBe("req-1");
     expect(generation.body.model).toBe("claude");
     expect(generation.body.usageDetails).toMatchObject({ input: 100, output: 50, total: 150 });
     expect(generation.body.costDetails).toMatchObject({ input: 0.1, output: 0.2, total: 0.3 });
@@ -174,6 +177,10 @@ describe("LangfuseExporter", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { batch: Array<{ type: string; body: Record<string, unknown> }> };
     const span = body.batch.find((item) => item.type === "span-create")!;
+    expect(typeof span.body.id).toBe("string");
+    expect((span.body.id as string).length).toBeGreaterThan(0);
+    expect(span.body.traceId).toBe("req-3");
+    expect(span.body.startTime).toBe("2024-01-01T00:00:00.500Z");
     expect(span.body.name).toBe("shell");
     expect(span.body.level).toBe("ERROR");
     expect(span.body.statusMessage).toBe("boom");
@@ -202,6 +209,22 @@ describe("LangfuseExporter", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(outbox.entries.size).toBe(0);
+  });
+
+  it("logs per-item errors returned inside a 207 response", async () => {
+    const messages: string[] = [];
+    const rejecting = vi.fn((_input: RequestInfo | URL, _init: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify({ successes: [], errors: [{ id: "obs-1", status: 400, message: "missing id" }] }), { status: 207 })));
+    const { exporter, outbox } = makeExporter(enabledConfig, {
+      fetch: rejecting as unknown as typeof fetch,
+      log: (message) => messages.push(message),
+    });
+    exporter.handleEvent(usageEvent("req-7"));
+    await exporter.flush();
+
+    // A 207 with per-item errors is still delivery-complete (no retry), but logged.
+    expect(outbox.entries.size).toBe(0);
+    expect(messages.some((message) => message.includes("partially rejected") && message.includes("missing id"))).toBe(true);
   });
 
   it("treats permanent 4xx rejections as delivered and does not retry", async () => {
