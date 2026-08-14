@@ -56,8 +56,6 @@ describe("SettingsPage", () => {
     expect(icons).toMatchObject({
       general: "sliders",
       modelsCredentials: "models",
-      workFolders: "workspace",
-      permissions: "permissions",
       skills: "skills",
       mcp: "source",
       extensions: "extensions",
@@ -66,6 +64,8 @@ describe("SettingsPage", () => {
     });
     expect(icons).not.toHaveProperty("appearance");
     expect(icons).not.toHaveProperty("shortcuts");
+    expect(icons).not.toHaveProperty("workFolders");
+    expect(icons).not.toHaveProperty("permissions");
   });
 
   it("renders grouped navigation and full build information", () => {

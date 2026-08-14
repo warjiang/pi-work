@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useGSAP } from "@gsap/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { gsap } from "gsap";
 import type {
   AppSettings,
   BuildInfo,
@@ -59,6 +61,8 @@ import {
   type ExtensionCatalogItem,
 } from "./extension-catalog.js";
 
+gsap.registerPlugin(useGSAP);
+
 type T = (key: MessageKey) => string;
 
 export const settingsNavigationGroups = [
@@ -72,8 +76,6 @@ export const settingsNavigationGroups = [
     label: "settingsGroupWorkspace",
     sections: [
       { id: "modelsCredentials", icon: "models" },
-      { id: "workFolders", icon: "workspace" },
-      { id: "permissions", icon: "permissions" },
     ],
   },
   {
@@ -259,6 +261,11 @@ function ModelSettings(props: BaseProps) {
   const queryClient = useQueryClient();
   const refreshFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  const refreshGlyphRef = useRef<HTMLSpanElement>(null);
+  const refreshCheckRef = useRef<HTMLSpanElement>(null);
+  const refreshLabelRef = useRef<HTMLSpanElement>(null);
+  const refreshTimelineRef = useRef<gsap.core.Timeline | null>(null);
   const providerOptions = useMemo(() => Array.from(new Map((props.models?.models ?? []).map((model) => [model.providerId, model.providerName])).entries()), [props.models]);
   const providerNames = useMemo(() => new Map(providerOptions), [providerOptions]);
   const defaultModelKey = props.settings.providerId && props.settings.modelId ? `${props.settings.providerId}/${props.settings.modelId}` : "";
@@ -272,6 +279,8 @@ function ModelSettings(props: BaseProps) {
   ), [props.models, props.providers]);
   const selectedProviderModels = selectedProviderId ? (providerModels.get(selectedProviderId) ?? []) : [];
   const selectedProviderEnabledModels = selectedProviderModels.filter((model) => !disabledModelKeys.has(`${model.providerId}/${model.modelId}`));
+  const selectedProviderTestModels = selectedProviderModels.filter((model) => selectedTestKeys.has(`${model.providerId}/${model.modelId}`));
+  const allProviderModelsSelected = selectedProviderModels.length > 0 && selectedProviderTestModels.length === selectedProviderModels.length;
   const testModels = useMutation({
     mutationFn: (models: Array<{ providerId: string; modelId: string }>) => window.piWork.model.test({ models }),
     onSuccess: async () => {
@@ -313,6 +322,88 @@ function ModelSettings(props: BaseProps) {
     },
     onError: () => setModelsRefreshed(false),
   });
+  useGSAP(() => {
+    const button = refreshButtonRef.current;
+    const refreshGlyph = refreshGlyphRef.current;
+    const checkGlyph = refreshCheckRef.current;
+    const label = refreshLabelRef.current;
+    if (!button || !refreshGlyph || !checkGlyph || !label) return;
+
+    refreshTimelineRef.current?.kill();
+    gsap.killTweensOf([button, refreshGlyph, checkGlyph, label]);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      gsap.set(button, { clearProps: "transform" });
+      gsap.set(label, { clearProps: "transform,opacity,visibility" });
+      gsap.set(refreshGlyph, { autoAlpha: modelsRefreshed ? 0 : 1, rotation: 0, scale: 1 });
+      gsap.set(checkGlyph, { autoAlpha: modelsRefreshed ? 1 : 0, rotation: 0, scale: 1 });
+      return;
+    }
+
+    if (refreshModels.isPending) {
+      const currentRotation = Number(gsap.getProperty(refreshGlyph, "rotation")) || 0;
+      const spin = gsap.timeline({ repeat: -1 })
+        .to(refreshGlyph, { rotation: currentRotation + 360, duration: 1.35, ease: "none" });
+      refreshTimelineRef.current = gsap.timeline({ defaults: { ease: "power2.out" } })
+        .addLabel("press")
+        .to(button, { scale: 0.985, duration: 0.1 }, "press")
+        .to(button, { scale: 1, duration: 0.24 }, ">")
+        .set(checkGlyph, { autoAlpha: 0, scale: 0.65 }, "press")
+        .set(refreshGlyph, { autoAlpha: 1, scale: 1, transformOrigin: "50% 50%" }, "press")
+        .set(label, { autoAlpha: 1, y: 0 }, "press")
+        .addLabel("spin", "press+=0.05")
+        .add(spin, "spin");
+      return;
+    }
+
+    if (modelsRefreshed) {
+      const currentRotation = Number(gsap.getProperty(refreshGlyph, "rotation")) || 0;
+      const nextFullTurn = Math.ceil((currentRotation + 1) / 360) * 360;
+      const settleDuration = gsap.utils.clamp(0.16, 0.72, ((nextFullTurn - currentRotation) / 360) * 1.35);
+      refreshTimelineRef.current = gsap.timeline({ defaults: { ease: "power2.out" } })
+        .addLabel("settle")
+        .set(label, { autoAlpha: 1, y: 0 }, "settle")
+        .to(refreshGlyph, { rotation: nextFullTurn, duration: settleDuration, ease: "power1.out" }, "settle")
+        .addLabel("complete", ">-0.04")
+        .to(refreshGlyph, { autoAlpha: 0, scale: 0.72, duration: 0.16 }, "complete")
+        .fromTo(checkGlyph, { autoAlpha: 0, scale: 0.55, rotation: -18 }, {
+          autoAlpha: 1,
+          scale: 1,
+          rotation: 0,
+          duration: 0.38,
+          ease: "back.out(2.2)",
+        }, "complete+=0.04")
+        .fromTo(button, { scale: 0.98 }, { scale: 1, duration: 0.32, ease: "back.out(1.8)" }, "complete");
+      return;
+    }
+
+    const checkVisible = Number(gsap.getProperty(checkGlyph, "opacity")) > 0.1;
+    if (!checkVisible) {
+      gsap.set(button, { scale: 1 });
+      gsap.set(refreshGlyph, { autoAlpha: 1, rotation: 0, scale: 1 });
+      gsap.set(checkGlyph, { autoAlpha: 0, rotation: 0, scale: 0.65 });
+      gsap.set(label, { autoAlpha: 1, y: 0 });
+      return;
+    }
+
+    refreshTimelineRef.current = gsap.timeline({ defaults: { ease: "power2.out" } })
+      .addLabel("reset")
+      .to(checkGlyph, { autoAlpha: 0, scale: 0.65, duration: 0.14 }, "reset")
+      .set(refreshGlyph, { rotation: 0 }, "reset")
+      .to(refreshGlyph, { autoAlpha: 1, scale: 1, duration: 0.2 }, "reset+=0.08")
+      .fromTo(label, { autoAlpha: 0, y: 2 }, { autoAlpha: 1, y: 0, duration: 0.18 }, "reset+=0.06");
+  }, {
+    scope: refreshButtonRef,
+    dependencies: [refreshModels.isPending, modelsRefreshed],
+  });
+  const handleRefreshModels = () => {
+    if (refreshFeedbackTimer.current !== null) {
+      clearTimeout(refreshFeedbackTimer.current);
+      refreshFeedbackTimer.current = null;
+    }
+    setModelsRefreshed(false);
+    refreshModels.mutate();
+  };
   useEffect(() => () => {
     if (refreshFeedbackTimer.current !== null) clearTimeout(refreshFeedbackTimer.current);
     if (saveFeedbackTimer.current !== null) clearTimeout(saveFeedbackTimer.current);
@@ -371,6 +462,24 @@ function ModelSettings(props: BaseProps) {
       return next;
     });
   }
+  function toggleAllTestSelection() {
+    setSelectedTestKeys((current) => {
+      const next = new Set(current);
+      if (allProviderModelsSelected) {
+        selectedProviderModels.forEach((model) => next.delete(`${model.providerId}/${model.modelId}`));
+      } else {
+        selectedProviderModels.forEach((model) => next.add(`${model.providerId}/${model.modelId}`));
+      }
+      return next;
+    });
+  }
+  function clearTestSelection() {
+    setSelectedTestKeys((current) => {
+      const next = new Set(current);
+      selectedProviderModels.forEach((model) => next.delete(`${model.providerId}/${model.modelId}`));
+      return next;
+    });
+  }
   function runModelTests(models: Array<{ providerId: string; modelId: string }>) {
     if (models.length === 0 || testModels.isPending) return;
     setModelTestError(null);
@@ -402,32 +511,25 @@ function ModelSettings(props: BaseProps) {
           </div>
           <div className="connected-provider-actions">
             <Button
+              ref={refreshButtonRef}
               variant="outline"
               size="sm"
               className={`model-refresh-button${refreshModels.isPending ? " is-refreshing" : modelsRefreshed ? " is-complete" : ""}`}
               disabled={refreshModels.isPending}
-              onClick={() => {
-                if (refreshFeedbackTimer.current !== null) {
-                  clearTimeout(refreshFeedbackTimer.current);
-                  refreshFeedbackTimer.current = null;
-                }
-                setModelsRefreshed(false);
-                refreshModels.mutate();
-              }}
+              onClick={handleRefreshModels}
             >
-              <Icon
-                name={modelsRefreshed ? "check" : "refresh"}
-                className={refreshModels.isPending ? "is-spinning" : undefined}
-              />
+              <span className="model-refresh-icon" aria-hidden="true">
+                <span ref={refreshGlyphRef} className="model-refresh-glyph"><Icon name="refresh" /></span>
+                <span ref={refreshCheckRef} className="model-refresh-check"><Icon name="check" /></span>
+              </span>
               <span
-                key={refreshModels.isPending ? "refreshing" : modelsRefreshed ? "complete" : "idle"}
+                ref={refreshLabelRef}
                 className="model-refresh-label"
                 aria-live="polite"
               >
                 {props.t(refreshModels.isPending ? "refreshingModels" : modelsRefreshed ? "modelsRefreshed" : "refreshModels")}
               </span>
             </Button>
-            <Badge>{props.providers.length}</Badge>
             <Button type="button" variant={addProviderOpen ? "secondary" : "outline"} size="sm" className="model-add-trigger" aria-expanded={addProviderOpen} onClick={() => {
               setAddProviderOpen((open) => !open);
               setSaveError(null);
@@ -460,7 +562,10 @@ function ModelSettings(props: BaseProps) {
                   key={provider.providerId}
                   className={selectedProviderId === provider.providerId ? "selected" : ""}
                   aria-pressed={selectedProviderId === provider.providerId}
-                  onClick={() => setSelectedProviderId(provider.providerId)}
+                  onClick={() => {
+                    setSelectedProviderId(provider.providerId);
+                    setSelectedTestKeys(new Set());
+                  }}
                 >
                   <span className="credential-provider-status"><Icon name="check-circle" size={14} /></span>
                   <span><strong>{providerName}</strong><small>{enabledModels.length}/{availableModels.length} {props.t("enabled").toLocaleLowerCase()}</small></span>
@@ -475,32 +580,50 @@ function ModelSettings(props: BaseProps) {
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => setRemoveProvider(selectedProviderId)}>{props.t("removeCredential")}</Button>
               </header>
-              <div className="model-test-toolbar">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={selectedTestKeys.size === 0 || testModels.isPending}
-                  onClick={() => runModelTests(selectedProviderModels.filter((model) => selectedTestKeys.has(`${model.providerId}/${model.modelId}`)))}
-                >
-                  <Icon name="refresh" className={testModels.isPending ? "is-spinning" : undefined} />
-                  {props.t(testModels.isPending ? "testingModels" : "testSelectedModels")}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={selectedProviderEnabledModels.length === 0 || testModels.isPending}
-                  onClick={() => runModelTests(selectedProviderEnabledModels)}
-                >
-                  <Icon name="refresh" className={testModels.isPending ? "is-spinning" : undefined} />
-                  {props.t("testEnabledModels")}
-                </Button>
+              <div className={`model-test-toolbar${selectedProviderTestModels.length > 0 ? " has-selection" : ""}`}>
+                <div className="model-test-selection-summary" aria-live="polite">
+                  {selectedProviderTestModels.length > 0 ? <strong>{selectedProviderTestModels.length}</strong> : <Icon name="check-circle" size={14} />}
+                  <span>{props.t(selectedProviderTestModels.length > 0 ? "modelsSelectedForTest" : "selectModelsForTest")}</span>
+                  {selectedProviderTestModels.length > 0 ? <Button type="button" variant="ghost" size="sm" onClick={clearTestSelection}>{props.t("clearSelection")}</Button> : null}
+                </div>
+                <div className="model-test-actions">
+                  <Button
+                    variant={selectedProviderTestModels.length > 0 ? "default" : "outline"}
+                    size="sm"
+                    disabled={selectedProviderTestModels.length === 0 || testModels.isPending}
+                    onClick={() => runModelTests(selectedProviderTestModels)}
+                  >
+                    <Icon name={testModels.isPending ? "refresh" : "play"} className={testModels.isPending ? "is-spinning" : undefined} />
+                    {props.t(testModels.isPending ? "testingModels" : "testSelectedModels")}
+                    {selectedProviderTestModels.length > 0 && !testModels.isPending ? <span className="model-test-button-count">{selectedProviderTestModels.length}</span> : null}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={selectedProviderEnabledModels.length === 0 || testModels.isPending}
+                    onClick={() => runModelTests(selectedProviderEnabledModels)}
+                  >
+                    {props.t("testEnabledModels")}
+                  </Button>
+                </div>
               </div>
               <div className="model-list-heading">
-                <span>{props.t("model")}</span>
-                <span>{props.t("testSelectedModels").replace(/\s.+$/, "")}</span>
+                <span>
+                  <button
+                    type="button"
+                    className={`model-test-checkbox${allProviderModelsSelected ? " is-checked" : ""}`}
+                    aria-label={props.t("selectAllModels")}
+                    aria-pressed={allProviderModelsSelected}
+                    disabled={selectedProviderModels.length === 0 || testModels.isPending}
+                    onClick={toggleAllTestSelection}
+                  >
+                    {allProviderModelsSelected ? <Icon name="check" size={14} /> : null}
+                  </button>
+                  {props.t("model")}
+                </span>
                 <span>{props.t("result")}</span>
                 <span>{props.t("defaultModel")}</span>
-                <span><em>{props.t("enabled")}</em><small>{selectedProviderEnabledModels.length}/{selectedProviderModels.length}</small></span>
+                <span><em>{props.t("enabled")}</em></span>
               </div>
               <div className="model-option-list">
                 {selectedProviderModels.length > 0
@@ -510,30 +633,34 @@ function ModelSettings(props: BaseProps) {
                     const isDisabled = disabledModelKeys.has(key);
                     const testResult = props.settings.modelTestResults[key];
                     const isSelectedForTest = selectedTestKeys.has(key);
-                    return <div key={model.modelId} className={`model-option${isDefault ? " is-default" : ""}${isDisabled ? " is-disabled" : ""}`}>
-                      <div className="model-option-info">
-                        <code title={model.modelId}>{model.modelName}</code>
-                      </div>
-                      <Button
+                    const isTesting = testModels.isPending && (testModels.variables ?? []).some((candidate) => `${candidate.providerId}/${candidate.modelId}` === key);
+                    return <div key={model.modelId} className={`model-option${isDefault ? " is-default" : ""}${isDisabled ? " is-disabled" : ""}${isSelectedForTest ? " is-selected-for-test" : ""}`}>
+                      <button
                         type="button"
-                        variant={isSelectedForTest ? "secondary" : "ghost"}
-                        size="sm"
-                        className="model-test-select"
+                        className="model-option-selection"
                         aria-pressed={isSelectedForTest}
+                        disabled={testModels.isPending}
                         onClick={() => toggleTestSelection(key)}
                       >
-                        {isSelectedForTest ? props.t("selectedForTest") : props.t("selectForTest")}
-                      </Button>
-                      <span className={`model-test-result${testResult ? (testResult.success ? " is-success" : " is-failed") : ""}`} title={testResult?.message}>
-                        {testResult ? modelTestResultLabel(testResult, props.settings.language, props.t) : "—"}
+                        <span className={`model-test-checkbox${isSelectedForTest ? " is-checked" : ""}`}>
+                          {isSelectedForTest ? <Icon name="check" size={14} /> : null}
+                        </span>
+                        <span className="model-option-info">
+                          <code title={model.modelId}>{model.modelName}</code>
+                        </span>
+                      </button>
+                      <span className={`model-test-result${isTesting ? " is-testing" : testResult ? (testResult.success ? " is-success" : " is-failed") : ""}`} title={testResult?.message}>
+                        <i />
+                        {isTesting ? props.t("testingModels") : testResult ? modelTestResultLabel(testResult, props.settings.language, props.t) : "—"}
                       </span>
                       <Button
                         type="button"
-                        variant={isDefault ? "secondary" : "outline"}
+                        variant="ghost"
                         size="sm"
-                        className="model-default-action"
+                        className={`model-default-action${isDefault ? " is-default" : ""}`}
                         disabled={isDefault || isDisabled}
                         aria-pressed={isDefault}
+                        aria-label={isDefault ? props.t("defaultModel") : `${props.t("setDefaultModel")}: ${model.modelName}`}
                         onClick={() => selectModel(model.providerId, model.modelId)}
                       >
                         {isDefault ? props.t("defaultModel") : props.t("setDefaultModel")}
