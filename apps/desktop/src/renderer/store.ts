@@ -21,6 +21,7 @@ export type SettingsSection =
   | "mcp"
   | "extensions"
   | "browser"
+  | "observability"
   | "shortcuts"
   | "about";
 

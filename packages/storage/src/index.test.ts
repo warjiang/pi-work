@@ -603,4 +603,120 @@ describe("PiWorkStore", () => {
     expect(store.getAttachment(attachment.id)).toBeNull();
     store.close();
   });
+
+  it("aggregates model usage into totals, by-model and by-day summaries", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const base = {
+      taskId: "task-1",
+      workspaceId: workspace.id,
+      requestId: "req-1",
+      messageId: null,
+      responseModel: null,
+      api: null,
+      stopReason: null,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+    };
+    store.recordModelUsage({
+      ...base,
+      provider: "anthropic",
+      model: "claude",
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+      totalCost: 0.3,
+    });
+    store.recordModelUsage({
+      ...base,
+      provider: "anthropic",
+      model: "claude",
+      inputTokens: 200,
+      outputTokens: 100,
+      totalTokens: 300,
+      totalCost: 0.6,
+    });
+    store.recordModelUsage({
+      ...base,
+      provider: "openai",
+      model: "gpt",
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      totalCost: 0.05,
+    });
+
+    const summary = store.usageSummary();
+    expect(summary.totals.requests).toBe(3);
+    expect(summary.totals.totalTokens).toBe(465);
+    expect(summary.totals.totalCost).toBeCloseTo(0.95, 5);
+    // Ordered by total cost descending: claude (0.9) then gpt (0.05).
+    expect(summary.byModel).toHaveLength(2);
+    expect(summary.byModel[0]?.model).toBe("claude");
+    expect(summary.byModel[0]?.requests).toBe(2);
+    expect(summary.byModel[0]?.totalCost).toBeCloseTo(0.9, 5);
+    expect(summary.byModel[1]?.model).toBe("gpt");
+    expect(summary.byDay).toHaveLength(1);
+    expect(summary.byDay[0]?.totalTokens).toBe(465);
+
+    // Filtering by a different workspace yields empty aggregates.
+    const empty = store.usageSummary({ since: null, until: null, workspaceId: "other" });
+    expect(empty.totals.requests).toBe(0);
+    expect(empty.totals.totalCost).toBe(0);
+    expect(empty.byModel).toHaveLength(0);
+    store.close();
+  });
+
+  it("stores and retries telemetry outbox entries and drops them when delivered", () => {
+    const store = new PiWorkStore();
+    const future = "2999-01-01T00:00:00.000Z";
+    store.enqueueTelemetry("{\"a\":1}");
+    store.enqueueTelemetry("{\"b\":2}", future);
+    expect(store.countTelemetryOutbox()).toBe(2);
+
+    // Only entries whose next attempt is due are returned.
+    const due = store.listDueTelemetry();
+    expect(due).toHaveLength(1);
+    expect(due[0]?.payload).toBe("{\"a\":1}");
+    expect(due[0]?.attempts).toBe(0);
+
+    // Recording a retry defers it into the future so it is no longer due now.
+    store.markTelemetryRetry(due[0]!.id, 1, future);
+    expect(store.listDueTelemetry()).toHaveLength(0);
+    expect(store.countTelemetryOutbox()).toBe(2);
+
+    store.deleteTelemetry(due[0]!.id);
+    expect(store.countTelemetryOutbox()).toBe(1);
+    store.close();
+  });
+
+  it("persists observability config with defaults and partial updates", () => {
+    const store = new PiWorkStore();
+    expect(store.getObservabilityConfig()).toEqual({
+      enabled: false,
+      host: "",
+      publicKey: "",
+      captureContent: true,
+    });
+    const updated = store.setObservabilityConfig({ enabled: true, host: "https://lf.example.com" });
+    expect(updated.enabled).toBe(true);
+    expect(updated.host).toBe("https://lf.example.com");
+    expect(updated.captureContent).toBe(true);
+    // Partial update leaves prior values intact.
+    store.setObservabilityConfig({ publicKey: "pk-lf-1" });
+    const reloaded = store.getObservabilityConfig();
+    expect(reloaded.enabled).toBe(true);
+    expect(reloaded.host).toBe("https://lf.example.com");
+    expect(reloaded.publicKey).toBe("pk-lf-1");
+    store.close();
+  });
 });

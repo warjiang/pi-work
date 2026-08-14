@@ -126,6 +126,80 @@ describe("PiAdapter", () => {
     ]);
   });
 
+  it("emits a usage event from an assistant message_end with tokens, cost and text output", () => {
+    const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const onEvent = (kind: string, payload: Record<string, unknown>) => events.push({ kind, payload });
+
+    consumeSessionEvent(
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet",
+          responseModel: "claude-sonnet-20240229",
+          api: "messages",
+          stopReason: "end_turn",
+          content: [
+            { type: "thinking", text: "ignored" },
+            { type: "text", text: "Hello " },
+            { type: "text", text: "world" },
+          ],
+          usage: {
+            input: 120,
+            output: 34,
+            cacheRead: 8,
+            cacheWrite: 2,
+            reasoning: 5,
+            totalTokens: 169,
+            cost: { input: 0.12, output: 0.34, cacheRead: 0.01, cacheWrite: 0.02, total: 0.49 },
+          },
+        },
+      },
+      [],
+      new Map<number, string>(),
+      onEvent,
+    );
+
+    expect(events).toEqual([
+      {
+        kind: "usage",
+        payload: {
+          provider: "anthropic",
+          model: "claude-sonnet",
+          responseModel: "claude-sonnet-20240229",
+          api: "messages",
+          stopReason: "end_turn",
+          output: "Hello world",
+          usage: {
+            input: 120,
+            output: 34,
+            cacheRead: 8,
+            cacheWrite: 2,
+            reasoning: 5,
+            totalTokens: 169,
+            cost: { input: 0.12, output: 0.34, cacheRead: 0.01, cacheWrite: 0.02, total: 0.49 },
+          },
+        },
+      },
+      { kind: "runtime", payload: { state: "message_end" } },
+    ]);
+  });
+
+  it("does not emit usage for a non-assistant message_end", () => {
+    const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const onEvent = (kind: string, payload: Record<string, unknown>) => events.push({ kind, payload });
+
+    consumeSessionEvent(
+      { type: "message_end", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+      [],
+      new Map<number, string>(),
+      onEvent,
+    );
+
+    expect(events).toEqual([{ kind: "runtime", payload: { state: "message_end" } }]);
+  });
+
   it("creates a structured read-only planning fallback", () => {
     const plan = new PiAdapter().createPlanningFallback({
       id: randomUUID(),

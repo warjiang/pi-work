@@ -7,7 +7,9 @@ import type {
   AppSettings,
   BuildInfo,
   ModelCatalog,
+  ObservabilitySettings,
   ProviderConfig,
+  UsageSummary,
   Workspace,
 } from "@pi-work/protocol";
 import {
@@ -98,6 +100,7 @@ export const settingsNavigationGroups = [
   {
     label: "settingsGroupInfo",
     sections: [
+      { id: "observability", icon: "eye" },
       { id: "about", icon: "info" },
     ],
   },
@@ -250,6 +253,7 @@ export function SettingsPage(props: {
               {activeSection === "skills" ? <SkillsPage embedded t={props.t} /> : null}
               {activeSection === "mcp" ? <McpSettingsPage t={props.t} /> : null}
               {activeSection === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} onOpenConsole={(command) => props.onOpenConsole?.(command)} /> : null}
+              {activeSection === "observability" ? <ObservabilitySettingsPage t={props.t} /> : null}
               {activeSection === "about" ? <AboutSettings buildInfo={props.buildInfo} t={props.t} /> : null}
             </div>
           )}
@@ -1167,5 +1171,188 @@ function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {
         ))}
       </dl>
     </SettingsSectionBlock>
+  );
+}
+
+function formatTokens(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.round(value));
+}
+
+function formatCost(value: number): string {
+  return `$${new Intl.NumberFormat(undefined, { minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }).format(value)}`;
+}
+
+const usageRangeDays: Record<"7" | "30" | "all", number | null> = { "7": 7, "30": 30, all: null };
+
+function ObservabilitySettingsPage(props: { t: T }) {
+  const { t } = props;
+  const queryClient = useQueryClient();
+  const observability = useQuery({ queryKey: ["observability"], queryFn: () => window.piWork.observability.get() });
+  const [range, setRange] = useState<"7" | "30" | "all">("30");
+  const since = useMemo(() => {
+    const days = usageRangeDays[range];
+    if (days === null) return null;
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date.toISOString();
+  }, [range]);
+  const usage = useQuery({
+    queryKey: ["usage-summary", since],
+    queryFn: () => window.piWork.observability.usage({ since, until: null, workspaceId: null }),
+  });
+
+  const [draft, setDraft] = useState<{ enabled: boolean; host: string; publicKey: string; captureContent: boolean } | null>(null);
+  const [secretKey, setSecretKey] = useState("");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    if (observability.data !== undefined && draft === null) {
+      setDraft({
+        enabled: observability.data.enabled,
+        host: observability.data.host,
+        publicKey: observability.data.publicKey,
+        captureContent: observability.data.captureContent,
+      });
+    }
+  }, [observability.data, draft]);
+
+  const update = useMutation({
+    mutationFn: (input: Record<string, unknown>) => window.piWork.observability.update(input),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["observability"], next);
+      setSecretKey("");
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2_000);
+    },
+  });
+
+  if (observability.data === undefined || draft === null) {
+    return (
+      <SettingsSectionBlock className="settings-observability" title={t("observability")} detail={t("observabilityDetail")} showTitle={false}>
+        <div className="settings-observability-loading"><Spinner /></div>
+      </SettingsSectionBlock>
+    );
+  }
+
+  const settings: ObservabilitySettings = observability.data;
+  const totals = usage.data?.totals;
+
+  const save = () => {
+    const input: Record<string, unknown> = {
+      enabled: draft.enabled,
+      host: draft.host.trim(),
+      publicKey: draft.publicKey.trim(),
+      captureContent: draft.captureContent,
+    };
+    if (secretKey.length > 0) input.secretKey = secretKey;
+    update.mutate(input);
+  };
+
+  return (
+    <SettingsSectionBlock className="settings-observability" title={t("observability")} detail={t("observabilityDetail")} showTitle={false}>
+      <SettingsSubsection className="settings-observability-config" title={t("observabilityLangfuse")} detail={t("observabilityConfigDetail")}>
+        {settings.envOverride ? (
+          <Alert>
+            <AlertDescription>{t("observabilityEnvOverride")}</AlertDescription>
+          </Alert>
+        ) : null}
+        <div className="settings-observability-toggle">
+          <div>
+            <strong>{t("observabilityEnable")}</strong>
+            <small>{t("observabilityEnableDetail")}</small>
+          </div>
+          <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked })} aria-label={t("observabilityEnable")} />
+        </div>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="langfuse-host">{t("observabilityHost")}</FieldLabel>
+            <Input id="langfuse-host" value={draft.host} placeholder="https://langfuse.example.com" onChange={(event) => setDraft({ ...draft, host: event.target.value })} />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="langfuse-public-key">{t("observabilityPublicKey")}</FieldLabel>
+            <Input id="langfuse-public-key" value={draft.publicKey} placeholder="pk-lf-..." onChange={(event) => setDraft({ ...draft, publicKey: event.target.value })} />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="langfuse-secret-key">{t("observabilitySecretKey")}</FieldLabel>
+            <Input
+              id="langfuse-secret-key"
+              type="password"
+              value={secretKey}
+              placeholder={settings.hasSecretKey ? settings.secretKeyMasked : "sk-lf-..."}
+              onChange={(event) => setSecretKey(event.target.value)}
+            />
+            <small>{settings.hasSecretKey ? t("observabilitySecretStored") : t("observabilitySecretDetail")}</small>
+          </Field>
+        </FieldGroup>
+        <div className="settings-observability-toggle">
+          <div>
+            <strong>{t("observabilityCaptureContent")}</strong>
+            <small>{t("observabilityCaptureContentDetail")}</small>
+          </div>
+          <Switch checked={draft.captureContent} onCheckedChange={(checked) => setDraft({ ...draft, captureContent: checked })} aria-label={t("observabilityCaptureContent")} />
+        </div>
+        <div className="settings-observability-actions">
+          <Button type="button" size="sm" onClick={save} disabled={update.isPending}>
+            {update.isPending ? <Spinner /> : null}{t("save")}
+          </Button>
+          {saved ? <span className="settings-observability-saved">{t("observabilitySaved")}</span> : null}
+          {update.isError ? <span className="settings-observability-error">{t("observabilitySaveFailed")}</span> : null}
+        </div>
+      </SettingsSubsection>
+
+      <SettingsSubsection className="settings-observability-usage" title={t("observabilityUsage")} detail={t("observabilityUsageDetail")}>
+        <div className="settings-observability-range" role="group" aria-label={t("observabilityRange")}>
+          {(["7", "30", "all"] as const).map((value) => (
+            <Button key={value} type="button" variant="ghost" size="sm" className={range === value ? "is-selected" : ""} aria-pressed={range === value} onClick={() => setRange(value)}>
+              {value === "all" ? t("observabilityRangeAll") : t(value === "7" ? "observabilityRange7" : "observabilityRange30")}
+            </Button>
+          ))}
+        </div>
+        {usage.data === undefined ? (
+          <div className="settings-observability-loading"><Spinner /></div>
+        ) : (
+          <>
+            <dl className="settings-observability-totals">
+              <div><dt>{t("observabilityRequests")}</dt><dd>{formatTokens(totals?.requests ?? 0)}</dd></div>
+              <div><dt>{t("observabilityTotalTokens")}</dt><dd>{formatTokens(totals?.totalTokens ?? 0)}</dd></div>
+              <div><dt>{t("observabilityInputTokens")}</dt><dd>{formatTokens(totals?.inputTokens ?? 0)}</dd></div>
+              <div><dt>{t("observabilityOutputTokens")}</dt><dd>{formatTokens(totals?.outputTokens ?? 0)}</dd></div>
+              <div><dt>{t("observabilityTotalCost")}</dt><dd>{formatCost(totals?.totalCost ?? 0)}</dd></div>
+            </dl>
+            <UsageByModelTable summary={usage.data} t={t} />
+          </>
+        )}
+      </SettingsSubsection>
+    </SettingsSectionBlock>
+  );
+}
+
+function UsageByModelTable(props: { summary: UsageSummary; t: T }) {
+  const { summary, t } = props;
+  if (summary.byModel.length === 0) {
+    return <p className="settings-observability-empty">{t("observabilityNoUsage")}</p>;
+  }
+  return (
+    <table className="settings-observability-table">
+      <thead>
+        <tr>
+          <th>{t("observabilityModel")}</th>
+          <th>{t("observabilityRequests")}</th>
+          <th>{t("observabilityInputTokens")}</th>
+          <th>{t("observabilityOutputTokens")}</th>
+          <th>{t("observabilityTotalCost")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {summary.byModel.map((row) => (
+          <tr key={`${row.provider}:${row.model}`}>
+            <td><span className="settings-observability-model">{row.model || t("unavailable")}</span><small>{row.provider}</small></td>
+            <td>{formatTokens(row.requests)}</td>
+            <td>{formatTokens(row.inputTokens)}</td>
+            <td>{formatTokens(row.outputTokens)}</td>
+            <td>{formatCost(row.totalCost)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

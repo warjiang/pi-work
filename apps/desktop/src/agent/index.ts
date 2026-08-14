@@ -15,7 +15,7 @@ function streamEvent(
   requestId: string,
   sessionId: string,
   sequence: number,
-  kind: "text_delta" | "thinking" | "tool_call" | "tool_update" | "tool_result" | "file_change" | "runtime" | "approval" | "error" | "completed" | "cancelled",
+  kind: "text_delta" | "thinking" | "tool_call" | "tool_update" | "tool_result" | "file_change" | "runtime" | "usage" | "approval" | "error" | "completed" | "cancelled",
   payload: Record<string, unknown>,
 ): void {
   process.parentPort?.postMessage(agentResponseSchema.parse({

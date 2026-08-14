@@ -919,7 +919,7 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     sessionId: z.uuid(),
     event: z.object({
       sequence: z.number().int().nonnegative(),
-      kind: z.enum(["text_delta", "thinking", "tool_call", "tool_update", "tool_result", "file_change", "runtime", "approval", "error", "completed", "cancelled"]),
+      kind: z.enum(["text_delta", "thinking", "tool_call", "tool_update", "tool_result", "file_change", "runtime", "approval", "usage", "error", "completed", "cancelled"]),
       payload: z.record(z.string(), z.unknown()),
       timestamp: z.string().datetime(),
     }),
@@ -948,3 +948,110 @@ export const eventSchema = z.object({
   payload: z.record(z.string(), z.unknown()),
 });
 export type WorkEvent = z.infer<typeof eventSchema>;
+
+// --- Observability (Langfuse) ---------------------------------------------
+
+export const observabilitySettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  host: z.string().trim().max(500).default(""),
+  publicKey: z.string().trim().max(200).default(""),
+  captureContent: z.boolean().default(true),
+  // Never carries the real secret to the renderer: masked (e.g. "sk-lf-••••4b79")
+  // when a secret is stored, empty string otherwise.
+  secretKeyMasked: z.string().max(200).default(""),
+  hasSecretKey: z.boolean().default(false),
+  // True when any field is overridden by a LANGFUSE_* environment variable.
+  envOverride: z.boolean().default(false),
+});
+export type ObservabilitySettings = z.infer<typeof observabilitySettingsSchema>;
+
+export const updateObservabilitySettingsInputSchema = z.object({
+  enabled: z.boolean().optional(),
+  host: z.string().trim().max(500).optional(),
+  publicKey: z.string().trim().max(200).optional(),
+  captureContent: z.boolean().optional(),
+  // Presence means "replace"; empty string clears the stored secret; omitted keeps it.
+  secretKey: z.string().max(200).optional(),
+});
+export type UpdateObservabilitySettingsInput = z.infer<typeof updateObservabilitySettingsInputSchema>;
+
+export const modelUsageSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  workspaceId: z.string().nullable(),
+  requestId: z.string(),
+  messageId: z.string().nullable(),
+  provider: z.string(),
+  model: z.string(),
+  responseModel: z.string().nullable(),
+  api: z.string().nullable(),
+  stopReason: z.string().nullable(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative(),
+  cacheWriteTokens: z.number().int().nonnegative(),
+  reasoningTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  inputCost: z.number().nonnegative(),
+  outputCost: z.number().nonnegative(),
+  cacheReadCost: z.number().nonnegative(),
+  cacheWriteCost: z.number().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  createdAt: z.string(),
+});
+export type ModelUsage = z.infer<typeof modelUsageSchema>;
+
+export const recordModelUsageInputSchema = modelUsageSchema.omit({ id: true, createdAt: true }).extend({
+  workspaceId: z.string().nullable().default(null),
+  messageId: z.string().nullable().default(null),
+  responseModel: z.string().nullable().default(null),
+  api: z.string().nullable().default(null),
+  stopReason: z.string().nullable().default(null),
+});
+export type RecordModelUsageInput = z.infer<typeof recordModelUsageInputSchema>;
+
+export const usageQueryInputSchema = z.object({
+  // ISO date/time lower bound (inclusive), or null for all-time.
+  since: z.string().nullable().default(null),
+  until: z.string().nullable().default(null),
+  workspaceId: z.string().nullable().default(null),
+});
+export type UsageQueryInput = z.infer<typeof usageQueryInputSchema>;
+
+export const usageTotalsSchema = z.object({
+  requests: z.number().int().nonnegative(),
+  inputTokens: z.number().nonnegative(),
+  outputTokens: z.number().nonnegative(),
+  cacheReadTokens: z.number().nonnegative(),
+  cacheWriteTokens: z.number().nonnegative(),
+  reasoningTokens: z.number().nonnegative(),
+  totalTokens: z.number().nonnegative(),
+  totalCost: z.number().nonnegative(),
+});
+export type UsageTotals = z.infer<typeof usageTotalsSchema>;
+
+export const usageByModelSchema = usageTotalsSchema.extend({
+  provider: z.string(),
+  model: z.string(),
+});
+export type UsageByModel = z.infer<typeof usageByModelSchema>;
+
+export const usageByDaySchema = usageTotalsSchema.extend({
+  day: z.string(),
+});
+export type UsageByDay = z.infer<typeof usageByDaySchema>;
+
+export const usageSummarySchema = z.object({
+  totals: usageTotalsSchema,
+  byModel: z.array(usageByModelSchema),
+  byDay: z.array(usageByDaySchema),
+});
+export type UsageSummary = z.infer<typeof usageSummarySchema>;
+
+export const observabilityStoredConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  host: z.string().trim().max(500).default(""),
+  publicKey: z.string().trim().max(200).default(""),
+  captureContent: z.boolean().default(true),
+});
+export type ObservabilityStoredConfig = z.infer<typeof observabilityStoredConfigSchema>;

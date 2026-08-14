@@ -18,6 +18,7 @@ import type {
   ModelCatalog,
   ModelTestResult,
   Label,
+  ObservabilitySettings,
   Plan,
   ProviderConfig,
   Session,
@@ -26,6 +27,7 @@ import type {
   StatusDefinition,
   Task,
   ToolApproval,
+  UsageSummary,
   Workspace,
 } from "@pi-work/protocol";
 
@@ -45,6 +47,11 @@ declare global {
       settings: {
         get(): Promise<AppSettings>;
         update(input: unknown): Promise<AppSettings>;
+      };
+      observability: {
+        get(): Promise<ObservabilitySettings>;
+        update(input: unknown): Promise<ObservabilitySettings>;
+        usage(input?: unknown): Promise<UsageSummary>;
       };
       system: {
         openExternal(url: string): Promise<void>;
