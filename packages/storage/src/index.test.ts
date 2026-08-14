@@ -223,6 +223,39 @@ describe("PiWorkStore", () => {
     store.close();
   });
 
+  it("stores MCP servers globally while regular sources remain folder-scoped", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product",
+      outputPath: "/workspace/product/Pi Work",
+    });
+    const mcp = store.createSource({
+      workspaceId: null,
+      name: "Remote tools",
+      type: "mcp_http",
+      enabled: true,
+      config: {
+        url: "https://example.com/mcp",
+        transport: "streamable_http",
+        headers: {},
+        auth: "none",
+      },
+    });
+
+    expect(store.listGlobalMcpSources()).toEqual([mcp]);
+    expect(store.listSources(workspace.id)).toEqual([]);
+    expect(() => store.createSource({
+      workspaceId: null,
+      name: "Global files",
+      type: "local",
+      enabled: false,
+      config: {},
+    })).toThrow("work folder");
+
+    store.close();
+  });
+
   it("promotes a personal session into a folder task without losing its history", () => {
     const store = new PiWorkStore();
     const folder = store.createWorkspace({

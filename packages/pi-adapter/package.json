@@ -12,8 +12,9 @@
     "test": "vitest run --exclude dist/**"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@pi-work/protocol": "workspace:*",
     "npm": "11.6.2",
     "zod": "4.4.3"

@@ -14,20 +14,25 @@ type T = (key: MessageKey) => string;
 export function PiConsolePanel({
   commandRequest,
   cwd,
+  height,
   open,
   t,
   onClose,
   onClosed,
+  onResize,
 }: {
   commandRequest: { id: number; value: string } | null;
   cwd?: string;
+  height: number;
   open: boolean;
   t: T;
   onClose(): void;
   onClosed(): void;
+  onResize(height: number, commit: boolean): void;
 }) {
   const queryClient = useQueryClient();
   const panelRef = useRef<HTMLElement>(null);
+  const resizeState = useRef<{ pointerId: number; startY: number; startHeight: number; latestHeight: number } | null>(null);
   const [terminalElement, setTerminalElement] = useState<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const receivedProcessDataRef = useRef(false);
@@ -59,6 +64,14 @@ export function PiConsolePanel({
     ]);
   };
 
+  const finishResize = (pointerId: number) => {
+    const state = resizeState.current;
+    if (state === null || state.pointerId !== pointerId) return;
+    resizeState.current = null;
+    onResize(state.latestHeight, true);
+    requestAnimationFrame(() => terminalRef.current?.focus());
+  };
+
   useEffect(() => {
     if (terminalElement === null) return;
     setStatus("starting");
@@ -70,6 +83,9 @@ export function PiConsolePanel({
         convertEol: true,
         fontFamily: '"SFMono-Regular", Menlo, Monaco, Consolas, monospace',
         fontSize: 12,
+        lineHeight: 1,
+        letterSpacing: 0,
+        customGlyphs: true,
         theme: { background: "#111214", foreground: "#e7e7e9", cursor: "#f2f2f2", selectionBackground: "#ffffff2b" },
       });
       const fit = new FitAddon();
@@ -238,6 +254,50 @@ export function PiConsolePanel({
       aria-hidden={!open}
       inert={!open ? true : undefined}
     >
+      <div
+        className="pi-console-resize-handle"
+        role="separator"
+        aria-label={t("resizeTerminal")}
+        aria-orientation="horizontal"
+        aria-valuemin={180}
+        aria-valuemax={Math.max(180, window.innerHeight - 180)}
+        aria-valuenow={height}
+        tabIndex={0}
+        onDoubleClick={() => onResize(window.innerHeight * 0.38, true)}
+        onKeyDown={(event) => {
+          let nextHeight = height;
+          if (event.key === "ArrowUp") nextHeight += 16;
+          else if (event.key === "ArrowDown") nextHeight -= 16;
+          else if (event.key === "PageUp") nextHeight += 64;
+          else if (event.key === "PageDown") nextHeight -= 64;
+          else if (event.key === "Home") nextHeight = 180;
+          else if (event.key === "End") nextHeight = window.innerHeight - 180;
+          else return;
+          event.preventDefault();
+          onResize(nextHeight, true);
+        }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          resizeState.current = {
+            pointerId: event.pointerId,
+            startY: event.clientY,
+            startHeight: height,
+            latestHeight: height,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.preventDefault();
+        }}
+        onPointerMove={(event) => {
+          const state = resizeState.current;
+          if (state === null || state.pointerId !== event.pointerId) return;
+          const nextHeight = state.startHeight + state.startY - event.clientY;
+          state.latestHeight = nextHeight;
+          onResize(nextHeight, false);
+        }}
+        onPointerUp={(event) => finishResize(event.pointerId)}
+        onPointerCancel={(event) => finishResize(event.pointerId)}
+        onLostPointerCapture={(event) => finishResize(event.pointerId)}
+      />
       <header className="pi-console-panel-header">
         <div className="pi-console-tab">
           <Icon name="terminal" size={14} />

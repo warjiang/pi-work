@@ -1,19 +1,25 @@
 import type { Dirent } from "node:fs";
-import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { Skill, SystemSkill } from "@pi-work/protocol";
+import type { MarketplaceSkill, RemoteSkillPreview, Skill, SkillFileContent, SkillSource, SystemSkill } from "@pi-work/protocol";
 import {
   createSkillInputSchema,
+  installRemoteSkillsInputSchema,
+  previewRemoteSkillInputSchema,
+  readSkillFileInputSchema,
+  searchSkillMarketplaceInputSchema,
   skillSchema,
   updateSkillInputSchema,
 } from "@pi-work/protocol";
 import { PiWorkStore } from "@pi-work/storage";
+import { SkillRemoteResolver } from "./skill-remote.js";
 
 const skillFileName = "SKILL.md";
 const maxSkillFileEntries = 200;
 const maxSkillFileDepth = 6;
+const maxReadableSkillFileBytes = 1_048_576;
 
 export type SkillFolderEntry = {
   name: string;
@@ -23,12 +29,16 @@ export type SkillFolderEntry = {
 
 export class SkillManager {
   private migration: Promise<void> | null = null;
+  private readonly remote: SkillRemoteResolver;
 
   constructor(
     private readonly store: PiWorkStore,
     private readonly userDataPath: string,
     private readonly externalSkillRoots?: SystemSkillRoot[],
-  ) {}
+    remoteResolver?: SkillRemoteResolver,
+  ) {
+    this.remote = remoteResolver ?? new SkillRemoteResolver();
+  }
 
   async list(): Promise<Skill[]> {
     await this.ensureMigrated();
@@ -39,6 +49,29 @@ export class SkillManager {
     await this.ensureMigrated();
     this.requireSkill(id);
     return collectSkillFolderEntries(this.directoryFor(id));
+  }
+
+  async readFile(input: unknown): Promise<SkillFileContent> {
+    await this.ensureMigrated();
+    const value = readSkillFileInputSchema.parse(input);
+    this.requireSkill(value.id);
+    if (isAbsolute(value.path)) throw new Error("Skill file paths must be relative.");
+    const root = await realpath(this.directoryFor(value.id));
+    const target = resolve(root, value.path);
+    assertPathInside(root, target);
+    const file = await lstat(target);
+    if (file.isSymbolicLink() || !file.isFile()) throw new Error("The selected Skill path is not a readable file.");
+    if (file.size > maxReadableSkillFileBytes) throw new Error("This Skill file is larger than the 1 MiB viewing limit.");
+    const resolvedTarget = await realpath(target);
+    assertPathInside(root, resolvedTarget);
+    const contents = await readFile(resolvedTarget);
+    if (contents.includes(0)) throw new Error("Binary Skill files cannot be previewed.");
+    return {
+      path: value.path,
+      content: contents.toString("utf8"),
+      language: skillFileLanguage(value.path),
+      size: file.size,
+    };
   }
 
   async scanSystem(): Promise<SystemSkill[]> {
@@ -65,6 +98,75 @@ export class SkillManager {
     return discovered.sort((left, right) => left.name.localeCompare(right.name) || left.path.localeCompare(right.path));
   }
 
+  async searchMarketplace(input: unknown): Promise<MarketplaceSkill[]> {
+    await this.ensureMigrated();
+    const value = searchSkillMarketplaceInputSchema.parse(input);
+    return this.remote.searchMarketplace(value, new Set(this.store.listGlobalSkills().map(({ name }) => name)));
+  }
+
+  async previewRemote(input: unknown): Promise<RemoteSkillPreview> {
+    await this.ensureMigrated();
+    const value = previewRemoteSkillInputSchema.parse(input);
+    return this.remote.preview({
+      sourceUrl: value.sourceUrl,
+      provider: value.provider,
+      ...(value.skillId === undefined ? {} : { skillId: value.skillId }),
+    }, new Set(this.store.listGlobalSkills().map(({ name }) => name)));
+  }
+
+  async installRemote(input: unknown): Promise<Skill[]> {
+    await this.ensureMigrated();
+    const value = installRemoteSkillsInputSchema.parse(input);
+    const preview = this.remote.requirePreview(value.previewId);
+    const requested = new Set(value.skillIds);
+    const candidates = preview.candidates.filter(({ id }) => requested.has(id));
+    if (candidates.length !== requested.size) throw new Error("One or more selected Skills are no longer available.");
+    const names = new Set<string>();
+    for (const candidate of candidates) {
+      this.assertNameAvailable(candidate.name);
+      if (names.has(candidate.name)) throw new Error(`The source contains more than one Skill named "${candidate.name}".`);
+      names.add(candidate.name);
+    }
+    const installed: Skill[] = [];
+    try {
+      for (const candidate of candidates) {
+        const skill = this.store.createDomainEntity("skill", skillSchema, {
+          workspaceId: null,
+          name: candidate.name,
+          description: candidate.description,
+          instructions: parseSkillFile(await readFile(join(candidate.directory, skillFileName), "utf8")).instructions,
+          enabled: true,
+          source: this.remote.sourceFor(preview, candidate),
+        });
+        installed.push(skill);
+        await cp(candidate.directory, this.directoryFor(skill.id), {
+          recursive: true,
+          errorOnExist: true,
+          verbatimSymlinks: false,
+          filter: async (source) => {
+            if (source !== candidate.directory && [".git", "node_modules"].includes(source.split(sep).at(-1) ?? "")) return false;
+            if ((await lstat(source)).isSymbolicLink()) throw new Error("Skill sources cannot contain symbolic links.");
+            return true;
+          },
+        });
+        await this.configureEnabled(skill.id, true);
+      }
+      await this.remote.removePreview(value.previewId);
+      return installed;
+    } catch (error) {
+      await Promise.all(installed.map(async (skill) => {
+        this.store.removeDomainEntity("skill", skill.id);
+        await this.removeConfiguredSkill(skill.id).catch(() => undefined);
+        await rm(this.directoryFor(skill.id), { recursive: true, force: true });
+      }));
+      throw error;
+    }
+  }
+
+  async cancelRemotePreview(previewId: string): Promise<void> {
+    await this.remote.removePreview(previewId);
+  }
+
   async create(input: unknown): Promise<Skill> {
     await this.ensureMigrated();
     const value = createSkillInputSchema.parse(input);
@@ -72,6 +174,7 @@ export class SkillManager {
     const skill = this.store.createDomainEntity("skill", skillSchema, {
       workspaceId: null,
       ...value,
+      source: { type: "created" },
     });
     await this.writeSkillFile(skill);
     await this.configureEnabled(skill.id, skill.enabled);
@@ -108,6 +211,7 @@ export class SkillManager {
       description: parsed.description,
       instructions: parsed.instructions,
       enabled: true,
+      source: this.sourceForImportedDirectory(sourceRoot),
     });
     const destination = this.directoryFor(skill.id);
     try {
@@ -138,6 +242,10 @@ export class SkillManager {
       : this.store.updateDomainEntity("skill", skillSchema, id, { enabled, workspaceId: null });
     await this.configureEnabled(id, enabled);
     return skill;
+  }
+
+  async dispose(): Promise<void> {
+    await this.remote.dispose();
   }
 
   private async configureEnabled(id: string, enabled: boolean): Promise<void> {
@@ -196,6 +304,16 @@ export class SkillManager {
   private assertNameAvailable(name: string, exceptId?: string): void {
     const duplicate = this.store.listGlobalSkills().find((skill) => skill.name === name && skill.id !== exceptId);
     if (duplicate !== undefined) throw new Error(`A Skill named "${name}" already exists.`);
+  }
+
+  private sourceForImportedDirectory(sourceRoot: string): SkillSource {
+    const systemRoot = this.systemSkillRoots.find((root) => {
+      const difference = relative(resolve(root.path), sourceRoot);
+      return difference === "" || (difference !== ".." && !difference.startsWith(`..${sep}`) && !isAbsolute(difference));
+    });
+    return systemRoot === undefined
+      ? { type: "local", path: sourceRoot }
+      : { type: "system", provider: systemRoot.source, path: sourceRoot };
   }
 
   private async writeSkillFile(skill: Skill): Promise<void> {
@@ -280,6 +398,36 @@ async function collectSkillFolderEntries(root: string): Promise<SkillFolderEntry
   };
   await visit(root, 0);
   return entries;
+}
+
+function assertPathInside(root: string, target: string): void {
+  const nested = relative(root, target);
+  if (nested === "" || nested === ".." || nested.startsWith(`..${sep}`) || isAbsolute(nested)) {
+    throw new Error("Skill file path escapes the managed Skill folder.");
+  }
+}
+
+function skillFileLanguage(path: string): string {
+  const extension = extname(path).toLowerCase();
+  const languages: Record<string, string> = {
+    ".css": "CSS",
+    ".html": "HTML",
+    ".js": "JavaScript",
+    ".json": "JSON",
+    ".jsx": "JSX",
+    ".md": "Markdown",
+    ".mjs": "JavaScript",
+    ".py": "Python",
+    ".sh": "Shell",
+    ".svg": "SVG",
+    ".toml": "TOML",
+    ".ts": "TypeScript",
+    ".tsx": "TSX",
+    ".txt": "Text",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+  };
+  return languages[extension] ?? (extension ? extension.slice(1).toUpperCase() : "Text");
 }
 
 async function findSkillDirectories(root: string): Promise<string[]> {

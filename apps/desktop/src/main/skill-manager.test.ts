@@ -1,10 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { PiWorkStore } from "@pi-work/storage";
+import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { SkillManager } from "./skill-manager.js";
+import { SkillRemoteResolver } from "./skill-remote.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -25,6 +27,29 @@ async function createFixture() {
   };
 }
 
+async function createRemoteArchive(userData: string, names: string[]): Promise<Buffer> {
+  const source = join(userData, "remote-source");
+  await mkdir(source, { recursive: true });
+  for (const name of names) {
+    await mkdir(join(source, name), { recursive: true });
+    await writeFile(join(source, name, "SKILL.md"), [
+      "---",
+      `name: ${name}`,
+      `description: Handles ${name}.`,
+      "---",
+      `# ${name}`,
+      "",
+    ].join("\n"), "utf8");
+  }
+  const archive = join(userData, "remote-skills.tgz");
+  await tar.c({ cwd: source, file: archive, gzip: true }, names);
+  return readFile(archive);
+}
+
+function responseBody(content: Buffer): ArrayBuffer {
+  return content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
+}
+
 describe("SkillManager", () => {
   it("writes managed SKILL.md files and preserves unrelated Pi settings", async () => {
     const { userData, manager } = await createFixture();
@@ -42,6 +67,7 @@ describe("SkillManager", () => {
       instructions: "# Instructions\nCheck every page.",
       enabled: true,
     });
+    expect(skill.source).toEqual({ type: "created" });
 
     await expect(readFile(join(agentDir, "skills", skill.id, "SKILL.md"), "utf8")).resolves.toBe(
       "---\nname: pdf-review\ndescription: Reviews PDF documents.\n---\n# Instructions\nCheck every page.\n",
@@ -92,6 +118,7 @@ describe("SkillManager", () => {
     await writeFile(join(source, "references", "guide.md"), "# Guide\n", "utf8");
 
     const skill = await manager.import(source);
+    expect(skill.source).toEqual({ type: "local", path: source });
     const destination = join(userData, "pi-agent", "skills", skill.id);
     await expect(readFile(join(destination, "scripts", "review.mjs"), "utf8")).resolves.toBe("export default 1;\n");
     await expect(readFile(join(destination, "references", "guide.md"), "utf8")).resolves.toBe("# Guide\n");
@@ -102,6 +129,14 @@ describe("SkillManager", () => {
       { name: "review.mjs", path: "scripts/review.mjs", type: "file" },
       { name: "SKILL.md", path: "SKILL.md", type: "file" },
     ]);
+    await expect(manager.readFile({ id: skill.id, path: "scripts/review.mjs" })).resolves.toEqual({
+      path: "scripts/review.mjs",
+      content: "export default 1;\n",
+      language: "JavaScript",
+      size: 18,
+    });
+    await expect(manager.readFile({ id: skill.id, path: "../SKILL.md" })).rejects.toThrow("escapes the managed Skill folder");
+    await expect(manager.readFile({ id: skill.id, path: "scripts" })).rejects.toThrow("not a readable file");
     await expect(readFile(join(source, "SKILL.md"), "utf8")).resolves.toContain("disable-model-invocation: true");
     await manager.update(skill.id, {
       name: "pdf-review",
@@ -168,6 +203,85 @@ describe("SkillManager", () => {
       imported: false,
     }]);
     await manager.import(join(systemRoot, "nested", "valid"));
+    await expect(manager.list()).resolves.toMatchObject([{
+      source: {
+        type: "system",
+        provider: "codex",
+        path: join(systemRoot, "nested", "valid"),
+      },
+    }]);
     await expect(manager.scanSystem()).resolves.toMatchObject([{ name: "system-review", imported: true }]);
+  });
+
+  it("installs remote Skills with provenance and consumes the preview", async () => {
+    const { userData, store } = await createFixture();
+    const archive = await createRemoteArchive(userData, ["remote-review"]);
+    const resolver = new SkillRemoteResolver(async () => new Response(responseBody(archive), {
+      headers: { "content-type": "application/gzip" },
+    }));
+    const manager = new SkillManager(store, userData, [], resolver);
+    const preview = await manager.previewRemote({
+      sourceUrl: "https://example.com/remote-skills.tgz",
+      provider: "url",
+    });
+
+    const [skill] = await manager.installRemote({
+      previewId: preview.previewId,
+      skillIds: preview.skills.map(({ id }) => id),
+    });
+
+    expect(skill?.source).toEqual({
+      type: "remote",
+      provider: "url",
+      sourceUrl: "https://example.com/remote-skills.tgz",
+      skillId: "remote-review",
+      subpath: "remote-review",
+    });
+    await expect(readFile(join(userData, "pi-agent", "skills", skill?.id ?? "", "SKILL.md"), "utf8"))
+      .resolves.toContain("# remote-review");
+    expect(() => resolver.requirePreview(preview.previewId)).toThrow(/expired/i);
+  });
+
+  it("cancels a remote preview and removes its temporary session", async () => {
+    const { userData, store } = await createFixture();
+    const archive = await createRemoteArchive(userData, ["cancelled-review"]);
+    const resolver = new SkillRemoteResolver(async () => new Response(responseBody(archive), {
+      headers: { "content-type": "application/gzip" },
+    }));
+    const manager = new SkillManager(store, userData, [], resolver);
+    const preview = await manager.previewRemote({
+      sourceUrl: "https://example.com/remote-skills.tgz",
+      provider: "url",
+    });
+
+    await manager.cancelRemotePreview(preview.previewId);
+
+    expect(() => resolver.requirePreview(preview.previewId)).toThrow(/expired/i);
+  });
+
+  it("rolls back an entire remote batch if a later Skill cannot be installed", async () => {
+    const { userData, store } = await createFixture();
+    const archive = await createRemoteArchive(userData, ["first-remote", "second-remote"]);
+    const resolver = new SkillRemoteResolver(async () => new Response(responseBody(archive), {
+      headers: { "content-type": "application/gzip" },
+    }));
+    const manager = new SkillManager(store, userData, [], resolver);
+    const preview = await manager.previewRemote({
+      sourceUrl: "https://example.com/remote-skills.tgz",
+      provider: "url",
+    });
+    const session = resolver.requirePreview(preview.previewId);
+    const lastCandidate = session.candidates.at(-1);
+    if (lastCandidate === undefined) throw new Error("Expected a second remote Skill.");
+    await rm(lastCandidate.directory, { recursive: true, force: true });
+
+    await expect(manager.installRemote({
+      previewId: preview.previewId,
+      skillIds: preview.skills.map(({ id }) => id),
+    })).rejects.toThrow();
+
+    await expect(manager.list()).resolves.toEqual([]);
+    const managedRoot = join(userData, "pi-agent", "skills");
+    await expect(readdir(managedRoot).catch(() => [])).resolves.toEqual([]);
   });
 });

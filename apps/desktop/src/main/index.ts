@@ -21,6 +21,7 @@ import type {
   ToolApproval,
   Automation,
   PermissionMode,
+  McpRuntimeServer,
 } from "@pi-work/protocol";
 import {
   agentResponseSchema,
@@ -39,6 +40,7 @@ import {
   browserBoundsInputSchema,
   browserNavigateInputSchema,
   buildInfoSchema,
+  cancelRemoteSkillPreviewInputSchema,
   createDomainEntityInputSchema,
   generatePlanInputSchema,
   completeTaskInputSchema,
@@ -48,14 +50,26 @@ import {
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   importSkillInputSchema,
+  installRemoteSkillsInputSchema,
   installManagedCliInputSchema,
   managedCliExecutionResultSchema,
   managedCliPackageSchema,
+  mcpAuthorizeInputSchema,
+  mcpAuthorizationStatusSchema,
+  mcpCallToolInputSchema,
+  mcpCallToolResultSchema,
+  mcpHttpConfigSchema,
+  mcpInspectInputSchema,
+  mcpInspectResultSchema,
+  mcpStdioConfigSchema,
   planSchema,
   promoteSessionInputSchema,
   publishArtifactInputSchema,
+  previewRemoteSkillInputSchema,
+  readSkillFileInputSchema,
   resumeTaskInputSchema,
   sendChatInputSchema,
+  searchSkillMarketplaceInputSchema,
   setProviderCredentialInputSchema,
   taskSchema,
   statusDefinitionSchema,
@@ -83,6 +97,7 @@ import { PiWorkStore } from "@pi-work/storage";
 import { CredentialBroker } from "./credential-broker.js";
 import { ManagedCliRuntime, SessionEnvironmentStore } from "./managed-cli.js";
 import { SkillManager } from "./skill-manager.js";
+import { McpOAuthManager } from "./mcp-oauth.js";
 import {
   createIsolatedPiEnvironment,
   PiConsole,
@@ -100,6 +115,7 @@ let piConsole: PiConsole | null = null;
 let managedCliRuntime: ManagedCliRuntime | null = null;
 let browserView: WebContentsView | null = null;
 let skillManager: SkillManager | null = null;
+let mcpOAuthManager: McpOAuthManager | null = null;
 const sessionEnvironments = new SessionEnvironmentStore();
 const pendingAgentRequests = new Map<string, {
   resolve: (response: AgentResponse) => void;
@@ -359,6 +375,7 @@ async function agentImagesForAttachments(attachments: Array<{
 function getStore(): PiWorkStore {
   if (store === undefined) {
     store = new PiWorkStore(applicationDatabasePath());
+    store.migrateMcpSourcesToGlobal();
   }
   return store;
 }
@@ -376,6 +393,14 @@ function getCredentialBroker(): CredentialBroker {
     );
   }
   return credentialBroker;
+}
+
+function getMcpOAuthManager(): McpOAuthManager {
+  mcpOAuthManager ??= new McpOAuthManager(
+    join(app.getPath("userData"), "mcp-oauth.json"),
+    (url) => shell.openExternal(url),
+  );
+  return mcpOAuthManager;
 }
 
 function sendPiConsoleEvent(event: PiConsoleEvent): void {
@@ -672,6 +697,7 @@ async function generateChat(
   runtime: AgentRuntime,
   permissionMode: PermissionMode,
   images: AgentImageAttachment[],
+  mcpServers: McpRuntimeServer[],
 ): Promise<{ content: string; cancelled: boolean; requestId: string }> {
   const response = await sendAgentRequest({
     type: "chat",
@@ -683,6 +709,7 @@ async function generateChat(
     thinkingLevel,
     runtime,
     permissionMode,
+    mcpServers,
   }, 15 * 60_000);
   if (response.type === "error") {
     throw new AgentRequestError(response.message, response.requestId);
@@ -693,8 +720,31 @@ async function generateChat(
   return { content: response.content, cancelled: response.cancelled, requestId: response.requestId };
 }
 
+async function generateConversationTitle(
+  prompt: string,
+  response: string,
+  provider: SetProviderCredentialInput | null,
+  modelId: string,
+  thinkingLevel: ThinkingLevel,
+  runtime: AgentRuntime,
+): Promise<string> {
+  const result = await sendAgentRequest({
+    type: "title",
+    prompt,
+    response,
+    provider: provider ?? undefined,
+    modelId,
+    thinkingLevel,
+    runtime,
+  });
+  if (result.type === "error") throw new Error(result.message);
+  if (result.type !== "title") throw new Error("Pi title service returned an unexpected response.");
+  return result.title;
+}
+
 async function runChatInBackground(input: {
   taskId: string;
+  workspaceId: string;
   providerId: string;
   modelId: string;
   thinkingLevel: ThinkingLevel;
@@ -713,11 +763,28 @@ async function runChatInBackground(input: {
       input.runtime,
       input.permissionMode,
       input.images,
+      await runtimeMcpServers(),
     );
     const assistant = response.content !== ""
       ? getStore().addMessage({ taskId: input.taskId, role: "assistant", content: response.content })
       : null;
     flushRunActivities(response.requestId, input.taskId, assistant?.id ?? null);
+    const session = getStore().getTask(input.taskId);
+    if (assistant !== null && !response.cancelled && session?.title === "New session") {
+      void generateConversationTitle(
+        getStore().listMessages(input.taskId).find((message) => message.role === "user")?.content ?? "",
+        assistant.content,
+        await providerCredential(input.providerId),
+        input.modelId,
+        input.thinkingLevel,
+        input.runtime,
+      ).then((title) => {
+        const current = getStore().getTask(input.taskId);
+        if (current?.title === "New session") getStore().updateSession(input.taskId, { title });
+      }).catch(() => {
+        // A title is a convenience; preserve the usable session if generation fails.
+      });
+    }
   } catch (error) {
     if (error instanceof AgentRequestError) {
       persistRunError(error.requestId, input.taskId, error);
@@ -735,11 +802,6 @@ async function runChatInBackground(input: {
     }
     activeAgentSessions.delete(input.taskId);
   }
-}
-
-function taskTitle(content: string): string {
-  const firstLine = content.split(/\r?\n/, 1)[0]?.replace(/^#+\s*/, "").trim() ?? "";
-  return firstLine.length <= 60 ? firstLine : `${firstLine.slice(0, 57).trimEnd()}…`;
 }
 
 function mimeTypeForPath(path: string): string {
@@ -858,6 +920,97 @@ async function providerCredential(providerId: string): Promise<SetProviderCreden
     throw new Error(`No credential is configured for ${providerId}. Open Settings to add one.`);
   }
   return credential;
+}
+
+async function runtimeMcpServers(): Promise<McpRuntimeServer[]> {
+  const servers: McpRuntimeServer[] = [];
+  for (const source of getStore().listGlobalMcpSources()) {
+    if (!source.enabled) continue;
+    if (source.type === "mcp_stdio") {
+      servers.push({
+        id: source.id,
+        name: source.name,
+        type: "mcp_stdio",
+        config: mcpStdioConfigSchema.parse(source.config),
+      });
+      continue;
+    }
+    if (source.type !== "mcp_http") continue;
+    const config = mcpHttpConfigSchema.parse(source.config);
+    if (config.auth !== "oauth") {
+      servers.push({ id: source.id, name: source.name, type: "mcp_http", config });
+      continue;
+    }
+    const bearerToken = await getMcpOAuthManager().accessToken(source);
+    if (bearerToken === null) {
+      throw new Error(`MCP source "${source.name}" needs authorization. Open Sources and choose Authorize.`);
+    }
+    servers.push({
+      id: source.id,
+      name: source.name,
+      type: "mcp_http",
+      config: { ...config, bearerToken },
+    });
+  }
+  return servers;
+}
+
+async function mcpRuntimeServer(sourceId: string): Promise<{ server: McpRuntimeServer; runtime: AgentRuntime }> {
+  const source = findSource(sourceId);
+  if (source === undefined || (source.type !== "mcp_stdio" && source.type !== "mcp_http")) {
+    throw new Error("Unknown MCP source.");
+  }
+  if (source.type === "mcp_stdio") {
+    return {
+      server: {
+        id: source.id,
+        name: source.name,
+        type: "mcp_stdio",
+        config: mcpStdioConfigSchema.parse(source.config),
+      },
+      runtime: agentRuntime(),
+    };
+  }
+  const config = mcpHttpConfigSchema.parse(source.config);
+  const runtimeConfig = config.auth === "oauth"
+    ? { ...config, bearerToken: await getMcpOAuthManager().accessToken(source) ?? undefined }
+    : config;
+  return {
+    server: {
+      id: source.id,
+      name: source.name,
+      type: "mcp_http",
+      config: runtimeConfig,
+    },
+    runtime: agentRuntime(),
+  };
+}
+
+function validateMcpSource(value: Pick<Source, "type" | "config">): void {
+  if (value.type === "mcp_stdio") mcpStdioConfigSchema.parse(value.config);
+  if (value.type === "mcp_http") mcpHttpConfigSchema.parse(value.config);
+}
+
+function mcpOAuthIdentityChanged(current: Source, next: Source): boolean {
+  if (current.type !== "mcp_http") return false;
+  const currentConfig = mcpHttpConfigSchema.parse(current.config);
+  if (currentConfig.auth !== "oauth") return false;
+  if (next.type !== "mcp_http") return true;
+  const nextConfig = mcpHttpConfigSchema.parse(next.config);
+  return nextConfig.auth !== "oauth"
+    || nextConfig.url !== currentConfig.url
+    || nextConfig.transport !== currentConfig.transport;
+}
+
+function findSource(sourceId: string): Source | undefined {
+  const globalSource = getStore().listGlobalMcpSources().find((candidate) => candidate.id === sourceId);
+  if (globalSource !== undefined) return globalSource;
+  for (const workspace of getStore().listWorkspaces()) {
+    if (workspace.kind !== "folder") continue;
+    const source = getStore().listSources(workspace.id).find((candidate) => candidate.id === sourceId);
+    if (source !== undefined) return source;
+  }
+  return undefined;
 }
 
 async function listExtensions(): Promise<ExtensionPackage[]> {
@@ -995,7 +1148,23 @@ function registerIpc(): void {
     const { id } = removeDomainEntityInputSchema.parse(input);
     return getSkillManager().listFiles(id);
   });
+  ipcMain.handle("skill:read-file", (_event, input: unknown) => (
+    getSkillManager().readFile(readSkillFileInputSchema.parse(input))
+  ));
   ipcMain.handle("skill:scan-system", () => getSkillManager().scanSystem());
+  ipcMain.handle("skill:search-marketplace", (_event, input: unknown) => (
+    getSkillManager().searchMarketplace(searchSkillMarketplaceInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:preview-remote", (_event, input: unknown) => (
+    getSkillManager().previewRemote(previewRemoteSkillInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:install-remote", (_event, input: unknown) => (
+    getSkillManager().installRemote(installRemoteSkillsInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:cancel-remote-preview", async (_event, input: unknown) => {
+    const { previewId } = cancelRemoteSkillPreviewInputSchema.parse(input);
+    await getSkillManager().cancelRemotePreview(previewId);
+  });
   ipcMain.handle("skill:create", (_event, input: unknown) => (
     getSkillManager().create(createSkillInputSchema.parse(input))
   ));
@@ -1375,16 +1544,13 @@ function registerIpc(): void {
       task ??= getStore().createTask({
         ...(managedSessionId === null ? {} : { id: managedSessionId }),
         workspaceId: workspace.id,
-        title: taskTitle(goal),
+        title: "New session",
         goal,
         kind: "chat",
         providerId: parsed.providerId,
         modelId: parsed.modelId,
         thinkingLevel: parsed.thinkingLevel,
       });
-      if (task.title === "New session" && task.goal === "New session") {
-        task = getStore().updateSession(task.id, { title: taskTitle(goal) });
-      }
       task = saveConversationModel(task.id, parsed);
       getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
       task = getStore().updateTaskGoal(task.id, goal);
@@ -1425,7 +1591,7 @@ function registerIpc(): void {
     task ??= getStore().createTask({
       ...(managedSessionId === null ? {} : { id: managedSessionId }),
       workspaceId: workspace.id,
-      title: taskTitle(parsed.content),
+      title: "New session",
       goal: parsed.content,
       kind: "chat",
       providerId: parsed.providerId,
@@ -1435,9 +1601,6 @@ function registerIpc(): void {
       ...(parsed.permissionMode === undefined ? {} : { permissionMode: parsed.permissionMode }),
       ...(parsed.planMode === undefined ? {} : { planMode: parsed.planMode }),
     });
-    if (task.title === "New session" && task.goal === "New session") {
-      task = getStore().updateSession(task.id, { title: taskTitle(parsed.content) });
-    }
     task = saveConversationModel(task.id, parsed);
     task = getStore().updateSession(task.id, {
       permissionMode: parsed.permissionMode ?? task.permissionMode,
@@ -1456,6 +1619,7 @@ function registerIpc(): void {
     }
     void runChatInBackground({
       taskId: task.id,
+      workspaceId: workspace.id,
       providerId: parsed.providerId,
       modelId: parsed.modelId,
       thinkingLevel: parsed.thinkingLevel,
@@ -1573,6 +1737,9 @@ function registerIpc(): void {
     ipcMain.handle(`${name}:create`, (_event, input: unknown) => {
       const parsed = createDomainEntityInputSchema.parse(input);
       requireFolderWorkspace(parsed.workspaceId);
+      if (domainName === "source") {
+        validateMcpSource(parsed.value as Pick<Source, "type" | "config">);
+      }
       return getStore().createDomainEntity(domainName, schema, {
         ...parsed.value,
         workspaceId: parsed.workspaceId,
@@ -1580,15 +1747,101 @@ function registerIpc(): void {
     });
     ipcMain.handle(`${name}:update`, (_event, input: unknown) => {
       const parsed = updateDomainEntityInputSchema.parse(input);
+      if (domainName === "source") {
+        const current = findSource(parsed.id);
+        if (current === undefined) throw new Error("Unknown source.");
+        validateMcpSource({ ...current, ...parsed.value });
+      }
       return getStore().updateDomainEntity(domainName, schema, parsed.id, parsed.value);
     });
     ipcMain.handle(`${name}:remove`, (_event, input: unknown) => {
       const { id } = removeDomainEntityInputSchema.parse(input);
       if (domainName === "status") getStore().removeStatus(id);
       else if (domainName === "label") getStore().removeLabel(id);
-      else getStore().removeDomainEntity(domainName, id);
+      else {
+        getStore().removeDomainEntity(domainName, id);
+        if (domainName === "source") void getMcpOAuthManager().remove(id);
+      }
     });
   }
+
+  ipcMain.handle("mcp:list", () => getStore().listGlobalMcpSources());
+  ipcMain.handle("mcp:create", (_event, input: unknown) => {
+    const value = sourceSchema.pick({
+      name: true,
+      type: true,
+      enabled: true,
+      config: true,
+    }).parse(input);
+    if (value.type !== "mcp_stdio" && value.type !== "mcp_http") {
+      throw new Error("MCP sources must use stdio or HTTP.");
+    }
+    validateMcpSource(value);
+    return getStore().createSource({ ...value, workspaceId: null });
+  });
+  ipcMain.handle("mcp:update", async (_event, input: unknown) => {
+    const parsed = updateDomainEntityInputSchema.parse(input);
+    const current = getStore().listGlobalMcpSources().find(({ id }) => id === parsed.id);
+    if (current === undefined) throw new Error("Unknown MCP source.");
+    const next = sourceSchema.parse({ ...current, ...parsed.value, id: current.id, workspaceId: null });
+    if (next.type !== "mcp_stdio" && next.type !== "mcp_http") {
+      throw new Error("MCP sources must use stdio or HTTP.");
+    }
+    validateMcpSource(next);
+    const updated = getStore().updateDomainEntity("source", sourceSchema, current.id, {
+      ...parsed.value,
+      workspaceId: null,
+    });
+    if (mcpOAuthIdentityChanged(current, next)) await getMcpOAuthManager().remove(current.id);
+    return updated;
+  });
+  ipcMain.handle("mcp:remove", (_event, input: unknown) => {
+    const { id } = removeDomainEntityInputSchema.parse(input);
+    getStore().removeDomainEntity("source", id);
+    void getMcpOAuthManager().remove(id);
+  });
+  ipcMain.handle("mcp:inspect", async (_event, input: unknown) => {
+    const { sourceId } = mcpInspectInputSchema.parse(input);
+    const { server, runtime } = await mcpRuntimeServer(sourceId);
+    const response = await sendAgentRequest({ type: "mcp.inspect", server, runtime }, 60_000);
+    if (response.type === "error") throw new Error(response.message);
+    if (response.type !== "mcp.inspect") throw new Error("Unexpected MCP inspection response.");
+    return mcpInspectResultSchema.parse(response.result);
+  });
+  ipcMain.handle("mcp:call-tool", async (_event, input: unknown) => {
+    const parsed = mcpCallToolInputSchema.parse(input);
+    const { server, runtime } = await mcpRuntimeServer(parsed.sourceId);
+    const response = await sendAgentRequest({
+      type: "mcp.call-tool",
+      server,
+      runtime,
+      toolName: parsed.toolName,
+      arguments: parsed.arguments,
+    }, 60_000);
+    if (response.type === "error") throw new Error(response.message);
+    if (response.type !== "mcp.call-tool") throw new Error("Unexpected MCP tool response.");
+    return mcpCallToolResultSchema.parse(response.result);
+  });
+  ipcMain.handle("mcp:authorization-status", async (_event, input: unknown) => {
+    const { sourceId } = mcpAuthorizeInputSchema.parse(input);
+    const source = findSource(sourceId);
+    if (source === undefined) throw new Error("Unknown MCP source.");
+    const authorized = await getMcpOAuthManager().status(source);
+    return mcpAuthorizationStatusSchema.parse({
+      authorized,
+      message: authorized ? "OAuth credentials are available." : "OAuth authorization is required.",
+    });
+  });
+  ipcMain.handle("mcp:authorize", async (_event, input: unknown) => {
+    const { sourceId } = mcpAuthorizeInputSchema.parse(input);
+    const source = findSource(sourceId);
+    if (source === undefined) throw new Error("Unknown MCP source.");
+    await getMcpOAuthManager().authorize(source);
+    return mcpAuthorizationStatusSchema.parse({
+      authorized: true,
+      message: "Remote MCP authorization completed.",
+    });
+  });
 }
 
 function ensureDefaultStatuses(workspaceId: string): void {
@@ -1628,6 +1881,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   closeBrowserView();
+  void skillManager?.dispose();
   store?.close();
   agentProcess?.kill();
   piConsole?.close();

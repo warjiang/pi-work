@@ -323,6 +323,7 @@ export const commandSettingItems: ReadonlyArray<{ section: SettingsSection; key:
   { section: "workFolders", key: "workFolders" },
   { section: "permissions", key: "permissions" },
   { section: "skills", key: "skills" },
+  { section: "mcp", key: "mcp" },
   { section: "extensions", key: "extensions" },
   { section: "browser", key: "browser" },
   { section: "about", key: "about" },
@@ -379,15 +380,18 @@ export function CommandPalette(props: {
     });
     const addResource = (resource: Source | Skill, workspace: Workspace | null, kind: "sources" | "skills") => {
       if (normalized === "" || !`${resource.name} ${"description" in resource ? resource.description : resource.type}`.toLocaleLowerCase().includes(normalized)) return;
+      const isMcp = "type" in resource && (resource.type === "mcp_stdio" || resource.type === "mcp_http");
       result.push({
         id: `${kind}:${workspace?.id ?? "global"}:${resource.id}`,
         group: "resources",
         title: resource.name,
-        detail: workspace === null ? props.t("skills") : `${workspace.name} · ${props.t("sources")}`,
+        detail: workspace === null ? props.t("skills") : `${workspace.name} · ${props.t(isMcp ? "mcp" : "sources")}`,
         icon: kind === "sources" ? "source" : "skills",
         action: () => kind === "skills"
           ? props.onOpenSettings("skills")
-          : props.onOpenContext(workspace!.id, "sources"),
+          : isMcp
+            ? props.onOpenSettings("mcp")
+            : props.onOpenContext(workspace!.id, "sources"),
       });
     };
     folders.forEach((workspace, index) => {

@@ -34,12 +34,34 @@ import { useWorkspaceUi } from "./store.js";
 
 gsap.registerPlugin(useGSAP);
 
+const consolePanelHeightStorageKey = "pi-work:console-panel-height";
+const minimumConsolePanelHeight = 180;
+
+function clampConsolePanelHeight(height: number): number {
+  const maximum = Math.max(minimumConsolePanelHeight, window.innerHeight - 180);
+  return Math.min(maximum, Math.max(minimumConsolePanelHeight, Math.round(height)));
+}
+
+function defaultConsolePanelHeight(): number {
+  return clampConsolePanelHeight(window.innerHeight * 0.38);
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const ui = useWorkspaceUi();
   const [appError, setAppError] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleMounted, setConsoleMounted] = useState(false);
+  const [consolePanelHeight, setConsolePanelHeight] = useState(() => {
+    try {
+      const savedHeight = Number(window.localStorage.getItem(consolePanelHeightStorageKey));
+      return Number.isFinite(savedHeight) && savedHeight > 0
+        ? clampConsolePanelHeight(savedHeight)
+        : defaultConsolePanelHeight();
+    } catch {
+      return defaultConsolePanelHeight();
+    }
+  });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
       return parseSidebarWidth(window.localStorage.getItem(sidebarWidthStorageKey));
@@ -222,6 +244,18 @@ export function App() {
   function toggleConsole() {
     if (consoleOpen) closeConsole();
     else openConsole();
+  }
+
+  function resizeConsole(height: number, commit: boolean) {
+    const nextHeight = clampConsolePanelHeight(height);
+    setConsolePanelHeight(nextHeight);
+    gsap.set(appShellRef.current, { "--console-panel-height": `${nextHeight}px` });
+    if (!commit) return;
+    try {
+      window.localStorage.setItem(consolePanelHeightStorageKey, String(nextHeight));
+    } catch {
+      // The terminal remains resizable even if preferences cannot be persisted.
+    }
   }
 
   async function refresh(): Promise<void> {
@@ -413,9 +447,7 @@ export function App() {
     if (root === null) return;
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const panelHeight = consoleOpen
-      ? Math.min(420, Math.max(240, window.innerHeight * 0.38))
-      : 0;
+    const panelHeight = consoleOpen ? clampConsolePanelHeight(consolePanelHeight) : 0;
 
     gsap.killTweensOf(root, "--console-panel-height");
     gsap.to(root, {
@@ -474,9 +506,11 @@ export function App() {
       commandRequest={consoleCommandRequest}
       {...(terminalWorkingDirectory === undefined ? {} : { cwd: terminalWorkingDirectory })}
       open={consoleOpen}
+      height={consolePanelHeight}
       t={t}
       onClose={closeConsole}
       onClosed={finishClosingConsole}
+      onResize={resizeConsole}
     />
   ) : null;
 

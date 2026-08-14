@@ -12,6 +12,9 @@ import type {
   ExtensionPackage,
   ManagedCliExecutionResult,
   ManagedCliPackage,
+  McpAuthorizationStatus,
+  McpCallToolResult,
+  McpInspectResult,
   ModelCatalog,
   Label,
   Plan,
@@ -140,6 +143,16 @@ declare global {
       source: DomainApi<Source>;
       skill: SkillApi;
       automation: DomainApi<Automation>;
+      mcp: {
+        list(): Promise<Source[]>;
+        create(input: unknown): Promise<Source>;
+        update(input: unknown): Promise<Source>;
+        remove(sourceId: string): Promise<void>;
+        inspect(sourceId: string): Promise<McpInspectResult>;
+        callTool(input: { sourceId: string; toolName: string; arguments: Record<string, unknown> }): Promise<McpCallToolResult>;
+        authorizationStatus(sourceId: string): Promise<McpAuthorizationStatus>;
+        authorize(sourceId: string): Promise<McpAuthorizationStatus>;
+      };
       browser: BrowserApi;
     };
   }
@@ -155,7 +168,12 @@ type DomainApi<T> = {
 type SkillApi = {
   list(): Promise<Skill[]>;
   listFiles(id: string): Promise<Array<{ name: string; path: string; type: "directory" | "file" }>>;
+  readFile(id: string, path: string): Promise<import("@pi-work/protocol").SkillFileContent>;
   scanSystem(): Promise<import("@pi-work/protocol").SystemSkill[]>;
+  searchMarketplace(input: unknown): Promise<import("@pi-work/protocol").MarketplaceSkill[]>;
+  previewRemote(input: unknown): Promise<import("@pi-work/protocol").RemoteSkillPreview>;
+  installRemote(input: unknown): Promise<Skill[]>;
+  cancelRemotePreview(previewId: string): Promise<void>;
   create(input: unknown): Promise<Skill>;
   update(input: unknown): Promise<Skill>;
   remove(id: string): Promise<void>;

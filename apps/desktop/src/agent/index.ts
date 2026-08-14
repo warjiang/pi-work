@@ -118,6 +118,18 @@ process.parentPort?.on("message", async (event) => {
         process.parentPort?.postMessage(agentResponseSchema.parse({ type: "plan", requestId, plan }));
         break;
       }
+      case "title": {
+        const title = await adapter.createConversationTitle(
+          request.data.prompt,
+          request.data.response,
+          request.data.provider ?? null,
+          request.data.modelId,
+          request.data.thinkingLevel,
+          request.data.runtime,
+        );
+        process.parentPort?.postMessage(agentResponseSchema.parse({ type: "title", requestId, title }));
+        break;
+      }
       case "chat": {
         const sessionId = request.data.sessionId;
         let sequence = 0;
@@ -141,6 +153,7 @@ process.parentPort?.on("message", async (event) => {
             (tool, args, cwd) => requestApproval(requestId, sessionId, run.nextSequence, tool, args, cwd),
             request.data.permissionMode,
             (kind, payload) => streamEvent(requestId, sessionId, run.nextSequence(), kind, payload),
+            request.data.mcpServers,
           );
         } finally {
           activeRuns.delete(sessionId);
@@ -189,6 +202,29 @@ process.parentPort?.on("message", async (event) => {
           type: "models",
           requestId,
           ...result,
+        }));
+        break;
+      }
+      case "mcp.inspect": {
+        const result = await adapter.inspectMcp(request.data.server, request.data.runtime);
+        process.parentPort?.postMessage(agentResponseSchema.parse({
+          type: "mcp.inspect",
+          requestId,
+          result,
+        }));
+        break;
+      }
+      case "mcp.call-tool": {
+        const result = await adapter.callMcpTool(
+          request.data.server,
+          request.data.runtime,
+          request.data.toolName,
+          request.data.arguments,
+        );
+        process.parentPort?.postMessage(agentResponseSchema.parse({
+          type: "mcp.call-tool",
+          requestId,
+          result,
         }));
         break;
       }

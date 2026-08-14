@@ -1,12 +1,16 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Automation,
   Label,
+  MarketplaceSkill,
+  RemoteSkillPreview,
   Session,
   Skill,
+  SkillFileContent,
   Source,
+  McpInspectResult,
   StatusDefinition,
   SystemSkill,
   Workspace,
@@ -32,6 +36,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
 import { Icon } from "@/components/ui/icon.js";
 import type { IconName } from "@/components/ui/icon.js";
@@ -46,12 +56,21 @@ import {
 } from "@/components/ui/select.js";
 import { Textarea } from "@/components/ui/textarea.js";
 import { Switch } from "@/components/ui/switch.js";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group.js";
 import { sessionsByStage, sessionsForBoard } from "@/board.js";
 import type { MessageKey } from "@/i18n.js";
 
 type T = (key: MessageKey) => string;
 type SkillFolderEntry = { name: string; path: string; type: "directory" | "file" };
+type McpPreset = "stdio" | "streamable_http" | "sse";
+type McpTransport = "stdio" | "streamable_http" | "sse";
+const mcpSourceTypes: Source["type"][] = ["mcp_stdio", "mcp_http"];
+const regularSourceTypes: Source["type"][] = ["local", "openapi", "google", "microsoft", "slack"];
+
+function isMcpSource(source: Source): boolean {
+  return mcpSourceTypes.includes(source.type);
+}
 
 export function PageHeader(props: { eyebrow?: string; title: string; detail?: string; action?: ReactNode }) {
   return (
@@ -231,54 +250,488 @@ export function SourcesPage({ workspaceId, t }: { workspaceId: string; t: T }) {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["sources", workspaceId], queryFn: () => window.piWork.source.list(workspaceId) });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = query.data?.find(({ id }) => id === selectedId) ?? null;
+  const sources = (query.data ?? []).filter((source) => !isMcpSource(source));
+  const selected = sources.find(({ id }) => id === selectedId) ?? null;
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
   const create = useMutation({ mutationFn: () => window.piWork.source.create({ workspaceId, value: { name: t("newSource"), type: "local", enabled: false, config: {} } }), onSuccess: async (source) => { await refresh(); setSelectedId(source.id); } });
   return (
     <LibraryLayout
       title={t("sources")}
       t={t}
-      detail={t("notUsedForExecution")}
+      detail={t("sourcesDetail")}
       icon="source"
-      items={query.data ?? []}
+      items={sources}
       selectedId={selectedId}
       loading={query.isLoading}
       empty={t("noItems")}
       addLabel={t("add")}
       onAdd={() => create.mutate()}
       onSelect={setSelectedId}
-      renderItem={(source) => <><strong>{source.name}</strong><small>{sourceTypeLabel(source.type, t)}</small><Badge>{t("notUsed")}</Badge></>}
-      detailPane={selected ? <SourceEditor source={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : null}
+      renderItem={(source) => <><strong>{source.name}</strong><small>{sourceTypeLabel(source.type, t)}</small><Badge>{source.enabled ? t("enabled") : t("disabled")}</Badge></>}
+      detailPane={selected ? <SourceEditor source={selected} allowedTypes={regularSourceTypes} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : null}
     />
   );
 }
 
-function SourceEditor({ source, t, onSaved, onDeleted }: { source: Source; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
-  const [name, setName] = useState(source.name);
-  const [type, setType] = useState<Source["type"]>(source.type);
-  const [config, setConfig] = useState(JSON.stringify(source.config, null, 2));
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setName(source.name); setType(source.type); setConfig(JSON.stringify(source.config, null, 2)); }, [source]);
-  const save = useMutation({
-    mutationFn: async () => {
-      let value: Record<string, unknown>;
-      try { value = JSON.parse(config) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
-      return window.piWork.source.update({ id: source.id, value: { name, type, config: value, enabled: source.enabled } });
+export function McpSettingsPage({ t }: { t: T }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: ["mcp-sources"],
+    queryFn: () => window.piWork.mcp.list(),
+  });
+  const sources = (query.data ?? []).filter(isMcpSource);
+  const selected = sources.find(({ id }) => id === selectedId) ?? null;
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["mcp-sources"] });
+  useEffect(() => {
+    if (selectedId !== null && sources.some(({ id }) => id === selectedId)) return;
+    setSelectedId(sources[0]?.id ?? null);
+  }, [selectedId, sources]);
+  const create = useMutation({
+    mutationFn: (preset: McpPreset) => {
+      const type = preset === "stdio" ? "mcp_stdio" : "mcp_http";
+      const config = preset === "stdio"
+        ? { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."], env: {} }
+        : { url: "", transport: preset, headers: {}, auth: "none" };
+      const name = preset === "stdio"
+        ? t("newMcpLocal")
+        : preset === "sse" ? t("newMcpSse") : t("newMcpRemote");
+      return window.piWork.mcp.create({ name, type, enabled: false, config });
     },
-    onSuccess: onSaved,
+    onSuccess: async (source) => {
+      await refresh();
+      setSelectedId(source.id);
+    },
+  });
+  const addMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button disabled={create.isPending}><Icon name="plus" />{t("addMcpServer")}<Icon name="chevron-down" /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="mcp-add-menu">
+        <DropdownMenuItem onSelect={() => create.mutate("stdio")}>
+          <Icon name="terminal" />
+          <span><strong>{t("addMcpLocal")}</strong><small>{t("addMcpLocalDetail")}</small></span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => create.mutate("streamable_http")}>
+          <Icon name="browser" />
+          <span><strong>{t("addMcpStreamable")}</strong><small>{t("addMcpStreamableDetail")}</small></span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => create.mutate("sse")}>
+          <Icon name="radio" />
+          <span><strong>{t("addMcpSse")}</strong><small>{t("addMcpSseDetail")}</small></span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+  return (
+    <LibraryLayout
+      className="settings-mcp-page"
+      showHeader={false}
+      title={t("mcp")}
+      detail={t("mcpSettingsDetail")}
+      t={t}
+      icon="source"
+      items={sources}
+      selectedId={selectedId}
+      loading={query.isLoading}
+      empty={t("noMcpServers")}
+      addLabel={t("add")}
+      onSelect={setSelectedId}
+      toolbar={<div className="settings-mcp-toolbar">
+        <span className="settings-mcp-toolbar-detail">{t("mcpGlobalDetail")}</span>
+        {addMenu}
+        {query.isError || create.isError ? <div className="settings-mcp-error"><Icon name="alert" /><span>{query.error?.message ?? create.error?.message}</span>{query.isError ? <Button variant="ghost" size="sm" onClick={() => void query.refetch()}>{t("retry")}</Button> : null}</div> : null}
+      </div>}
+      renderItem={(source) => <><strong>{source.name}</strong><span className="mcp-source-meta"><small>{mcpTransportLabel(source, t)}</small><span className={source.enabled ? "mcp-status enabled" : "mcp-status"}>{source.enabled ? t("enabled") : t("disabled")}</span></span></>}
+      detailPane={selected
+        ? <McpSourceEditor source={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} />
+        : sources.length === 0
+          ? <div className="mcp-empty-state"><span className="mcp-empty-icon"><Icon name="source" /></span><h2>{t("mcpEmptyTitle")}</h2><p>{t("mcpEmptyDetail")}</p>{addMenu}</div>
+          : null}
+    />
+  );
+}
+
+function mcpTransport(source: Source): McpTransport {
+  if (source.type === "mcp_stdio") return "stdio";
+  const transport = source.config.transport;
+  return transport === "sse" ? "sse" : "streamable_http";
+}
+
+function mcpTransportLabel(source: Source, t: T): string {
+  const transport = mcpTransport(source);
+  if (transport === "stdio") return t("mcpTransportStdio");
+  if (transport === "sse") return t("mcpTransportSse");
+  return t("mcpTransportStreamable");
+}
+
+function jsonRecord(value: string, label: string): Record<string, string> {
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`${label} must be a JSON object.`);
+  return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [key, String(item)]));
+}
+
+function jsonArguments(value: string): string[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    throw new Error("Arguments must be a JSON string array.");
+  }
+  return parsed;
+}
+
+function McpSourceEditor({ source, t, onSaved, onDeleted }: {
+  source: Source;
+  t: T;
+  onSaved(): Promise<unknown>;
+  onDeleted(): Promise<void>;
+}) {
+  const queryClient = useQueryClient();
+  const initialTransport = mcpTransport(source);
+  const [name, setName] = useState(source.name);
+  const [enabled, setEnabled] = useState(source.enabled);
+  const [transport, setTransport] = useState<McpTransport>(initialTransport);
+  const [command, setCommand] = useState(String(source.config.command ?? ""));
+  const [args, setArgs] = useState(JSON.stringify(source.config.args ?? [], null, 2));
+  const [cwd, setCwd] = useState(String(source.config.cwd ?? ""));
+  const [env, setEnv] = useState(JSON.stringify(source.config.env ?? {}, null, 2));
+  const [url, setUrl] = useState(String(source.config.url ?? ""));
+  const [auth, setAuth] = useState<"none" | "bearer" | "oauth">(
+    source.config.auth === "bearer" || source.config.auth === "oauth" ? source.config.auth : "none",
+  );
+  const [bearerToken, setBearerToken] = useState(String(source.config.bearerToken ?? ""));
+  const [headers, setHeaders] = useState(JSON.stringify(source.config.headers ?? {}, null, 2));
+  const [error, setError] = useState<string | null>(null);
+  const [inspectResult, setInspectResult] = useState<McpInspectResult | null>(null);
+  const [toolName, setToolName] = useState("");
+  const [toolArguments, setToolArguments] = useState("{}");
+  const [toolResult, setToolResult] = useState("");
+  const [saved, setSaved] = useState(false);
+  const savedOAuthConfigurationMatches = source.type === "mcp_http"
+    && source.config.auth === "oauth"
+    && mcpTransport(source) === transport
+    && source.config.url === url.trim();
+  const authorizationStatus = useQuery({
+    queryKey: ["mcp-authorization", source.id],
+    queryFn: () => window.piWork.mcp.authorizationStatus(source.id),
+    enabled: source.type === "mcp_http" && source.config.auth === "oauth",
+    retry: false,
+  });
+
+  useEffect(() => {
+    const nextTransport = mcpTransport(source);
+    setName(source.name);
+    setEnabled(source.enabled);
+    setTransport(nextTransport);
+    setCommand(String(source.config.command ?? ""));
+    setArgs(JSON.stringify(source.config.args ?? [], null, 2));
+    setCwd(String(source.config.cwd ?? ""));
+    setEnv(JSON.stringify(source.config.env ?? {}, null, 2));
+    setUrl(String(source.config.url ?? ""));
+    setAuth(source.config.auth === "bearer" || source.config.auth === "oauth" ? source.config.auth : "none");
+    setBearerToken(String(source.config.bearerToken ?? ""));
+    setHeaders(JSON.stringify(source.config.headers ?? {}, null, 2));
+    setInspectResult(null);
+    setToolName("");
+    setToolArguments("{}");
+    setToolResult("");
+    setSaved(false);
+  }, [source.id]);
+
+  function markChanged() {
+    setSaved(false);
+    setInspectResult(null);
+  }
+
+  async function persistSource() {
+    const config = transport === "stdio"
+      ? {
+          command: command.trim(),
+          args: jsonArguments(args),
+          env: jsonRecord(env, t("mcpEnvironment")),
+          ...(cwd.trim() ? { cwd: cwd.trim() } : {}),
+        }
+      : {
+          url: url.trim(),
+          transport,
+          headers: jsonRecord(headers, t("mcpHeaders")),
+          auth,
+          ...(auth === "bearer" ? { bearerToken } : {}),
+        };
+    return window.piWork.mcp.update({
+      id: source.id,
+      value: {
+        name: name.trim(),
+        type: transport === "stdio" ? "mcp_stdio" : "mcp_http",
+        config,
+        enabled,
+      },
+    });
+  }
+
+  const save = useMutation({
+    mutationFn: persistSource,
+    onSuccess: async () => {
+      setError(null);
+      setSaved(true);
+      await onSaved();
+      if (transport !== "stdio" && auth === "oauth") await authorizationStatus.refetch();
+    },
     onError: (cause: Error) => setError(cause.message),
   });
-  return <ResourceEditor title={source.name} status={t("notUsedForExecution")} t={t} onDelete={() => void window.piWork.source.remove(source.id).then(onDeleted)}>
-    <Alert className="runtime-boundary"><AlertDescription>{t("notUsedForExecution")}</AlertDescription></Alert>
-    <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("sourceType")}</FieldLabel><Select value={type} onValueChange={(value) => setType(value as Source["type"])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{(["local", "mcp_stdio", "mcp_http", "openapi", "google", "microsoft", "slack"] as Source["type"][]).map((value) => <SelectItem key={value} value={value}>{sourceTypeLabel(value, t)}</SelectItem>)}</SelectGroup></SelectContent></Select></Field><Field><FieldLabel>{t("configuration")}</FieldLabel><Textarea className="code-textarea" value={config} onChange={(event) => setConfig(event.target.value)} rows={12} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button disabled={save.isPending || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
+  const inspect = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      return window.piWork.mcp.inspect(source.id);
+    },
+    onSuccess: async (result) => {
+      setError(null);
+      setSaved(true);
+      setInspectResult(result);
+      setToolName(result.tools[0]?.name ?? "");
+      await onSaved();
+      if (transport !== "stdio" && auth === "oauth") await authorizationStatus.refetch();
+    },
+    onError: async (cause: Error) => {
+      setError(cause.message);
+      if (transport !== "stdio" && auth === "oauth") await authorizationStatus.refetch();
+    },
+  });
+  const authorize = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      const status = await window.piWork.mcp.authorize(source.id);
+      const result = await window.piWork.mcp.inspect(source.id);
+      return { status, result };
+    },
+    onSuccess: async ({ status, result }) => {
+      setError(null);
+      setSaved(true);
+      setInspectResult(result);
+      setToolName(result.tools[0]?.name ?? "");
+      queryClient.setQueryData(["mcp-authorization", source.id], status);
+      await onSaved();
+    },
+    onError: async (cause: Error) => {
+      setError(cause.message);
+      await authorizationStatus.refetch();
+    },
+  });
+  const callTool = useMutation({
+    mutationFn: async () => {
+      let input: Record<string, unknown>;
+      try { input = JSON.parse(toolArguments) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
+      return window.piWork.mcp.callTool({ sourceId: source.id, toolName, arguments: input });
+    },
+    onSuccess: (result) => { setError(null); setToolResult(JSON.stringify(result, null, 2)); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const busy = save.isPending || inspect.isPending || authorize.isPending;
+  const change = <Value,>(setter: (value: Value) => void) => (value: Value) => { setter(value); markChanged(); };
+  const oauthAuthorized = savedOAuthConfigurationMatches && authorizationStatus.data?.authorized === true;
+  const oauthStatusLabel = !savedOAuthConfigurationMatches
+    ? t("mcpAuthorizationSaveFirst")
+    : authorizationStatus.isFetching
+      ? t("mcpAuthorizationChecking")
+      : oauthAuthorized
+        ? t("mcpAuthorized")
+        : t("mcpNotAuthorized");
+
+  return <ResourceEditor
+    title={name || source.name}
+    status={`${transport === "stdio" ? t("mcpTransportStdio") : transport === "sse" ? t("mcpTransportSse") : t("mcpTransportStreamable")} · ${enabled ? t("enabled") : t("disabled")}`}
+    t={t}
+    onDelete={() => void window.piWork.mcp.remove(source.id).then(onDeleted)}
+  >
+    <FieldGroup className="mcp-editor-fields mcp-editor-compact">
+      <div className="mcp-editor-summary">
+        <Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => change(setName)(event.target.value)} /></Field>
+        <Field><FieldLabel>{t("mcpTransport")}</FieldLabel><Select value={transport} onValueChange={(value) => change(setTransport)(value as McpTransport)}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent><SelectGroup>
+            <SelectItem value="stdio">{t("mcpTransportStdio")}</SelectItem>
+            <SelectItem value="streamable_http">{t("mcpTransportStreamable")}</SelectItem>
+            <SelectItem value="sse">{t("mcpTransportSse")}</SelectItem>
+          </SelectGroup></SelectContent>
+        </Select></Field>
+        <Field className="mcp-enabled-inline">
+          <span><FieldLabel>{t("enabled")}</FieldLabel><small>{t("mcpGlobalAvailability")}</small></span>
+          <Switch checked={enabled} onCheckedChange={change(setEnabled)} />
+        </Field>
+      </div>
+
+      <section className="mcp-config-card">
+        <header><div><strong>{t("mcpConnection")}</strong><small>{transport === "stdio" ? t("mcpStdioDetail") : transport === "sse" ? t("mcpSseDetail") : t("mcpStreamableDetail")}</small></div><span className="mcp-transport-chip">{transport === "stdio" ? "stdio" : transport === "sse" ? "SSE" : "HTTP"}</span></header>
+        {transport === "stdio" ? <div className="mcp-config-grid">
+          <Field><FieldLabel>{t("mcpCommand")}</FieldLabel><Input value={command} onChange={(event) => change(setCommand)(event.target.value)} placeholder="npx" /></Field>
+          <Field><FieldLabel>{t("mcpWorkingDirectory")}</FieldLabel><Input value={cwd} onChange={(event) => change(setCwd)(event.target.value)} placeholder={t("mcpOptional")} /></Field>
+          <Field><FieldLabel>{t("mcpArguments")}</FieldLabel><Textarea className="code-textarea" rows={4} value={args} onChange={(event) => change(setArgs)(event.target.value)} spellCheck={false} /></Field>
+          <Field><FieldLabel>{t("mcpEnvironment")}</FieldLabel><Textarea className="code-textarea" rows={4} value={env} onChange={(event) => change(setEnv)(event.target.value)} spellCheck={false} /></Field>
+        </div> : <div className="mcp-config-grid">
+          <Field className="mcp-field-wide"><FieldLabel>{t("mcpEndpoint")}</FieldLabel><Input value={url} onChange={(event) => change(setUrl)(event.target.value)} placeholder="https://example.com/mcp" /></Field>
+          <Field className="mcp-auth-field mcp-field-wide"><FieldLabel>{t("mcpAuthentication")}</FieldLabel><div className={`mcp-auth-controls${auth === "oauth" ? " has-feedback" : ""}${auth === "bearer" ? " has-token" : ""}`}>
+            <Select value={auth} onValueChange={(value) => change(setAuth)(value as typeof auth)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value="none">{t("mcpAuthNone")}</SelectItem>
+                <SelectItem value="bearer">{t("mcpAuthBearer")}</SelectItem>
+                <SelectItem value="oauth">{t("mcpAuthOAuth")}</SelectItem>
+              </SelectGroup></SelectContent>
+            </Select>{auth === "bearer" ? <Input type="password" value={bearerToken} onChange={(event) => change(setBearerToken)(event.target.value)} aria-label={t("mcpBearerToken")} placeholder={t("mcpBearerToken")} /> : null}{auth === "oauth" ? <div className={oauthAuthorized ? "mcp-auth-feedback authorized" : "mcp-auth-feedback"}>
+              <span className="mcp-auth-state"><Icon name={oauthAuthorized ? "check-circle" : "alert"} />{oauthStatusLabel}</span>
+              <Button variant="ghost" size="sm" className="mcp-auth-action" disabled={busy || !name.trim()} onClick={() => authorize.mutate()}>{authorize.isPending ? t("mcpAuthorizing") : oauthAuthorized ? t("mcpReauthorize") : t("mcpAuthorize")}</Button>
+            </div> : null}</div></Field>
+          <Field className={auth === "none" ? undefined : "mcp-field-wide"}><FieldLabel>{t("mcpHeaders")}</FieldLabel><Textarea className="code-textarea" rows={4} value={headers} onChange={(event) => change(setHeaders)(event.target.value)} spellCheck={false} /></Field>
+        </div>}
+      </section>
+
+      {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      <div className="resource-editor-actions mcp-action-bar">
+        <Button disabled={busy || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button>
+        <Button variant="outline" disabled={busy || !name.trim()} onClick={() => inspect.mutate()}>{inspect.isPending ? t("mcpConnecting") : t("mcpSaveConnect")}</Button>
+        {saved && !busy ? <span className="mcp-save-state"><Icon name="check" />{t("saved")}</span> : null}
+      </div>
+
+      <section className="mcp-debug-section">
+        <div className="mcp-debug-heading"><div><strong>{t("mcpTestConnection")}</strong><small>{t("mcpTestConnectionDetail")}</small></div>{inspectResult ? <span className="mcp-connection-ok"><Icon name="check-circle" />{t("mcpConnected")}</span> : null}</div>
+        {!inspectResult ? <div className="mcp-test-empty"><Icon name="terminal" /><span>{t("mcpNoInspection")}</span></div> : <div className="mcp-debug-panel">
+          <header><strong>{inspectResult.serverName ?? source.name}</strong><span>{inspectResult.serverVersion}</span><span>{inspectResult.transport}</span><span>{inspectResult.tools.length} {t("mcpTools")}</span><span>{inspectResult.resourceCount} {t("mcpResources")}</span><span>{inspectResult.promptCount} {t("mcpPrompts")}</span></header>
+          {inspectResult.instructions ? <p>{inspectResult.instructions}</p> : null}
+          <div className="mcp-tool-grid">
+            <Field><FieldLabel>{t("mcpTool")}</FieldLabel><Select value={toolName} onValueChange={setToolName}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{inspectResult.tools.map((tool) => <SelectItem key={tool.name} value={tool.name}>{tool.title ?? tool.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+            <Field><FieldLabel>{t("mcpArguments")}</FieldLabel><Textarea className="code-textarea" rows={3} value={toolArguments} onChange={(event) => setToolArguments(event.target.value)} spellCheck={false} /></Field>
+          </div>
+          <Button variant="outline" disabled={!toolName || callTool.isPending} onClick={() => callTool.mutate()}><Icon name="play" />{callTool.isPending ? t("mcpRunning") : t("mcpRunTool")}</Button>
+          {toolResult ? <Field><FieldLabel>{t("mcpResult")}</FieldLabel><Textarea className="code-textarea" readOnly rows={6} value={toolResult} /></Field> : null}
+          {inspectResult.logs.length > 0 ? <div className="mcp-log"><span>{t("mcpLogs")}</span><pre>{inspectResult.logs.join("\n")}</pre></div> : null}
+        </div>}
+      </section>
+    </FieldGroup>
+  </ResourceEditor>;
+}
+
+function SourceEditor({ source, allowedTypes, t, onSaved, onDeleted }: { source: Source; allowedTypes: Source["type"][]; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
+  const [name, setName] = useState(source.name);
+  const [type, setType] = useState<Source["type"]>(source.type);
+  const [enabled, setEnabled] = useState(source.enabled);
+  const [config, setConfig] = useState(JSON.stringify(source.config, null, 2));
+  const [error, setError] = useState<string | null>(null);
+  const [inspectResult, setInspectResult] = useState<McpInspectResult | null>(null);
+  const [toolName, setToolName] = useState("");
+  const [toolArguments, setToolArguments] = useState("{}");
+  const [toolResult, setToolResult] = useState("");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    setName(source.name);
+    setType(source.type);
+    setEnabled(source.enabled);
+    setConfig(JSON.stringify(source.config, null, 2));
+    setInspectResult(null);
+    setToolName("");
+    setToolArguments("{}");
+    setToolResult("");
+    setSaved(false);
+  }, [source.id]);
+  async function persistSource() {
+    let value: Record<string, unknown>;
+    try { value = JSON.parse(config) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
+    return window.piWork.source.update({ id: source.id, value: { name: name.trim(), type, config: value, enabled } });
+  }
+  const save = useMutation({
+    mutationFn: persistSource,
+    onSuccess: async () => { setError(null); setSaved(true); await onSaved(); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const inspect = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      return window.piWork.mcp.inspect(source.id);
+    },
+    onSuccess: async (result) => { setError(null); setSaved(true); setInspectResult(result); setToolName(result.tools[0]?.name ?? ""); await onSaved(); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const authorize = useMutation({
+    mutationFn: async () => {
+      await persistSource();
+      await window.piWork.mcp.authorize(source.id);
+      return window.piWork.mcp.inspect(source.id);
+    },
+    onSuccess: async (result) => { setError(null); setSaved(true); setInspectResult(result); setToolName(result.tools[0]?.name ?? ""); await onSaved(); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const callTool = useMutation({
+    mutationFn: async () => {
+      let args: Record<string, unknown>;
+      try { args = JSON.parse(toolArguments) as Record<string, unknown>; } catch { throw new Error(t("invalidJson")); }
+      return window.piWork.mcp.callTool({ sourceId: source.id, toolName, arguments: args });
+    },
+    onSuccess: (result) => { setError(null); setToolResult(JSON.stringify(result, null, 2)); },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const isMcp = type === "mcp_stdio" || type === "mcp_http";
+  const isOAuthMcp = type === "mcp_http" && (() => {
+    try {
+      const value = JSON.parse(config) as Record<string, unknown>;
+      return value.auth === "oauth";
+    } catch {
+      return false;
+    }
+  })();
+  const busy = save.isPending || inspect.isPending || authorize.isPending;
+  return <ResourceEditor title={name || source.name} status={enabled ? t("enabled") : t("disabled")} t={t} onDelete={() => void window.piWork.source.remove(source.id).then(onDeleted)}>
+    <FieldGroup className={isMcp ? "mcp-editor-fields" : undefined}>
+      {isMcp ? <div className="mcp-section-heading"><span>{t("mcpBasicInfo")}</span></div> : null}
+      <div className={isMcp ? "mcp-basic-grid" : undefined}>
+        <Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} /></Field>
+        <Field><FieldLabel>{t("sourceType")}</FieldLabel><Select value={type} onValueChange={(value) => {
+        const next = value as Source["type"];
+        setType(next);
+        setSaved(false);
+        if (next === "mcp_stdio") setConfig(JSON.stringify({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."], env: {} }, null, 2));
+        if (next === "mcp_http") setConfig(JSON.stringify({ url: "", transport: "auto", headers: {}, auth: "none" }, null, 2));
+      }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{allowedTypes.map((value) => <SelectItem key={value} value={value}>{sourceTypeLabel(value, t)}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+      </div>
+      {isMcp ? <div className="mcp-section-heading"><span>{t("mcpAvailability")}</span></div> : null}
+      <Field className="mcp-enabled-field"><div><FieldLabel>{t("enabled")}</FieldLabel><small>{t(isMcp ? "mcpEnabledDetail" : "sourceEnabledDetail")}</small></div><Switch checked={enabled} onCheckedChange={(value) => { setEnabled(value); setSaved(false); }} /></Field>
+      {isMcp ? <div className="mcp-section-heading"><span>{t("mcpConnection")}</span><small>{t("mcpConfigurationDetail")}</small></div> : null}
+      <Field><FieldLabel>{t("configuration")}</FieldLabel><Textarea className="code-textarea mcp-config-editor" value={config} onChange={(event) => { setConfig(event.target.value); setSaved(false); }} rows={isMcp ? 9 : 12} spellCheck={false} /></Field>
+      {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      <div className="resource-editor-actions">
+        <Button disabled={busy || !name.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button>
+        {isMcp ? <Button variant="outline" disabled={busy || !name.trim()} onClick={() => inspect.mutate()}>{inspect.isPending ? t("mcpConnecting") : t("mcpSaveConnect")}</Button> : null}
+        {isOAuthMcp ? <Button variant="ghost" disabled={busy || !name.trim()} onClick={() => authorize.mutate()}>{authorize.isPending ? t("mcpAuthorizing") : t("mcpAuthorize")}</Button> : null}
+        {saved && !busy ? <span className="mcp-save-state"><Icon name="check" />{t("saved")}</span> : null}
+      </div>
+      {isMcp ? <div className="mcp-section-heading mcp-test-heading"><span>{t("mcpTestConnection")}</span><small>{t("mcpTestConnectionDetail")}</small></div> : null}
+      {isMcp && !inspectResult ? <div className="mcp-test-empty"><Icon name="terminal" /><span>{t("mcpNoInspection")}</span></div> : null}
+      {inspectResult ? <section className="mcp-debug-panel">
+        <header><span className="mcp-connection-ok"><Icon name="check-circle" />{t("mcpConnected")}</span><strong>{inspectResult.serverName ?? source.name}</strong><span>{inspectResult.transport}</span><span>{inspectResult.tools.length} {t("mcpTools")}</span></header>
+        {inspectResult.instructions ? <p>{inspectResult.instructions}</p> : null}
+        <div className="mcp-tool-grid">
+          <Field><FieldLabel>{t("mcpTool")}</FieldLabel><Select value={toolName} onValueChange={setToolName}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{inspectResult.tools.map((tool) => <SelectItem key={tool.name} value={tool.name}>{tool.title ?? tool.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+          <Field><FieldLabel>{t("mcpArguments")}</FieldLabel><Textarea className="code-textarea" rows={4} value={toolArguments} onChange={(event) => setToolArguments(event.target.value)} spellCheck={false} /></Field>
+        </div>
+        <Button variant="outline" disabled={!toolName || callTool.isPending} onClick={() => callTool.mutate()}><Icon name="play" />{callTool.isPending ? t("mcpRunning") : t("mcpRunTool")}</Button>
+        {toolResult ? <Field><FieldLabel>{t("mcpResult")}</FieldLabel><Textarea className="code-textarea" readOnly rows={7} value={toolResult} /></Field> : null}
+        {inspectResult.logs.length > 0 ? <div className="mcp-log"><span>{t("mcpLogs")}</span><pre>{inspectResult.logs.join("\n")}</pre></div> : null}
+      </section> : null}
+    </FieldGroup>
   </ResourceEditor>;
 }
 
 export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }) {
   const queryClient = useQueryClient();
+  const [view, setView] = useState<"installed" | "marketplace">("installed");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [urlInstallOpen, setUrlInstallOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const saveSelectedRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerSelectedSave = useCallback((save: () => Promise<boolean>) => {
+    saveSelectedRef.current = save;
+  }, []);
   const query = useQuery({ queryKey: ["skills"], queryFn: () => window.piWork.skill.list() });
   const systemSkills = useQuery({
     queryKey: ["system-skills"],
@@ -327,30 +780,252 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
     },
     onError: (cause: Error) => setError(cause.message),
   });
-  const actions = <div className="page-header-actions"><Button variant="outline" disabled={systemSkills.isFetching} onClick={() => void systemSkills.refetch()}><Icon name="search" />{t("scanSystemSkills")}</Button><Button variant="outline" disabled={importSkill.isPending} onClick={() => importSkill.mutate()}><Icon name="folder-plus" />{t("importSkill")}</Button><Button disabled={create.isPending} onClick={() => create.mutate()}><Icon name="plus" />{t("add")}</Button></div>;
+  const selectSkill = (id: string) => {
+    if (dirty && id !== selectedId) {
+      setPendingSelection(id);
+      return;
+    }
+    setSelectedId(id);
+  };
+  const actions = <div className="skill-page-actions">
+    <Tabs value={view} onValueChange={(next) => setView(next as typeof view)}>
+      <TabsList className="skill-view-tabs">
+        <TabsTrigger value="installed">{t("installedSkills")}</TabsTrigger>
+        <TabsTrigger value="marketplace">{t("skillMarketplace")}</TabsTrigger>
+      </TabsList>
+    </Tabs>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button><Icon name="plus" />{t("installSkill")}<Icon name="chevron-down" /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => setUrlInstallOpen(true)}><Icon name="browser" />{t("installFromUrl")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={importSkill.isPending} onSelect={() => importSkill.mutate()}><Icon name="folder-plus" />{t("installFromFolder")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={systemSkills.isFetching} onSelect={() => { setView("installed"); setSelectedId(null); void systemSkills.refetch(); }}><Icon name="search" />{t("scanSystemSkills")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={create.isPending} onSelect={() => create.mutate()}><Icon name="square-pen" />{t("createBlankSkill")}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </div>;
   return (
-    <LibraryLayout
-      title={t("skills")}
-      className={embedded ? "settings-skills-page" : undefined}
-      showHeader={!embedded}
-      toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : undefined}
-      t={t}
-      detail={t("skillRuntimeDetail")}
-      icon="skills"
-      itemIcon="workspace"
-      items={filtered}
-      selectedId={selectedId}
-      loading={query.isLoading}
-      empty={t("noItems")}
-      addLabel={t("add")}
-      action={actions}
-      filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchSkills")} /></label>}
-      listHeader={<div className="skill-folder-heading"><Icon name="workspace" size={14} /><span>{t("skillFolders")}</span></div>}
-      onSelect={setSelectedId}
-      renderItem={(skill) => <><span>{skill.name}</span><small>{skill.description}</small></>}
-      detailPane={selected ? <SkillEditor skill={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
-    />
+    <>
+      {view === "installed" ? <LibraryLayout
+        title={t("skills")}
+        className={embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}
+        showHeader={!embedded}
+        toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : undefined}
+        t={t}
+        detail={t("skillRuntimeDetail")}
+        icon="skills"
+        itemIcon="skills"
+        items={filtered}
+        selectedId={selectedId}
+        loading={query.isLoading}
+        empty={t("noInstalledSkills")}
+        addLabel={t("installSkill")}
+        action={actions}
+        filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchInstalledSkills")} /></label>}
+        listHeader={<div className="skill-folder-heading"><span>{t("installedSkills")}</span><small>{query.data?.length ?? 0}</small></div>}
+        onSelect={selectSkill}
+        renderItem={(skill) => <><span className="skill-list-title"><span>{skill.name}</span><i className={skill.enabled ? "is-enabled" : ""} /></span><small>{skillSourceLabel(skill, t)}</small></>}
+        detailPane={selected ? <SkillEditor
+          skill={selected}
+          t={t}
+          onDirtyChange={setDirty}
+          registerSave={registerSelectedSave}
+          onSaved={refresh}
+          onDeleted={async () => { setSelectedId(null); await refresh(); }}
+        /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
+      /> : <SkillMarketplace
+        className={embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}
+        installed={query.data ?? []}
+        toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : actions}
+        t={t}
+        onInstalled={async (skills) => {
+          await refresh();
+          setSelectedId(skills[0]?.id ?? null);
+          setView("installed");
+        }}
+      />}
+      <RemoteSkillDialog open={urlInstallOpen} t={t} onOpenChange={setUrlInstallOpen} onInstalled={async (skills) => {
+        await refresh();
+        setSelectedId(skills[0]?.id ?? null);
+        setView("installed");
+      }} />
+      <AlertDialog open={pendingSelection !== null} onOpenChange={(open) => { if (!open) setPendingSelection(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>{t("unsavedSkillChanges")}</AlertDialogTitle><AlertDialogDescription>{t("unsavedSkillChangesDetail")}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <Button variant="outline" onClick={() => { setDirty(false); setSelectedId(pendingSelection); setPendingSelection(null); }}>{t("discardChanges")}</Button>
+            <AlertDialogAction onClick={() => void (async () => {
+              if (await saveSelectedRef.current?.()) {
+                setSelectedId(pendingSelection);
+                setPendingSelection(null);
+              }
+            })()}>{t("save")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
+}
+
+function SkillMarketplace(props: {
+  className: string;
+  installed: Skill[];
+  toolbar: ReactNode;
+  t: T;
+  onInstalled(skills: Skill[]): Promise<void>;
+}) {
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [selected, setSelected] = useState<MarketplaceSkill | null>(null);
+  const [preview, setPreview] = useState<RemoteSkillPreview | null>(null);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(query.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => () => {
+    if (preview !== null) discardRemotePreview(preview.previewId);
+  }, [preview]);
+  const results = useQuery({
+    queryKey: ["skill-marketplace", debounced],
+    queryFn: () => window.piWork.skill.searchMarketplace({ provider: "skills.sh", query: debounced, limit: 30 }),
+    enabled: debounced.length >= 2,
+  });
+  const resolve = useMutation({
+    mutationFn: (skill: MarketplaceSkill) => window.piWork.skill.previewRemote({
+      sourceUrl: skill.sourceUrl,
+      provider: "skills.sh",
+      skillId: skill.skillId,
+    }),
+    onMutate: (skill) => { setSelected(skill); setPreview(null); setError(null); },
+    onSuccess: (value) => {
+      setPreview(value);
+      setSelectedSkills(value.skills.filter(({ duplicate }) => !duplicate).map(({ id }) => id));
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const install = useMutation({
+    mutationFn: () => {
+      if (preview === null) throw new Error("Preview the Skill before installing it.");
+      return window.piWork.skill.installRemote({ previewId: preview.previewId, skillIds: selectedSkills });
+    },
+    onSuccess: props.onInstalled,
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const installedNames = new Set(props.installed.map(({ name }) => name));
+  return <section className={`page ${props.className} skill-marketplace-page`}>
+    {props.toolbar}
+    <div className="skill-marketplace-layout">
+      <section className="skill-marketplace-results">
+        <label className="library-search skill-marketplace-search"><Icon name="search" /><Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={props.t("searchSkillMarketplace")} /></label>
+        <div className="skill-marketplace-list">
+          {query.trim().length < 2 ? <div className="skill-marketplace-empty"><Icon name="search" /><strong>{props.t("findSkills")}</strong><p>{props.t("findSkillsDetail")}</p></div> : null}
+          {results.isFetching ? <div className="page-loading"><span /><span /><span /></div> : null}
+          {results.error instanceof Error ? <Alert className="form-error"><AlertDescription>{results.error.message}</AlertDescription></Alert> : null}
+          {results.data?.map((skill) => {
+            const isInstalled = skill.installed || installedNames.has(skill.skillId);
+            return <Button key={skill.id} variant="ghost" className={selected?.id === skill.id ? "skill-marketplace-row selected" : "skill-marketplace-row"} onClick={() => resolve.mutate(skill)}>
+              <span className="resource-symbol"><Icon name="skills" /></span>
+              <span><strong>{skill.name}</strong><small>{skill.source}</small><small>{formatInstallCount(skill.installs)} {props.t("installs")}</small></span>
+              {isInstalled ? <Badge>{props.t("installed")}</Badge> : <Icon name="forward" size={14} />}
+            </Button>;
+          })}
+          {results.data?.length === 0 ? <p className="library-empty">{props.t("noMarketplaceResults")}</p> : null}
+        </div>
+      </section>
+      <aside className="skill-marketplace-preview">
+        {resolve.isPending ? <div className="page-loading"><span /><span /><span /></div> : null}
+        {!resolve.isPending && preview === null && error === null ? <div className="resource-detail-empty"><Icon name="skills" /><p>{props.t("selectMarketplaceSkill")}</p></div> : null}
+        {error ? <div className="skill-preview-error"><Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert>{selected ? <Button variant="outline" onClick={() => resolve.mutate(selected)}><Icon name="refresh" />{props.t("retry")}</Button> : null}</div> : null}
+        {preview ? <RemoteSkillPreviewPanel preview={preview} selected={selectedSkills} installing={install.isPending} t={props.t} onSelected={setSelectedSkills} onInstall={() => install.mutate()} /> : null}
+      </aside>
+    </div>
+  </section>;
+}
+
+function RemoteSkillDialog(props: { open: boolean; t: T; onOpenChange(open: boolean): void; onInstalled(skills: Skill[]): Promise<void> }) {
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [preview, setPreview] = useState<RemoteSkillPreview | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const resolve = useMutation({
+    mutationFn: () => window.piWork.skill.previewRemote({ sourceUrl, provider: "url" }),
+    onSuccess: (value) => {
+      if (!props.open) {
+        discardRemotePreview(value.previewId);
+        return;
+      }
+      setError(null);
+      setPreview(value);
+      setSelected(value.skills.filter(({ duplicate }) => !duplicate).map(({ id }) => id));
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const install = useMutation({
+    mutationFn: () => {
+      if (preview === null) throw new Error("Preview the Skill before installing it.");
+      return window.piWork.skill.installRemote({ previewId: preview.previewId, skillIds: selected });
+    },
+    onSuccess: async (skills) => {
+      props.onOpenChange(false);
+      setSourceUrl("");
+      setPreview(null);
+      await props.onInstalled(skills);
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  useEffect(() => () => {
+    if (preview !== null) discardRemotePreview(preview.previewId);
+  }, [preview]);
+  const setOpen = (open: boolean) => {
+    if (!open) {
+      if (preview !== null) discardRemotePreview(preview.previewId);
+      setPreview(null);
+      setSelected([]);
+      setError(null);
+    }
+    props.onOpenChange(open);
+  };
+  return <Dialog open={props.open} onOpenChange={setOpen}>
+    <DialogContent className="skill-url-dialog">
+      <DialogHeader><DialogTitle>{props.t("installFromUrl")}</DialogTitle><DialogDescription>{props.t("installFromUrlDetail")}</DialogDescription></DialogHeader>
+      <Field><FieldLabel>{props.t("sourceUrl")}</FieldLabel><Input value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setPreview(null); }} placeholder="https://www.skills.sh/…" /></Field>
+      {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      {preview ? <RemoteSkillPreviewPanel preview={preview} selected={selected} installing={install.isPending} compact t={props.t} onSelected={setSelected} onInstall={() => install.mutate()} /> : null}
+      {!preview ? <DialogFooter><Button variant="ghost" onClick={() => setOpen(false)}>{props.t("cancel")}</Button><Button disabled={!sourceUrl.trim() || resolve.isPending} onClick={() => resolve.mutate()}>{resolve.isPending ? props.t("loading") : props.t("previewSkill")}</Button></DialogFooter> : null}
+    </DialogContent>
+  </Dialog>;
+}
+
+function discardRemotePreview(previewId: string): void {
+  void window.piWork.skill.cancelRemotePreview(previewId).catch(() => undefined);
+}
+
+function RemoteSkillPreviewPanel(props: {
+  preview: RemoteSkillPreview;
+  selected: string[];
+  installing: boolean;
+  compact?: boolean;
+  t: T;
+  onSelected(ids: string[]): void;
+  onInstall(): void;
+}) {
+  return <div className={props.compact ? "remote-skill-preview is-compact" : "remote-skill-preview"}>
+    <header><div><span>{props.preview.provider}</span><h2>{props.preview.skills.length === 1 ? props.preview.skills[0]?.name : props.t("skillsFound")}</h2><p>{props.preview.repositoryUrl ?? props.preview.sourceUrl}</p></div><Icon name="skills" /></header>
+    <div className="remote-skill-candidates">
+      {props.preview.skills.map((skill) => {
+        const checked = props.selected.includes(skill.id);
+        return <label className={skill.duplicate ? "remote-skill-candidate is-disabled" : "remote-skill-candidate"} key={skill.id}>
+          <input type="checkbox" checked={checked} disabled={skill.duplicate} onChange={(event) => props.onSelected(event.target.checked ? [...props.selected, skill.id] : props.selected.filter((id) => id !== skill.id))} />
+          <span><strong>{skill.name}</strong><small>{skill.description}</small><small>{skill.files} {props.t("files")} · {skill.path}</small></span>
+          {skill.duplicate ? <Badge>{props.t("installed")}</Badge> : null}
+        </label>;
+      })}
+    </div>
+    <footer><span>{props.selected.length} {props.t("selected")}</span><Button disabled={props.selected.length === 0 || props.installing} onClick={props.onInstall}>{props.installing ? props.t("installing") : props.t("installSelectedSkills")}</Button></footer>
+  </div>;
 }
 
 function SystemSkillsPanel(props: {
@@ -387,57 +1062,139 @@ function systemSkillSourceLabel(source: SystemSkill["source"], t: T): string {
   return t(labels[source]);
 }
 
-function SkillEditor({ skill, t, onSaved, onDeleted }: { skill: Skill; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
+function SkillEditor({ skill, t, onSaved, onDeleted, onDirtyChange, registerSave }: {
+  skill: Skill;
+  t: T;
+  onSaved(): Promise<unknown>;
+  onDeleted(): Promise<void>;
+  onDirtyChange(dirty: boolean): void;
+  registerSave(save: () => Promise<boolean>): void;
+}) {
+  const [tab, setTab] = useState<"overview" | "instructions" | "files">("overview");
   const [name, setName] = useState(skill.name);
   const [description, setDescription] = useState(skill.description);
   const [instructions, setInstructions] = useState(skill.instructions);
   const [enabled, setEnabled] = useState(skill.enabled);
   const [error, setError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const files = useQuery({
     queryKey: ["skill-files", skill.id],
     queryFn: () => window.piWork.skill.listFiles(skill.id),
   });
-  useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); setEnabled(skill.enabled); setError(null); }, [skill]);
+  const dirty = name !== skill.name || description !== skill.description || instructions !== skill.instructions || enabled !== skill.enabled;
+  useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); setEnabled(skill.enabled); setError(null); setTab("overview"); }, [skill]);
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   const save = useMutation({
     mutationFn: () => window.piWork.skill.update({ id: skill.id, value: { name, description, instructions, enabled } }),
     onSuccess: onSaved,
     onError: (cause: Error) => setError(cause.message),
-  });
-  const toggle = useMutation({
-    mutationFn: (next: boolean) => window.piWork.skill.setEnabled(skill.id, next),
-    onSuccess: async () => { setError(null); await onSaved(); },
-    onError: (cause: Error) => { setEnabled(skill.enabled); setError(cause.message); },
   });
   const remove = useMutation({
     mutationFn: () => window.piWork.skill.remove(skill.id),
     onSuccess: onDeleted,
     onError: (cause: Error) => setError(cause.message),
   });
-  return <ResourceEditor title={skill.name} status={t("skillRuntimeDetail")} t={t} onDelete={() => remove.mutate()}>
-    <Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert>
-    <SkillFolderTree entries={files.data} loading={files.isLoading} t={t} />
-    <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field><Field><FieldLabel>{t("instructions")}</FieldLabel><Textarea className="markdown-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={18} /></Field><Field><FieldLabel>{t("enabled")}</FieldLabel><Switch checked={enabled} disabled={toggle.isPending} onCheckedChange={(next) => { setEnabled(next); toggle.mutate(next); }} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button disabled={save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
-  </ResourceEditor>;
+  const saveCurrentRef = useRef<() => Promise<boolean>>(async () => false);
+  saveCurrentRef.current = async (): Promise<boolean> => {
+    try {
+      await save.mutateAsync();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  useEffect(() => {
+    registerSave(() => saveCurrentRef.current());
+  }, [registerSave]);
+  return <>
+    <header className="skill-editor-header">
+      <div><span>{skillSourceLabel(skill, t)}</span><h2>{skill.name}</h2><small>{dirty ? t("unsaved") : t("saved")}</small></div>
+      <div><label className="skill-enabled-control"><span>{t("enabled")}</span><Switch checked={enabled} disabled={save.isPending} onCheckedChange={setEnabled} /></label><Button variant="outline" size="icon" aria-label={t("delete")} onClick={() => setDeleteOpen(true)}><Icon name="trash" /></Button><Button disabled={!dirty || save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></div>
+    </header>
+    <Tabs className="skill-editor-tabs" value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+      <TabsList><TabsTrigger value="overview">{t("overview")}</TabsTrigger><TabsTrigger value="instructions">{t("instructions")}</TabsTrigger><TabsTrigger value="files">{t("files")}</TabsTrigger></TabsList>
+    </Tabs>
+    <div className={`skill-editor-content skill-editor-content--${tab}`}>
+      {tab === "overview" ? <FieldGroup><Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert><div className="skill-source-summary"><span>{t("source")}</span><strong>{skillSourceDetail(skill, t)}</strong></div><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}</FieldGroup> : null}
+      {tab === "instructions" ? <Textarea aria-label={t("instructions")} className="markdown-editor skill-instructions-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} spellCheck={false} /> : null}
+      {tab === "files" ? <SkillFilesPanel skillId={skill.id} entries={files.data} loading={files.isLoading} t={t} /> : null}
+    </div>
+    <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>{t("deleteSkill")}</AlertDialogTitle><AlertDialogDescription>{t("deleteSkillDetail")}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>{t("cancel")}</AlertDialogCancel><AlertDialogAction disabled={remove.isPending} onClick={() => remove.mutate()}>{t("delete")}</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </>;
 }
 
-function SkillFolderTree({ entries, loading, t }: { entries: SkillFolderEntry[] | undefined; loading: boolean; t: T }) {
+function SkillFilesPanel({ skillId, entries, loading, t }: { skillId: string; entries: SkillFolderEntry[] | undefined; loading: boolean; t: T }) {
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const files = entries?.filter(({ type }) => type === "file") ?? [];
+    const preferred = files.find(({ path }) => path === "SKILL.md") ?? files[0];
+    setSelectedPath((current) => files.some(({ path }) => path === current) ? current : preferred?.path ?? null);
+  }, [entries, skillId]);
+  useEffect(() => setCopied(false), [selectedPath]);
+  const file = useQuery({
+    queryKey: ["skill-file", skillId, selectedPath],
+    queryFn: () => window.piWork.skill.readFile(skillId, selectedPath as string),
+    enabled: selectedPath !== null,
+    retry: false,
+  });
   return (
-    <details className="skill-folder-tree" open>
-      <summary>
+    <div className="skill-files-panel">
+      <aside className="skill-folder-tree">
+        <header>
         <span><Icon name="workspace" size={14} />{t("skillFolderContents")}</span>
         <small>{loading ? t("loading") : `${entries?.length ?? 0} ${t("files")}`}</small>
-      </summary>
-      <div className="skill-folder-tree-list">
-        {loading ? <div className="skill-folder-tree-loading">{t("loading")}</div> : null}
-        {entries?.map((entry) => (
-          <div className={`skill-folder-tree-row skill-folder-tree-row--${entry.type} skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}`} key={entry.path}>
-            <Icon name={entry.type === "directory" ? "workspace" : "file"} size={14} />
-            <span>{entry.name}</span>
-          </div>
-        ))}
-      </div>
-    </details>
+        </header>
+        <div className="skill-folder-tree-list">
+          {loading ? <div className="skill-folder-tree-loading">{t("loading")}</div> : null}
+          {entries?.map((entry) => entry.type === "file" ? (
+            <button className={`skill-folder-tree-row skill-folder-tree-row--file skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}${selectedPath === entry.path ? " selected" : ""}`} key={entry.path} onClick={() => setSelectedPath(entry.path)}>
+              <Icon name="file" size={14} />
+              <span>{entry.name}</span>
+            </button>
+          ) : (
+            <div className={`skill-folder-tree-row skill-folder-tree-row--directory skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}`} key={entry.path}>
+              <Icon name="workspace" size={14} />
+              <span>{entry.name}</span>
+            </div>
+          ))}
+        </div>
+      </aside>
+      <section className="skill-file-viewer">
+        {file.data ? <SkillFileViewer file={file.data} copied={copied} t={t} onCopy={() => {
+          void navigator.clipboard.writeText(file.data.content).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1_500);
+          });
+        }} /> : <div className="skill-file-viewer-empty">
+          {file.isLoading ? t("loading") : file.error instanceof Error ? file.error.message : t("selectFileToPreview")}
+        </div>}
+      </section>
+    </div>
   );
+}
+
+function SkillFileViewer({ file, copied, t, onCopy }: { file: SkillFileContent; copied: boolean; t: T; onCopy(): void }) {
+  const lines = file.content.split("\n");
+  return <>
+    <header className="skill-file-viewer-header">
+      <span><strong>{file.path}</strong><small>{file.language} · {formatFileSize(file.size)}</small></span>
+      <Button variant="ghost" size="sm" onClick={onCopy}><Icon name={copied ? "check" : "copy"} size={14} />{copied ? t("copied") : t("copy")}</Button>
+    </header>
+    <div className="skill-code-viewer" role="region" aria-label={file.path}>
+      <code>{lines.map((line, index) => <span className="skill-code-line" key={index}><i>{index + 1}</i><b>{line || "\u00a0"}</b></span>)}</code>
+    </div>
+  </>;
+}
+
+function formatFileSize(bytes: number): string {
+  return bytes < 1_024 ? `${bytes} B` : `${(bytes / 1_024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
 }
 
 function nextSkillName(skills: Skill[]): string {
@@ -447,6 +1204,23 @@ function nextSkillName(skills: Skill[]): string {
     const candidate = `untitled-skill-${suffix}`;
     if (!names.has(candidate)) return candidate;
   }
+}
+
+function skillSourceLabel(skill: Skill, t: T): string {
+  if (skill.source?.type === "remote") return skill.source.provider;
+  if (skill.source?.type === "system") return systemSkillSourceLabel(skill.source.provider, t);
+  if (skill.source?.type === "created") return t("createdInPiWork");
+  return t("localSkill");
+}
+
+function skillSourceDetail(skill: Skill, t: T): string {
+  if (skill.source?.type === "remote") return skill.source.repositoryUrl ?? skill.source.sourceUrl;
+  if (skill.source?.type === "system" || skill.source?.type === "local") return skill.source.path ?? t("localSkill");
+  return t("createdInPiWork");
+}
+
+function formatInstallCount(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 export function AutomationsPage({ workspaceId, t }: { workspaceId: string; t: T }) {

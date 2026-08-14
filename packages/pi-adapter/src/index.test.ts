@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertAuthorizedFilePath,
@@ -171,6 +175,99 @@ describe("PiAdapter", () => {
       { cwd: root, agentDir: join(root, "pi-agent") },
       "./relative-extension",
     )).rejects.toThrow("absolute path");
+  });
+
+  it("inspects and calls a stdio MCP server", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-work-mcp-"));
+    temporaryDirectories.push(root);
+    const fixture = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "test-fixtures",
+      "mcp-stdio-server.mjs",
+    );
+    const adapter = new PiAdapter();
+    const runtime = { cwd: root, agentDir: join(root, "pi-agent") };
+    const server = {
+      id: randomUUID(),
+      name: "Fixture MCP",
+      type: "mcp_stdio" as const,
+      config: {
+        command: process.execPath,
+        args: [fixture],
+        env: { PI_WORK_MCP_PREFIX: "fixture" },
+      },
+    };
+
+    await expect(adapter.inspectMcp(server, runtime)).resolves.toEqual(expect.objectContaining({
+      connected: true,
+      transport: "stdio",
+      serverName: "pi-work-test-mcp",
+      tools: [expect.objectContaining({ name: "echo", title: "Echo text" })],
+    }));
+    await expect(adapter.callMcpTool(server, runtime, "echo", { text: "hello" })).resolves.toEqual({
+      content: [{ type: "text", text: "fixture:hello" }],
+      isError: false,
+      structuredContent: { echoed: "fixture:hello" },
+    });
+  });
+
+  it("inspects and calls a Streamable HTTP MCP server with custom headers", async () => {
+    const httpServer = createServer(async (request, response) => {
+      if (request.headers["x-pi-work-test"] !== "allowed") {
+        response.writeHead(401).end("Unauthorized");
+        return;
+      }
+      const server = new McpServer({ name: "pi-work-http-mcp", version: "1.0.0" });
+      server.registerTool("sum", {
+        inputSchema: { left: z.number(), right: z.number() },
+      }, async ({ left, right }) => ({
+        content: [{ type: "text", text: String(left + right) }],
+      }));
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined } as any);
+      await server.connect(transport as any);
+      await transport.handleRequest(request, response);
+      response.once("close", () => {
+        void transport.close();
+        void server.close();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = httpServer.address();
+      if (address === null || typeof address === "string") throw new Error("No HTTP test server address.");
+      const runtime = { cwd: process.cwd(), agentDir: join(process.cwd(), ".pi-agent-test") };
+      const server = {
+        id: randomUUID(),
+        name: "HTTP Fixture",
+        type: "mcp_http" as const,
+        config: {
+          url: `http://127.0.0.1:${address.port}/mcp`,
+          transport: "streamable_http",
+          headers: { "X-Pi-Work-Test": "allowed" },
+          auth: "none",
+        },
+      };
+      const adapter = new PiAdapter();
+
+      await expect(adapter.inspectMcp(server, runtime)).resolves.toEqual(expect.objectContaining({
+        connected: true,
+        transport: "streamable_http",
+        serverName: "pi-work-http-mcp",
+        tools: [expect.objectContaining({ name: "sum" })],
+      }));
+      await expect(adapter.callMcpTool(server, runtime, "sum", { left: 20, right: 22 })).resolves.toEqual({
+        content: [{ type: "text", text: "42" }],
+        isError: false,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => error ? reject(error) : resolve());
+      });
+    }
   });
 
   it("ignores workspace-level Pi extension settings", async () => {
