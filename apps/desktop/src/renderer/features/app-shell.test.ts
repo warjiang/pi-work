@@ -44,6 +44,8 @@ const settings: AppSettings = {
   sidebarCollapsed: false,
   focusMode: false,
   compactMode: false,
+  disabledModelKeys: [],
+  modelTestResults: {},
 };
 
 describe("new session defaults", () => {
@@ -72,6 +74,15 @@ describe("new session defaults", () => {
     expect(resolveDefaultModel(providers, undefined, settings)).toBeUndefined();
   });
 
+  it("excludes disabled models from default selection", () => {
+    const model = resolveDefaultModel(providers, models, {
+      ...settings,
+      disabledModelKeys: ["openai/gpt-5"],
+    });
+
+    expect(model).toEqual(claude);
+  });
+
   it("creates a personal session with the resolved model configuration", () => {
     expect(createNewSessionInput(gpt, "medium")).toEqual({
       providerId: "openai",
@@ -86,7 +97,6 @@ describe("command settings", () => {
     expect(commandSettingItems.map(({ section }) => section)).toEqual([
       "general",
       "modelsCredentials",
-      "workFolders",
       "permissions",
       "skills",
       "mcp",

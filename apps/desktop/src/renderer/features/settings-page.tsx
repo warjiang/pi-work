@@ -208,8 +208,8 @@ function SettingsSectionBlock(props: { className?: string; title: string; detail
   return <section className={`settings-section${props.className ? ` ${props.className}` : ""}`}>{showHeader ? <header>{props.showTitle !== false ? <h2>{props.title}</h2> : null}{props.detail ? <p>{props.detail}</p> : null}</header> : null}<div>{props.children}</div></section>;
 }
 
-function SettingsSubsection(props: { title?: string; detail?: string; children: ReactNode }) {
-  return <section className="settings-subsection">{props.title || props.detail ? <header>{props.title ? <h2>{props.title}</h2> : null}{props.detail ? <p>{props.detail}</p> : null}</header> : null}{props.children}</section>;
+function SettingsSubsection(props: { className?: string; title?: string; detail?: string; children: ReactNode }) {
+  return <section className={`settings-subsection${props.className ? ` ${props.className}` : ""}`}>{props.title || props.detail ? <header>{props.title ? <h2>{props.title}</h2> : null}{props.detail ? <p>{props.detail}</p> : null}</header> : null}{props.children}</section>;
 }
 
 function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
@@ -229,8 +229,8 @@ function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
         <AppearanceSettings {...props} />
       </section>
       <aside className="settings-general-utilities">
-        <SettingsSubsection title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
-          <Button variant="outline" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
+        <SettingsSubsection className="settings-utility-onboarding" title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
+          <Button variant="outline" size="sm" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
         </SettingsSubsection>
         <ShortcutSettings t={props.t} />
       </aside>
@@ -241,29 +241,52 @@ function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
 function ModelSettings(props: BaseProps) {
   const [providerId, setProviderId] = useState("");
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [addProviderOpen, setAddProviderOpen] = useState(false);
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(() => (
+    props.providers.some((provider) => provider.providerId === props.settings.providerId)
+      ? props.settings.providerId
+      : (props.providers[0]?.providerId ?? null)
+  ));
   const [apiKey, setApiKey] = useState("");
   const [removeProvider, setRemoveProvider] = useState<string | null>(null);
   const [modelsRefreshed, setModelsRefreshed] = useState(false);
   const [credentialSaved, setCredentialSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [modelToggleError, setModelToggleError] = useState<string | null>(null);
+  const [modelTogglePending, setModelTogglePending] = useState<string | null>(null);
+  const [selectedTestKeys, setSelectedTestKeys] = useState<Set<string>>(() => new Set());
+  const [modelTestError, setModelTestError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const refreshFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const providerOptions = useMemo(() => Array.from(new Map((props.models?.models ?? []).map((model) => [model.providerId, model.providerName])).entries()), [props.models]);
   const providerNames = useMemo(() => new Map(providerOptions), [providerOptions]);
-  const modelOptions = (props.models?.models ?? []).filter((model) => props.providers.some((provider) => provider.providerId === model.providerId));
   const defaultModelKey = props.settings.providerId && props.settings.modelId ? `${props.settings.providerId}/${props.settings.modelId}` : "";
+  const disabledModelKeys = useMemo(() => new Set(props.settings.disabledModelKeys ?? []), [props.settings.disabledModelKeys]);
   const providerModels = useMemo(() => new Map(
     props.providers.map((provider) => [
       provider.providerId,
       (props.models?.models ?? [])
-        .filter((model) => model.providerId === provider.providerId)
-        .sort((left, right) => left.modelName.localeCompare(right.modelName)),
+        .filter((model) => model.providerId === provider.providerId),
     ]),
   ), [props.models, props.providers]);
+  const selectedProviderModels = selectedProviderId ? (providerModels.get(selectedProviderId) ?? []) : [];
+  const selectedProviderEnabledModels = selectedProviderModels.filter((model) => !disabledModelKeys.has(`${model.providerId}/${model.modelId}`));
+  const testModels = useMutation({
+    mutationFn: (models: Array<{ providerId: string; modelId: string }>) => window.piWork.model.test({ models }),
+    onSuccess: async () => {
+      setModelTestError(null);
+      setSelectedTestKeys(new Set());
+      await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: (cause: Error) => setModelTestError(cause.message),
+  });
   const save = useMutation({
     mutationFn: () => window.piWork.provider.save({ providerId, apiKey }),
     onSuccess: async () => {
       setApiKey("");
+      setProviderId("");
+      setAddProviderOpen(false);
       setSaveError(null);
       if (saveFeedbackTimer.current !== null) clearTimeout(saveFeedbackTimer.current);
       setCredentialSaved(true);
@@ -294,6 +317,65 @@ function ModelSettings(props: BaseProps) {
     if (refreshFeedbackTimer.current !== null) clearTimeout(refreshFeedbackTimer.current);
     if (saveFeedbackTimer.current !== null) clearTimeout(saveFeedbackTimer.current);
   }, []);
+  useEffect(() => {
+    if (selectedProviderId !== null && props.providers.some((provider) => provider.providerId === selectedProviderId)) return;
+    setSelectedProviderId(props.settings.providerId && props.providers.some((provider) => provider.providerId === props.settings.providerId)
+      ? props.settings.providerId
+      : (props.providers[0]?.providerId ?? null));
+  }, [props.providers, props.settings.providerId, selectedProviderId]);
+  function selectModel(providerId: string, modelId: string) {
+    if (disabledModelKeys.has(`${providerId}/${modelId}`)) return;
+    const model = (props.models?.models ?? []).find((candidate) => candidate.providerId === providerId && candidate.modelId === modelId);
+    if (!model) return;
+    void props.onUpdate({
+      providerId: model.providerId,
+      modelId: model.modelId,
+      thinkingLevel: model.thinkingLevels.includes(props.settings.thinkingLevel) ? props.settings.thinkingLevel : (model.thinkingLevels[0] ?? "off"),
+    });
+  }
+  async function toggleModel(model: ModelCatalog["models"][number], enabled: boolean) {
+    const key = `${model.providerId}/${model.modelId}`;
+    const nextDisabled = new Set(disabledModelKeys);
+    if (enabled) nextDisabled.delete(key);
+    else nextDisabled.add(key);
+
+    const update: Partial<AppSettings> = { disabledModelKeys: [...nextDisabled] };
+    if (!enabled && key === defaultModelKey) {
+      const fallback = props.providers.flatMap(({ providerId }) => (
+        (props.models?.models ?? []).filter((candidate) => (
+          candidate.providerId === providerId
+          && !nextDisabled.has(`${candidate.providerId}/${candidate.modelId}`)
+        ))
+      )).find(Boolean);
+      update.providerId = fallback?.providerId ?? null;
+      update.modelId = fallback?.modelId ?? null;
+      update.thinkingLevel = fallback?.thinkingLevels.includes(props.settings.thinkingLevel)
+        ? props.settings.thinkingLevel
+        : (fallback?.thinkingLevels[0] ?? "off");
+    }
+    setModelToggleError(null);
+    setModelTogglePending(key);
+    try {
+      await props.onUpdate(update);
+    } catch (cause) {
+      setModelToggleError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelTogglePending(null);
+    }
+  }
+  function toggleTestSelection(key: string) {
+    setSelectedTestKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function runModelTests(models: Array<{ providerId: string; modelId: string }>) {
+    if (models.length === 0 || testModels.isPending) return;
+    setModelTestError(null);
+    testModels.mutate(models);
+  }
   async function remove() {
     if (removeProvider === null) return;
     await window.piWork.provider.remove(removeProvider);
@@ -303,19 +385,15 @@ function ModelSettings(props: BaseProps) {
   }
   return <>
     <SettingsSectionBlock className="model-settings" title={props.t("modelsCredentials")} detail={props.t("credentialDetail")} showTitle={false}>
-      <div className="model-connection-form">
-        <div className="model-connection-copy">
-          <span>{props.t("addProvider")}</span>
-          <p>{props.t("addProviderDetail")}</p>
+      <section className="model-default-section">
+        <div className="model-current-control">
+          <div>
+            <strong>{props.t("defaultModel")}</strong>
+            <small>{props.t("defaultModelDetail")}</small>
+          </div>
+          <span className="model-current-value">{defaultModelKey ? modelOptionsLabel(props.models, props.settings.providerId, props.settings.modelId) : props.t("noModel")}</span>
         </div>
-        <FieldGroup className="credential-form">
-          <Field><FieldLabel>{props.t("provider")}</FieldLabel><Popover open={providerMenuOpen} onOpenChange={setProviderMenuOpen}><PopoverTrigger asChild><Button variant="outline" role="combobox" aria-expanded={providerMenuOpen} className="provider-combobox-trigger"><span>{providerId ? (providerNames.get(providerId) ?? providerId) : props.t("provider")}</span><Icon name="chevron-down" size={14} /></Button></PopoverTrigger><PopoverContent className="provider-combobox-content"><Command><CommandInput autoFocus placeholder={props.t("searchProviders")} /><CommandList><CommandEmpty>{props.t("noProvidersFound")}</CommandEmpty><CommandGroup>{providerOptions.map(([id, name]) => <CommandItem key={id} value={id} keywords={[name, id]} onSelect={() => { setProviderId(id); setProviderMenuOpen(false); }}><span>{name}</span>{providerId === id ? <Icon name="check" size={14} className="ml-auto" /> : null}</CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></Field>
-          <Field><FieldLabel>{props.t("apiKey")}</FieldLabel><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></Field>
-          <Button disabled={!providerId || !apiKey || save.isPending} onClick={() => save.mutate()}><Icon name="plus" />{save.isPending ? props.t("saving") : props.t("addProvider")}</Button>
-          {saveError !== null ? <Alert className="form-error credential-form-notice"><AlertDescription>{saveError}</AlertDescription></Alert> : null}
-          <p className="credential-saved" role="status" aria-live="polite">{credentialSaved ? <><Icon name="check" size={14} />{props.t("credentialSaved")}</> : null}</p>
-        </FieldGroup>
-      </div>
+      </section>
       <section className="connected-providers" aria-label={props.t("connectedProviders")}>
         <header>
           <div>
@@ -350,48 +428,155 @@ function ModelSettings(props: BaseProps) {
               </span>
             </Button>
             <Badge>{props.providers.length}</Badge>
+            <Button type="button" variant={addProviderOpen ? "secondary" : "outline"} size="sm" className="model-add-trigger" aria-expanded={addProviderOpen} onClick={() => {
+              setAddProviderOpen((open) => !open);
+              setSaveError(null);
+            }}><Icon name={addProviderOpen ? "close" : "plus"} />{addProviderOpen ? props.t("cancel") : props.t("addProvider")}</Button>
           </div>
         </header>
-        <div className="credential-list">
-          {props.providers.map((provider) => {
-            const availableModels = providerModels.get(provider.providerId) ?? [];
-            const providerName = providerNames.get(provider.providerId) ?? provider.providerId;
-            return (
-              <article className="credential-provider" key={provider.providerId}>
-                <div className="credential-provider-identity">
+        {addProviderOpen ? <section className="model-add-panel" aria-label={props.t("addProvider")}>
+          <div className="model-add-panel-heading">
+            <strong>{props.t("addProvider")}</strong>
+            <small>{props.t("addProviderDetail")}</small>
+          </div>
+          <FieldGroup className="credential-form">
+            <Field><FieldLabel>{props.t("provider")}</FieldLabel><Popover open={providerMenuOpen} onOpenChange={setProviderMenuOpen}><PopoverTrigger asChild><Button variant="outline" role="combobox" aria-expanded={providerMenuOpen} className="provider-combobox-trigger"><span>{providerId ? providerDisplayName(providerNames.get(providerId) ?? providerId) : props.t("provider")}</span><Icon name="chevron-down" size={14} /></Button></PopoverTrigger><PopoverContent className="provider-combobox-content"><Command><CommandInput autoFocus placeholder={props.t("searchProviders")} /><CommandList><CommandEmpty>{props.t("noProvidersFound")}</CommandEmpty><CommandGroup>{providerOptions.map(([id, name]) => <CommandItem key={id} value={id} keywords={[name, id]} onSelect={() => { setProviderId(id); setProviderMenuOpen(false); }}><span>{providerDisplayName(name)}</span>{providerId === id ? <Icon name="check" size={14} className="ml-auto" /> : null}</CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></Field>
+            <Field><FieldLabel>{props.t("apiKey")}</FieldLabel><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></Field>
+            <Button disabled={!providerId || !apiKey || save.isPending} onClick={() => save.mutate()}><Icon name="plus" />{save.isPending ? props.t("saving") : props.t("addProvider")}</Button>
+            {saveError !== null ? <Alert className="form-error credential-form-notice"><AlertDescription>{saveError}</AlertDescription></Alert> : null}
+            <p className="credential-saved" role="status" aria-live="polite">{credentialSaved ? <><Icon name="check" size={14} />{props.t("credentialSaved")}</> : null}</p>
+          </FieldGroup>
+        </section> : null}
+        {props.providers.length === 0 ? <p className="credential-empty-state">{props.t("noCredentials")}</p> : (
+          <div className="model-workspace">
+            <aside className="model-provider-nav" aria-label={props.t("connectedProviders")}>
+              {props.providers.map((provider) => {
+                const availableModels = providerModels.get(provider.providerId) ?? [];
+                const providerName = providerDisplayName(providerNames.get(provider.providerId) ?? provider.providerId);
+                const enabledModels = availableModels.filter((model) => !disabledModelKeys.has(`${model.providerId}/${model.modelId}`));
+                return <Button
+                  type="button"
+                  variant="ghost"
+                  key={provider.providerId}
+                  className={selectedProviderId === provider.providerId ? "selected" : ""}
+                  aria-pressed={selectedProviderId === provider.providerId}
+                  onClick={() => setSelectedProviderId(provider.providerId)}
+                >
                   <span className="credential-provider-status"><Icon name="check-circle" size={14} /></span>
-                  <span><strong>{providerName}</strong><small>{props.t("credentialStored")}</small></span>
+                  <span><strong>{providerName}</strong><small>{enabledModels.length}/{availableModels.length} {props.t("enabled").toLocaleLowerCase()}</small></span>
+                </Button>;
+              })}
+            </aside>
+            {selectedProviderId ? <section className="model-provider-detail">
+              <header>
+                <div>
+                  <strong>{providerDisplayName(providerNames.get(selectedProviderId) ?? selectedProviderId)}</strong>
+                  <small>{props.t("credentialStored")}</small>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => setRemoveProvider(provider.providerId)}>{props.t("removeCredential")}</Button>
-                <details className="provider-models">
-                  <summary>
-                    <span>{props.t("providerModels")}</span>
-                    <small>{availableModels.length}</small>
-                    <Icon name="chevron-down" size={14} />
-                  </summary>
-                  <div>
-                    {availableModels.length > 0
-                      ? availableModels.map((model) => <code key={model.modelId} title={model.modelId}>{model.modelName}</code>)
-                      : <p>{props.t("noProviderModels")}</p>}
-                  </div>
-                </details>
-              </article>
-            );
-          })}
-          {props.providers.length === 0 ? <p className="credential-empty-state">{props.t("noCredentials")}</p> : null}
-        </div>
+                <Button variant="ghost" size="sm" onClick={() => setRemoveProvider(selectedProviderId)}>{props.t("removeCredential")}</Button>
+              </header>
+              <div className="model-test-toolbar">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={selectedTestKeys.size === 0 || testModels.isPending}
+                  onClick={() => runModelTests(selectedProviderModels.filter((model) => selectedTestKeys.has(`${model.providerId}/${model.modelId}`)))}
+                >
+                  <Icon name="refresh" className={testModels.isPending ? "is-spinning" : undefined} />
+                  {props.t(testModels.isPending ? "testingModels" : "testSelectedModels")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={selectedProviderEnabledModels.length === 0 || testModels.isPending}
+                  onClick={() => runModelTests(selectedProviderEnabledModels)}
+                >
+                  <Icon name="refresh" className={testModels.isPending ? "is-spinning" : undefined} />
+                  {props.t("testEnabledModels")}
+                </Button>
+              </div>
+              <div className="model-list-heading">
+                <span>{props.t("model")}</span>
+                <span>{props.t("testSelectedModels").replace(/\s.+$/, "")}</span>
+                <span>{props.t("result")}</span>
+                <span>{props.t("defaultModel")}</span>
+                <span><em>{props.t("enabled")}</em><small>{selectedProviderEnabledModels.length}/{selectedProviderModels.length}</small></span>
+              </div>
+              <div className="model-option-list">
+                {selectedProviderModels.length > 0
+                  ? selectedProviderModels.map((model) => {
+                    const isDefault = defaultModelKey === `${model.providerId}/${model.modelId}`;
+                    const key = `${model.providerId}/${model.modelId}`;
+                    const isDisabled = disabledModelKeys.has(key);
+                    const testResult = props.settings.modelTestResults[key];
+                    const isSelectedForTest = selectedTestKeys.has(key);
+                    return <div key={model.modelId} className={`model-option${isDefault ? " is-default" : ""}${isDisabled ? " is-disabled" : ""}`}>
+                      <div className="model-option-info">
+                        <code title={model.modelId}>{model.modelName}</code>
+                      </div>
+                      <Button
+                        type="button"
+                        variant={isSelectedForTest ? "secondary" : "ghost"}
+                        size="sm"
+                        className="model-test-select"
+                        aria-pressed={isSelectedForTest}
+                        onClick={() => toggleTestSelection(key)}
+                      >
+                        {isSelectedForTest ? props.t("selectedForTest") : props.t("selectForTest")}
+                      </Button>
+                      <span className={`model-test-result${testResult ? (testResult.success ? " is-success" : " is-failed") : ""}`} title={testResult?.message}>
+                        {testResult ? modelTestResultLabel(testResult, props.settings.language, props.t) : "—"}
+                      </span>
+                      <Button
+                        type="button"
+                        variant={isDefault ? "secondary" : "outline"}
+                        size="sm"
+                        className="model-default-action"
+                        disabled={isDefault || isDisabled}
+                        aria-pressed={isDefault}
+                        onClick={() => selectModel(model.providerId, model.modelId)}
+                      >
+                        {isDefault ? props.t("defaultModel") : props.t("setDefaultModel")}
+                      </Button>
+                      <Switch
+                        checked={!isDisabled}
+                        disabled={modelTogglePending !== null}
+                        aria-label={`${props.t(isDisabled ? "disabled" : "enabled")}: ${model.modelName}`}
+                        onCheckedChange={(enabled) => void toggleModel(model, enabled)}
+                      />
+                    </div>;
+                  })
+                  : <p>{props.t("noProviderModels")}</p>}
+              </div>
+              {modelToggleError ? <Alert className="model-toggle-error"><AlertDescription>{modelToggleError}</AlertDescription></Alert> : null}
+              {modelTestError ? <Alert className="model-toggle-error"><AlertDescription>{modelTestError}</AlertDescription></Alert> : null}
+            </section> : null}
+          </div>
+        )}
       </section>
-      <SettingsSubsection title={props.t("defaultModel")} detail={props.t("defaultModelDetail")}>
-        <div className="default-model-control">
-          <Select value={defaultModelKey} onValueChange={(value) => {
-            const model = modelOptions.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
-            if (model) void props.onUpdate({ providerId: model.providerId, modelId: model.modelId, thinkingLevel: model.thinkingLevels.includes(props.settings.thinkingLevel) ? props.settings.thinkingLevel : (model.thinkingLevels[0] ?? "off") });
-          }}><SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger><SelectContent><SelectGroup>{modelOptions.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent></Select>
-        </div>
-      </SettingsSubsection>
     </SettingsSectionBlock>
     <AlertDialog open={removeProvider !== null} onOpenChange={(open) => { if (!open) setRemoveProvider(null); }}><AlertDialogContent className="settings-confirm-dialog"><AlertDialogHeader><AlertDialogTitle>{props.t("removeCredential")}</AlertDialogTitle><AlertDialogDescription>{removeProvider}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </>;
+}
+
+function modelOptionsLabel(models: ModelCatalog | undefined, providerId: string | null, modelId: string | null): string {
+  const model = models?.models.find((candidate) => candidate.providerId === providerId && candidate.modelId === modelId);
+  return model ? `${providerDisplayName(model.providerName)} · ${model.modelName}` : "";
+}
+
+function providerDisplayName(name: string): string {
+  const match = name.match(/^NewAPI\s*\(([^()]+)\)\s*$/i);
+  return match?.[1]?.trim() || name;
+}
+
+function modelTestResultLabel(
+  result: AppSettings["modelTestResults"][string],
+  language: AppSettings["language"],
+  t: T,
+): string {
+  const locale = language === "zh-CN" ? "zh-CN" : "en-US";
+  const testedAt = new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(result.testedAt));
+  return `${t(result.success ? "modelTestPassed" : "modelTestFailed")} · ${testedAt}`;
 }
 
 function FolderSettings(props: BaseProps) {
@@ -762,7 +947,7 @@ function capitalize(value: string): string {
 }
 
 function ShortcutSettings({ t }: { t: T }) {
-  return <SettingsSubsection title={t("shortcuts")} detail={t("keyboardNavigation")}><div className="shortcut-list"><span>{t("openSearch")}<kbd>⌘ K</kbd></span><span>{t("newTask")}<kbd>⌘ N</kbd></span><span>{t("toggleSidebar")}<kbd>⌘ B</kbd></span><span>{t("inspectorShortcut")}<kbd>⌘ I</kbd></span></div></SettingsSubsection>;
+  return <SettingsSubsection className="settings-utility-shortcuts" title={t("shortcuts")} detail={t("keyboardNavigation")}><div className="shortcut-list"><span>{t("openSearch")}<kbd>⌘ K</kbd></span><span>{t("newTask")}<kbd>⌘ N</kbd></span><span>{t("toggleSidebar")}<kbd>⌘ B</kbd></span><span>{t("inspectorShortcut")}<kbd>⌘ I</kbd></span></div></SettingsSubsection>;
 }
 
 function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {

@@ -132,6 +132,9 @@ describe("PiWorkStore", () => {
     expect(store.updateTaskModel(task.id, chatSelection).modelId).toBe("gpt-5");
     expect(store.getTask(task.id)?.workspaceId).toBe(workspace.id);
     expect(store.updateAppSettings({ onboardingSkipped: true }).onboardingSkipped).toBe(true);
+    expect(store.getAppSettings().disabledModelKeys).toEqual([]);
+    expect(store.updateAppSettings({ disabledModelKeys: ["openai/gpt-5"] }).disabledModelKeys).toEqual(["openai/gpt-5"]);
+    expect(store.updateAppSettings({ modelId: "gpt-5-mini" }).disabledModelKeys).toEqual(["openai/gpt-5"]);
     expect(store.removeConversation(task.id).workspace.kind).toBe("managed");
     expect(store.getWorkspace(workspace.id)).toBeNull();
     store.close();

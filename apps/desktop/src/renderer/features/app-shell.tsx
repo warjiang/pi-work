@@ -320,7 +320,6 @@ type SearchItem = {
 export const commandSettingItems: ReadonlyArray<{ section: SettingsSection; key: MessageKey }> = [
   { section: "general", key: "general" },
   { section: "modelsCredentials", key: "modelsCredentials" },
-  { section: "workFolders", key: "workFolders" },
   { section: "permissions", key: "permissions" },
   { section: "skills", key: "skills" },
   { section: "mcp", key: "mcp" },
@@ -504,9 +503,13 @@ export function CommandPalette(props: {
 function configuredModels(
   providers: ProviderConfig[],
   models: ModelCatalog | undefined,
+  settings?: AppSettings,
 ): ModelOption[] {
   const catalog = models?.models ?? [];
-  return providers.flatMap(({ providerId }) => catalog.filter((model) => model.providerId === providerId));
+  const disabledModelKeys = new Set(settings?.disabledModelKeys ?? []);
+  return providers.flatMap(({ providerId }) => catalog.filter((model) => (
+    model.providerId === providerId && !disabledModelKeys.has(`${model.providerId}/${model.modelId}`)
+  )));
 }
 
 export function resolveDefaultModel(
@@ -514,7 +517,7 @@ export function resolveDefaultModel(
   models: ModelCatalog | undefined,
   settings: AppSettings | undefined,
 ): ModelOption | undefined {
-  const availableModels = configuredModels(providers, models);
+  const availableModels = configuredModels(providers, models, settings);
   return availableModels.find(({ providerId, modelId }) => (
     providerId === settings?.providerId && modelId === settings.modelId
   )) ?? availableModels[0];
@@ -552,7 +555,7 @@ export function NewTaskDialog(props: {
   onCreated(session: Session): void;
 }) {
   const workspace = props.workspaces.find(({ id, kind }) => id === props.scope && kind === "folder") ?? null;
-  const availableModels = configuredModels(props.providers, props.models);
+  const availableModels = configuredModels(props.providers, props.models, props.settings);
   const defaultModel = resolveDefaultModel(props.providers, props.models, props.settings);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");

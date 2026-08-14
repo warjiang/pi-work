@@ -205,6 +205,19 @@ process.parentPort?.on("message", async (event) => {
         }));
         break;
       }
+      case "model.test": {
+        const message = await adapter.testModel(
+          request.data.provider,
+          request.data.modelId,
+          request.data.runtime,
+        );
+        process.parentPort?.postMessage(agentResponseSchema.parse({
+          type: "model.test",
+          requestId,
+          message,
+        }));
+        break;
+      }
       case "mcp.inspect": {
         const result = await adapter.inspectMcp(request.data.server, request.data.runtime);
         process.parentPort?.postMessage(agentResponseSchema.parse({

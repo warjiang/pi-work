@@ -12,6 +12,7 @@ import type {
   ChatMessage,
   ExtensionPackage,
   ModelCatalog,
+  ModelTestResult,
   Plan,
   SetProviderCredentialInput,
   StatusDefinition,
@@ -71,6 +72,7 @@ import {
   sendChatInputSchema,
   searchSkillMarketplaceInputSchema,
   setProviderCredentialInputSchema,
+  testModelsInputSchema,
   taskSchema,
   statusDefinitionSchema,
   labelSchema,
@@ -1038,6 +1040,42 @@ async function listModels(): Promise<ModelCatalog> {
   };
 }
 
+async function testModels(input: unknown): Promise<ModelTestResult[]> {
+  const { models } = testModelsInputSchema.parse(input);
+  const results: ModelTestResult[] = [];
+  for (const target of models) {
+    const testedAt = new Date().toISOString();
+    try {
+      const credential = await getCredentialBroker().get(target.providerId);
+      if (credential === null) throw new Error(`No credential is configured for ${target.providerId}.`);
+      const response = await sendAgentRequest({
+        type: "model.test",
+        provider: credential,
+        modelId: target.modelId,
+        runtime: agentRuntime(),
+      }, 45_000);
+      if (response.type === "error") throw new Error(response.message);
+      if (response.type !== "model.test") throw new Error("Pi agent service returned an unexpected model test response.");
+      results.push({ ...target, testedAt, success: true, message: response.message });
+    } catch (cause) {
+      results.push({
+        ...target,
+        testedAt,
+        success: false,
+        message: cause instanceof Error ? cause.message : "Model test failed.",
+      });
+    }
+  }
+  const current = getStore().getAppSettings();
+  getStore().updateAppSettings({
+    modelTestResults: {
+      ...current.modelTestResults,
+      ...Object.fromEntries(results.map((result) => [`${result.providerId}/${result.modelId}`, result])),
+    },
+  });
+  return results;
+}
+
 function registerIpc(): void {
   ipcMain.handle("workspace:choose", async () => {
     const result = await dialog.showOpenDialog({
@@ -1297,6 +1335,7 @@ function registerIpc(): void {
     return sessionEnvironments.listKeys(sessionId);
   });
   ipcMain.handle("model:list", () => listModels());
+  ipcMain.handle("model:test", (_event, input: unknown) => testModels(input));
   ipcMain.handle("conversation:list", () => getStore().listManagedConversations());
   ipcMain.handle("session:list", (_event, input: unknown) => (
     getStore().listSessions(withoutUndefined(sessionSearchInputSchema.parse(input ?? {})))

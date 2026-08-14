@@ -666,6 +666,23 @@ export const modelCatalogSchema = z.object({
 });
 export type ModelCatalog = z.infer<typeof modelCatalogSchema>;
 
+export const modelTestTargetSchema = z.object({
+  providerId: z.string().trim().min(1).max(80),
+  modelId: z.string().trim().min(1).max(160),
+});
+export type ModelTestTarget = z.infer<typeof modelTestTargetSchema>;
+
+export const modelTestResultSchema = modelTestTargetSchema.extend({
+  testedAt: z.string().datetime(),
+  success: z.boolean(),
+  message: z.string().min(1).max(500),
+});
+export type ModelTestResult = z.infer<typeof modelTestResultSchema>;
+
+export const testModelsInputSchema = z.object({
+  models: z.array(modelTestTargetSchema).min(1).max(50),
+});
+
 export const conversationSchema = z.object({
   workspace: workspaceSchema,
   task: taskSchema,
@@ -693,10 +710,24 @@ export const appSettingsSchema = z.object({
   sidebarCollapsed: z.boolean().default(false),
   focusMode: z.boolean().default(false),
   compactMode: z.boolean().default(false),
+  disabledModelKeys: z.array(z.string().trim().min(1).max(260)).default([]),
+  modelTestResults: z.record(z.string().min(1).max(260), modelTestResultSchema).default({}),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 
-export const updateAppSettingsInputSchema = appSettingsSchema.partial();
+export const updateAppSettingsInputSchema = z.object({
+  onboardingSkipped: z.boolean().optional(),
+  providerId: z.string().nullable().optional(),
+  modelId: z.string().nullable().optional(),
+  thinkingLevel: thinkingLevelSchema.optional(),
+  theme: z.enum(["system", "light", "dark"]).optional(),
+  language: z.enum(["en", "zh-CN"]).optional(),
+  sidebarCollapsed: z.boolean().optional(),
+  focusMode: z.boolean().optional(),
+  compactMode: z.boolean().optional(),
+  disabledModelKeys: z.array(z.string().trim().min(1).max(260)).optional(),
+  modelTestResults: z.record(z.string().min(1).max(260), modelTestResultSchema).optional(),
+});
 
 export const toolApprovalSchema = z.object({
   requestId: z.uuid(),
@@ -801,6 +832,13 @@ export const agentRequestSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("model.list"), requestId: z.uuid(), runtime: agentRuntimeSchema }),
   z.object({
+    type: z.literal("model.test"),
+    requestId: z.uuid(),
+    provider: setProviderCredentialInputSchema,
+    modelId: z.string().min(1),
+    runtime: agentRuntimeSchema,
+  }),
+  z.object({
     type: z.literal("mcp.inspect"),
     requestId: z.uuid(),
     server: mcpRuntimeServerSchema,
@@ -864,6 +902,11 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("models"),
     requestId: z.uuid(),
   }).extend(modelCatalogSchema.shape),
+  z.object({
+    type: z.literal("model.test"),
+    requestId: z.uuid(),
+    message: z.string().min(1).max(500),
+  }),
   z.object({
     type: z.literal("error"),
     requestId: z.uuid(),

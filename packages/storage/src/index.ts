@@ -398,6 +398,8 @@ export class PiWorkStore {
       providerId: null,
       modelId: null,
       thinkingLevel: "off",
+      disabledModelKeys: [],
+      modelTestResults: {},
       ...values,
     });
   }

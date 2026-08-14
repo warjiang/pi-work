@@ -16,6 +16,7 @@ import type {
   McpCallToolResult,
   McpInspectResult,
   ModelCatalog,
+  ModelTestResult,
   Label,
   Plan,
   ProviderConfig,
@@ -86,6 +87,7 @@ declare global {
       };
       model: {
         list(): Promise<ModelCatalog>;
+        test(input: { models: Array<{ providerId: string; modelId: string }> }): Promise<ModelTestResult[]>;
       };
       conversation: {
         list(): Promise<Conversation[]>;

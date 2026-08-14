@@ -287,6 +287,42 @@ export class PiAdapter {
     return title.slice(0, 160);
   }
 
+  async testModel(
+    provider: PiProviderCredential,
+    modelId: string,
+    runtime: AgentRuntime,
+  ): Promise<string> {
+    const credentials = this.credentials(runtime);
+    const modelRuntime = await this.modelRuntime(runtime, credentials);
+    const services = await createAgentSessionServices({
+      cwd: runtime.cwd,
+      agentDir: runtime.agentDir,
+      modelRuntime,
+      settingsManager: this.settingsManager(runtime),
+    });
+    await modelRuntime.setRuntimeApiKey(provider.providerId, provider.apiKey);
+    const modelResolution = resolveCliModel({
+      cliModel: `${provider.providerId}/${modelId}`,
+      modelRuntime,
+    });
+    if (modelResolution.error !== undefined) throw new Error(modelResolution.error);
+    if (modelResolution.model === undefined) throw new Error(`Pi could not resolve ${provider.providerId}/${modelId}.`);
+
+    const { session } = await createAgentSessionFromServices({
+      services,
+      model: modelResolution.model,
+      thinkingLevel: "off",
+      sessionManager: SessionManager.inMemory(),
+      tools: [],
+    });
+    try {
+      await session.prompt("Reply with exactly: OK");
+    } finally {
+      session.dispose();
+    }
+    return "Responded successfully.";
+  }
+
   async chat(
     sessionId: string,
     messages: Pick<ChatMessage, "role" | "content">[],

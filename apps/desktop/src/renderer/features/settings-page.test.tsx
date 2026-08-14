@@ -16,6 +16,8 @@ const settings: AppSettings = {
   sidebarCollapsed: false,
   focusMode: false,
   compactMode: false,
+  disabledModelKeys: [],
+  modelTestResults: {},
 };
 
 const buildInfo: BuildInfo = {
@@ -127,10 +129,50 @@ describe("SettingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(html).toContain("Available models");
+    expect(html).toContain("Model");
     expect(html).toContain("Kimi K2.5");
     expect(html).toContain("Refresh models");
     expect(html).toContain("model-refresh-button");
+  });
+
+  it("uses the provider alias and gives every model a real enable switch", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <SettingsPage
+          section="modelsCredentials"
+          settings={{
+            ...settings,
+            providerId: "newapi",
+            modelId: "gpt-5",
+            disabledModelKeys: ["newapi/gpt-5-mini"],
+          }}
+          buildInfo={buildInfo}
+          workspaces={[]}
+          providers={[{ providerId: "newapi" }]}
+          models={{
+            diagnostics: [],
+            models: [
+              { providerId: "newapi", providerName: "NewAPI (ida)", modelId: "gpt-5", modelName: "GPT-5", thinkingLevels: ["off"] },
+              { providerId: "newapi", providerName: "NewAPI (ida)", modelId: "gpt-5-mini", modelName: "GPT-5 mini", thinkingLevels: ["off"] },
+            ],
+          }}
+          t={translator("en")}
+          onSectionChange={() => undefined}
+          onClose={() => undefined}
+          onUpdate={async () => undefined}
+          onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
+          onProvidersChanged={async () => undefined}
+          onModelsRefresh={async () => undefined}
+          onRestartOnboarding={async () => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(html).toContain("ida · GPT-5");
+    expect(html).not.toContain("NewAPI (ida) · GPT-5");
+    expect(html).toContain('aria-label="Enabled: GPT-5"');
+    expect(html).toContain('aria-label="Disabled: GPT-5 mini"');
   });
 
   it("renders the extension catalog and keeps manual installation available", () => {
