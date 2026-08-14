@@ -27,7 +27,7 @@ async function createRuntime(): Promise<{ root: string; runtime: ManagedCliRunti
 }
 
 describe("ManagedCliRuntime", () => {
-  it("creates controlled node, npm and npx commands without replacing the terminal HOME", async () => {
+  it("creates controlled node, npm, npx and bundled Pi commands without replacing the terminal HOME", async () => {
     const { runtime } = await createRuntime();
     const terminalEnvironment = runtime.terminalEnvironment({
       HOME: "/Users/example",
@@ -38,6 +38,10 @@ describe("ManagedCliRuntime", () => {
     expect(await readFile(join(runtime.runtimeBinDirectory, "node"), "utf8")).toContain(process.execPath);
     expect(await readFile(join(runtime.runtimeBinDirectory, "npm"), "utf8")).toContain("npm-launcher.cjs");
     expect(await readFile(join(runtime.runtimeBinDirectory, "npx"), "utf8")).toContain("npx-cli.js");
+    const piLauncher = await readFile(join(runtime.runtimeBinDirectory, "pi"), "utf8");
+    expect(piLauncher).toContain(runtime.piCliPath);
+    expect(piLauncher).toContain(runtime.piAgentDirectory);
+    expect(piLauncher).toContain(runtime.piPackageDirectory);
     expect(terminalEnvironment.HOME).toBe("/Users/example");
     expect(terminalEnvironment.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(terminalEnvironment.PATH?.split(":").slice(0, 3)).toEqual([
