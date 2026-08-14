@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Automation,
   Label,
+  MarketplaceSkill,
+  RemoteSkillPreview,
   Session,
   Skill,
+  SkillFileContent,
   Source,
   McpInspectResult,
   StatusDefinition,
@@ -53,6 +56,7 @@ import {
 } from "@/components/ui/select.js";
 import { Textarea } from "@/components/ui/textarea.js";
 import { Switch } from "@/components/ui/switch.js";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group.js";
 import { sessionsByStage, sessionsForBoard } from "@/board.js";
 import type { MessageKey } from "@/i18n.js";
@@ -717,9 +721,17 @@ function SourceEditor({ source, allowedTypes, t, onSaved, onDeleted }: { source:
 
 export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }) {
   const queryClient = useQueryClient();
+  const [view, setView] = useState<"installed" | "marketplace">("installed");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [urlInstallOpen, setUrlInstallOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const saveSelectedRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerSelectedSave = useCallback((save: () => Promise<boolean>) => {
+    saveSelectedRef.current = save;
+  }, []);
   const query = useQuery({ queryKey: ["skills"], queryFn: () => window.piWork.skill.list() });
   const systemSkills = useQuery({
     queryKey: ["system-skills"],
@@ -768,30 +780,252 @@ export function SkillsPage({ embedded = false, t }: { embedded?: boolean; t: T }
     },
     onError: (cause: Error) => setError(cause.message),
   });
-  const actions = <div className="page-header-actions"><Button variant="outline" disabled={systemSkills.isFetching} onClick={() => void systemSkills.refetch()}><Icon name="search" />{t("scanSystemSkills")}</Button><Button variant="outline" disabled={importSkill.isPending} onClick={() => importSkill.mutate()}><Icon name="folder-plus" />{t("importSkill")}</Button><Button disabled={create.isPending} onClick={() => create.mutate()}><Icon name="plus" />{t("add")}</Button></div>;
+  const selectSkill = (id: string) => {
+    if (dirty && id !== selectedId) {
+      setPendingSelection(id);
+      return;
+    }
+    setSelectedId(id);
+  };
+  const actions = <div className="skill-page-actions">
+    <Tabs value={view} onValueChange={(next) => setView(next as typeof view)}>
+      <TabsList className="skill-view-tabs">
+        <TabsTrigger value="installed">{t("installedSkills")}</TabsTrigger>
+        <TabsTrigger value="marketplace">{t("skillMarketplace")}</TabsTrigger>
+      </TabsList>
+    </Tabs>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button><Icon name="plus" />{t("installSkill")}<Icon name="chevron-down" /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => setUrlInstallOpen(true)}><Icon name="browser" />{t("installFromUrl")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={importSkill.isPending} onSelect={() => importSkill.mutate()}><Icon name="folder-plus" />{t("installFromFolder")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={systemSkills.isFetching} onSelect={() => { setView("installed"); setSelectedId(null); void systemSkills.refetch(); }}><Icon name="search" />{t("scanSystemSkills")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={create.isPending} onSelect={() => create.mutate()}><Icon name="square-pen" />{t("createBlankSkill")}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </div>;
   return (
-    <LibraryLayout
-      title={t("skills")}
-      className={embedded ? "settings-skills-page" : undefined}
-      showHeader={!embedded}
-      toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : undefined}
-      t={t}
-      detail={t("skillRuntimeDetail")}
-      icon="skills"
-      itemIcon="workspace"
-      items={filtered}
-      selectedId={selectedId}
-      loading={query.isLoading}
-      empty={t("noItems")}
-      addLabel={t("add")}
-      action={actions}
-      filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchSkills")} /></label>}
-      listHeader={<div className="skill-folder-heading"><Icon name="workspace" size={14} /><span>{t("skillFolders")}</span></div>}
-      onSelect={setSelectedId}
-      renderItem={(skill) => <><span>{skill.name}</span><small>{skill.description}</small></>}
-      detailPane={selected ? <SkillEditor skill={selected} t={t} onSaved={refresh} onDeleted={async () => { setSelectedId(null); await refresh(); }} /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
-    />
+    <>
+      {view === "installed" ? <LibraryLayout
+        title={t("skills")}
+        className={embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}
+        showHeader={!embedded}
+        toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : undefined}
+        t={t}
+        detail={t("skillRuntimeDetail")}
+        icon="skills"
+        itemIcon="skills"
+        items={filtered}
+        selectedId={selectedId}
+        loading={query.isLoading}
+        empty={t("noInstalledSkills")}
+        addLabel={t("installSkill")}
+        action={actions}
+        filter={<label className="library-search"><Icon name="search" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchInstalledSkills")} /></label>}
+        listHeader={<div className="skill-folder-heading"><span>{t("installedSkills")}</span><small>{query.data?.length ?? 0}</small></div>}
+        onSelect={selectSkill}
+        renderItem={(skill) => <><span className="skill-list-title"><span>{skill.name}</span><i className={skill.enabled ? "is-enabled" : ""} /></span><small>{skillSourceLabel(skill, t)}</small></>}
+        detailPane={selected ? <SkillEditor
+          skill={selected}
+          t={t}
+          onDirtyChange={setDirty}
+          registerSave={registerSelectedSave}
+          onSaved={refresh}
+          onDeleted={async () => { setSelectedId(null); await refresh(); }}
+        /> : <SystemSkillsPanel skills={systemSkills.data} loading={systemSkills.isFetching} error={error ?? (systemSkills.error instanceof Error ? systemSkills.error.message : null)} importingPath={importSystemSkill.variables ?? null} t={t} onImport={(path) => importSystemSkill.mutate(path)} />}
+      /> : <SkillMarketplace
+        className={embedded ? "settings-skills-page skill-manager-page" : "skill-manager-page"}
+        installed={query.data ?? []}
+        toolbar={embedded ? <div className="settings-skills-toolbar">{actions}</div> : actions}
+        t={t}
+        onInstalled={async (skills) => {
+          await refresh();
+          setSelectedId(skills[0]?.id ?? null);
+          setView("installed");
+        }}
+      />}
+      <RemoteSkillDialog open={urlInstallOpen} t={t} onOpenChange={setUrlInstallOpen} onInstalled={async (skills) => {
+        await refresh();
+        setSelectedId(skills[0]?.id ?? null);
+        setView("installed");
+      }} />
+      <AlertDialog open={pendingSelection !== null} onOpenChange={(open) => { if (!open) setPendingSelection(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>{t("unsavedSkillChanges")}</AlertDialogTitle><AlertDialogDescription>{t("unsavedSkillChangesDetail")}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <Button variant="outline" onClick={() => { setDirty(false); setSelectedId(pendingSelection); setPendingSelection(null); }}>{t("discardChanges")}</Button>
+            <AlertDialogAction onClick={() => void (async () => {
+              if (await saveSelectedRef.current?.()) {
+                setSelectedId(pendingSelection);
+                setPendingSelection(null);
+              }
+            })()}>{t("save")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
+}
+
+function SkillMarketplace(props: {
+  className: string;
+  installed: Skill[];
+  toolbar: ReactNode;
+  t: T;
+  onInstalled(skills: Skill[]): Promise<void>;
+}) {
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [selected, setSelected] = useState<MarketplaceSkill | null>(null);
+  const [preview, setPreview] = useState<RemoteSkillPreview | null>(null);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(query.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => () => {
+    if (preview !== null) discardRemotePreview(preview.previewId);
+  }, [preview]);
+  const results = useQuery({
+    queryKey: ["skill-marketplace", debounced],
+    queryFn: () => window.piWork.skill.searchMarketplace({ provider: "skills.sh", query: debounced, limit: 30 }),
+    enabled: debounced.length >= 2,
+  });
+  const resolve = useMutation({
+    mutationFn: (skill: MarketplaceSkill) => window.piWork.skill.previewRemote({
+      sourceUrl: skill.sourceUrl,
+      provider: "skills.sh",
+      skillId: skill.skillId,
+    }),
+    onMutate: (skill) => { setSelected(skill); setPreview(null); setError(null); },
+    onSuccess: (value) => {
+      setPreview(value);
+      setSelectedSkills(value.skills.filter(({ duplicate }) => !duplicate).map(({ id }) => id));
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const install = useMutation({
+    mutationFn: () => {
+      if (preview === null) throw new Error("Preview the Skill before installing it.");
+      return window.piWork.skill.installRemote({ previewId: preview.previewId, skillIds: selectedSkills });
+    },
+    onSuccess: props.onInstalled,
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const installedNames = new Set(props.installed.map(({ name }) => name));
+  return <section className={`page ${props.className} skill-marketplace-page`}>
+    {props.toolbar}
+    <div className="skill-marketplace-layout">
+      <section className="skill-marketplace-results">
+        <label className="library-search skill-marketplace-search"><Icon name="search" /><Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={props.t("searchSkillMarketplace")} /></label>
+        <div className="skill-marketplace-list">
+          {query.trim().length < 2 ? <div className="skill-marketplace-empty"><Icon name="search" /><strong>{props.t("findSkills")}</strong><p>{props.t("findSkillsDetail")}</p></div> : null}
+          {results.isFetching ? <div className="page-loading"><span /><span /><span /></div> : null}
+          {results.error instanceof Error ? <Alert className="form-error"><AlertDescription>{results.error.message}</AlertDescription></Alert> : null}
+          {results.data?.map((skill) => {
+            const isInstalled = skill.installed || installedNames.has(skill.skillId);
+            return <Button key={skill.id} variant="ghost" className={selected?.id === skill.id ? "skill-marketplace-row selected" : "skill-marketplace-row"} onClick={() => resolve.mutate(skill)}>
+              <span className="resource-symbol"><Icon name="skills" /></span>
+              <span><strong>{skill.name}</strong><small>{skill.source}</small><small>{formatInstallCount(skill.installs)} {props.t("installs")}</small></span>
+              {isInstalled ? <Badge>{props.t("installed")}</Badge> : <Icon name="forward" size={14} />}
+            </Button>;
+          })}
+          {results.data?.length === 0 ? <p className="library-empty">{props.t("noMarketplaceResults")}</p> : null}
+        </div>
+      </section>
+      <aside className="skill-marketplace-preview">
+        {resolve.isPending ? <div className="page-loading"><span /><span /><span /></div> : null}
+        {!resolve.isPending && preview === null && error === null ? <div className="resource-detail-empty"><Icon name="skills" /><p>{props.t("selectMarketplaceSkill")}</p></div> : null}
+        {error ? <div className="skill-preview-error"><Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert>{selected ? <Button variant="outline" onClick={() => resolve.mutate(selected)}><Icon name="refresh" />{props.t("retry")}</Button> : null}</div> : null}
+        {preview ? <RemoteSkillPreviewPanel preview={preview} selected={selectedSkills} installing={install.isPending} t={props.t} onSelected={setSelectedSkills} onInstall={() => install.mutate()} /> : null}
+      </aside>
+    </div>
+  </section>;
+}
+
+function RemoteSkillDialog(props: { open: boolean; t: T; onOpenChange(open: boolean): void; onInstalled(skills: Skill[]): Promise<void> }) {
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [preview, setPreview] = useState<RemoteSkillPreview | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const resolve = useMutation({
+    mutationFn: () => window.piWork.skill.previewRemote({ sourceUrl, provider: "url" }),
+    onSuccess: (value) => {
+      if (!props.open) {
+        discardRemotePreview(value.previewId);
+        return;
+      }
+      setError(null);
+      setPreview(value);
+      setSelected(value.skills.filter(({ duplicate }) => !duplicate).map(({ id }) => id));
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  const install = useMutation({
+    mutationFn: () => {
+      if (preview === null) throw new Error("Preview the Skill before installing it.");
+      return window.piWork.skill.installRemote({ previewId: preview.previewId, skillIds: selected });
+    },
+    onSuccess: async (skills) => {
+      props.onOpenChange(false);
+      setSourceUrl("");
+      setPreview(null);
+      await props.onInstalled(skills);
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  useEffect(() => () => {
+    if (preview !== null) discardRemotePreview(preview.previewId);
+  }, [preview]);
+  const setOpen = (open: boolean) => {
+    if (!open) {
+      if (preview !== null) discardRemotePreview(preview.previewId);
+      setPreview(null);
+      setSelected([]);
+      setError(null);
+    }
+    props.onOpenChange(open);
+  };
+  return <Dialog open={props.open} onOpenChange={setOpen}>
+    <DialogContent className="skill-url-dialog">
+      <DialogHeader><DialogTitle>{props.t("installFromUrl")}</DialogTitle><DialogDescription>{props.t("installFromUrlDetail")}</DialogDescription></DialogHeader>
+      <Field><FieldLabel>{props.t("sourceUrl")}</FieldLabel><Input value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setPreview(null); }} placeholder="https://www.skills.sh/…" /></Field>
+      {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      {preview ? <RemoteSkillPreviewPanel preview={preview} selected={selected} installing={install.isPending} compact t={props.t} onSelected={setSelected} onInstall={() => install.mutate()} /> : null}
+      {!preview ? <DialogFooter><Button variant="ghost" onClick={() => setOpen(false)}>{props.t("cancel")}</Button><Button disabled={!sourceUrl.trim() || resolve.isPending} onClick={() => resolve.mutate()}>{resolve.isPending ? props.t("loading") : props.t("previewSkill")}</Button></DialogFooter> : null}
+    </DialogContent>
+  </Dialog>;
+}
+
+function discardRemotePreview(previewId: string): void {
+  void window.piWork.skill.cancelRemotePreview(previewId).catch(() => undefined);
+}
+
+function RemoteSkillPreviewPanel(props: {
+  preview: RemoteSkillPreview;
+  selected: string[];
+  installing: boolean;
+  compact?: boolean;
+  t: T;
+  onSelected(ids: string[]): void;
+  onInstall(): void;
+}) {
+  return <div className={props.compact ? "remote-skill-preview is-compact" : "remote-skill-preview"}>
+    <header><div><span>{props.preview.provider}</span><h2>{props.preview.skills.length === 1 ? props.preview.skills[0]?.name : props.t("skillsFound")}</h2><p>{props.preview.repositoryUrl ?? props.preview.sourceUrl}</p></div><Icon name="skills" /></header>
+    <div className="remote-skill-candidates">
+      {props.preview.skills.map((skill) => {
+        const checked = props.selected.includes(skill.id);
+        return <label className={skill.duplicate ? "remote-skill-candidate is-disabled" : "remote-skill-candidate"} key={skill.id}>
+          <input type="checkbox" checked={checked} disabled={skill.duplicate} onChange={(event) => props.onSelected(event.target.checked ? [...props.selected, skill.id] : props.selected.filter((id) => id !== skill.id))} />
+          <span><strong>{skill.name}</strong><small>{skill.description}</small><small>{skill.files} {props.t("files")} · {skill.path}</small></span>
+          {skill.duplicate ? <Badge>{props.t("installed")}</Badge> : null}
+        </label>;
+      })}
+    </div>
+    <footer><span>{props.selected.length} {props.t("selected")}</span><Button disabled={props.selected.length === 0 || props.installing} onClick={props.onInstall}>{props.installing ? props.t("installing") : props.t("installSelectedSkills")}</Button></footer>
+  </div>;
 }
 
 function SystemSkillsPanel(props: {
@@ -828,57 +1062,139 @@ function systemSkillSourceLabel(source: SystemSkill["source"], t: T): string {
   return t(labels[source]);
 }
 
-function SkillEditor({ skill, t, onSaved, onDeleted }: { skill: Skill; t: T; onSaved(): Promise<unknown>; onDeleted(): Promise<void> }) {
+function SkillEditor({ skill, t, onSaved, onDeleted, onDirtyChange, registerSave }: {
+  skill: Skill;
+  t: T;
+  onSaved(): Promise<unknown>;
+  onDeleted(): Promise<void>;
+  onDirtyChange(dirty: boolean): void;
+  registerSave(save: () => Promise<boolean>): void;
+}) {
+  const [tab, setTab] = useState<"overview" | "instructions" | "files">("overview");
   const [name, setName] = useState(skill.name);
   const [description, setDescription] = useState(skill.description);
   const [instructions, setInstructions] = useState(skill.instructions);
   const [enabled, setEnabled] = useState(skill.enabled);
   const [error, setError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const files = useQuery({
     queryKey: ["skill-files", skill.id],
     queryFn: () => window.piWork.skill.listFiles(skill.id),
   });
-  useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); setEnabled(skill.enabled); setError(null); }, [skill]);
+  const dirty = name !== skill.name || description !== skill.description || instructions !== skill.instructions || enabled !== skill.enabled;
+  useEffect(() => { setName(skill.name); setDescription(skill.description); setInstructions(skill.instructions); setEnabled(skill.enabled); setError(null); setTab("overview"); }, [skill]);
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   const save = useMutation({
     mutationFn: () => window.piWork.skill.update({ id: skill.id, value: { name, description, instructions, enabled } }),
     onSuccess: onSaved,
     onError: (cause: Error) => setError(cause.message),
-  });
-  const toggle = useMutation({
-    mutationFn: (next: boolean) => window.piWork.skill.setEnabled(skill.id, next),
-    onSuccess: async () => { setError(null); await onSaved(); },
-    onError: (cause: Error) => { setEnabled(skill.enabled); setError(cause.message); },
   });
   const remove = useMutation({
     mutationFn: () => window.piWork.skill.remove(skill.id),
     onSuccess: onDeleted,
     onError: (cause: Error) => setError(cause.message),
   });
-  return <ResourceEditor title={skill.name} status={t("skillRuntimeDetail")} t={t} onDelete={() => remove.mutate()}>
-    <Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert>
-    <SkillFolderTree entries={files.data} loading={files.isLoading} t={t} />
-    <FieldGroup><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field><Field><FieldLabel>{t("instructions")}</FieldLabel><Textarea className="markdown-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={18} /></Field><Field><FieldLabel>{t("enabled")}</FieldLabel><Switch checked={enabled} disabled={toggle.isPending} onCheckedChange={(next) => { setEnabled(next); toggle.mutate(next); }} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button disabled={save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></FieldGroup>
-  </ResourceEditor>;
+  const saveCurrentRef = useRef<() => Promise<boolean>>(async () => false);
+  saveCurrentRef.current = async (): Promise<boolean> => {
+    try {
+      await save.mutateAsync();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  useEffect(() => {
+    registerSave(() => saveCurrentRef.current());
+  }, [registerSave]);
+  return <>
+    <header className="skill-editor-header">
+      <div><span>{skillSourceLabel(skill, t)}</span><h2>{skill.name}</h2><small>{dirty ? t("unsaved") : t("saved")}</small></div>
+      <div><label className="skill-enabled-control"><span>{t("enabled")}</span><Switch checked={enabled} disabled={save.isPending} onCheckedChange={setEnabled} /></label><Button variant="outline" size="icon" aria-label={t("delete")} onClick={() => setDeleteOpen(true)}><Icon name="trash" /></Button><Button disabled={!dirty || save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></div>
+    </header>
+    <Tabs className="skill-editor-tabs" value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+      <TabsList><TabsTrigger value="overview">{t("overview")}</TabsTrigger><TabsTrigger value="instructions">{t("instructions")}</TabsTrigger><TabsTrigger value="files">{t("files")}</TabsTrigger></TabsList>
+    </Tabs>
+    <div className={`skill-editor-content skill-editor-content--${tab}`}>
+      {tab === "overview" ? <FieldGroup><Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert><div className="skill-source-summary"><span>{t("source")}</span><strong>{skillSourceDetail(skill, t)}</strong></div><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}</FieldGroup> : null}
+      {tab === "instructions" ? <Textarea aria-label={t("instructions")} className="markdown-editor skill-instructions-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} spellCheck={false} /> : null}
+      {tab === "files" ? <SkillFilesPanel skillId={skill.id} entries={files.data} loading={files.isLoading} t={t} /> : null}
+    </div>
+    <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>{t("deleteSkill")}</AlertDialogTitle><AlertDialogDescription>{t("deleteSkillDetail")}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>{t("cancel")}</AlertDialogCancel><AlertDialogAction disabled={remove.isPending} onClick={() => remove.mutate()}>{t("delete")}</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </>;
 }
 
-function SkillFolderTree({ entries, loading, t }: { entries: SkillFolderEntry[] | undefined; loading: boolean; t: T }) {
+function SkillFilesPanel({ skillId, entries, loading, t }: { skillId: string; entries: SkillFolderEntry[] | undefined; loading: boolean; t: T }) {
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const files = entries?.filter(({ type }) => type === "file") ?? [];
+    const preferred = files.find(({ path }) => path === "SKILL.md") ?? files[0];
+    setSelectedPath((current) => files.some(({ path }) => path === current) ? current : preferred?.path ?? null);
+  }, [entries, skillId]);
+  useEffect(() => setCopied(false), [selectedPath]);
+  const file = useQuery({
+    queryKey: ["skill-file", skillId, selectedPath],
+    queryFn: () => window.piWork.skill.readFile(skillId, selectedPath as string),
+    enabled: selectedPath !== null,
+    retry: false,
+  });
   return (
-    <details className="skill-folder-tree" open>
-      <summary>
+    <div className="skill-files-panel">
+      <aside className="skill-folder-tree">
+        <header>
         <span><Icon name="workspace" size={14} />{t("skillFolderContents")}</span>
         <small>{loading ? t("loading") : `${entries?.length ?? 0} ${t("files")}`}</small>
-      </summary>
-      <div className="skill-folder-tree-list">
-        {loading ? <div className="skill-folder-tree-loading">{t("loading")}</div> : null}
-        {entries?.map((entry) => (
-          <div className={`skill-folder-tree-row skill-folder-tree-row--${entry.type} skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}`} key={entry.path}>
-            <Icon name={entry.type === "directory" ? "workspace" : "file"} size={14} />
-            <span>{entry.name}</span>
-          </div>
-        ))}
-      </div>
-    </details>
+        </header>
+        <div className="skill-folder-tree-list">
+          {loading ? <div className="skill-folder-tree-loading">{t("loading")}</div> : null}
+          {entries?.map((entry) => entry.type === "file" ? (
+            <button className={`skill-folder-tree-row skill-folder-tree-row--file skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}${selectedPath === entry.path ? " selected" : ""}`} key={entry.path} onClick={() => setSelectedPath(entry.path)}>
+              <Icon name="file" size={14} />
+              <span>{entry.name}</span>
+            </button>
+          ) : (
+            <div className={`skill-folder-tree-row skill-folder-tree-row--directory skill-folder-tree-row--depth-${Math.min(entry.path.split("/").length - 1, 6)}`} key={entry.path}>
+              <Icon name="workspace" size={14} />
+              <span>{entry.name}</span>
+            </div>
+          ))}
+        </div>
+      </aside>
+      <section className="skill-file-viewer">
+        {file.data ? <SkillFileViewer file={file.data} copied={copied} t={t} onCopy={() => {
+          void navigator.clipboard.writeText(file.data.content).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1_500);
+          });
+        }} /> : <div className="skill-file-viewer-empty">
+          {file.isLoading ? t("loading") : file.error instanceof Error ? file.error.message : t("selectFileToPreview")}
+        </div>}
+      </section>
+    </div>
   );
+}
+
+function SkillFileViewer({ file, copied, t, onCopy }: { file: SkillFileContent; copied: boolean; t: T; onCopy(): void }) {
+  const lines = file.content.split("\n");
+  return <>
+    <header className="skill-file-viewer-header">
+      <span><strong>{file.path}</strong><small>{file.language} · {formatFileSize(file.size)}</small></span>
+      <Button variant="ghost" size="sm" onClick={onCopy}><Icon name={copied ? "check" : "copy"} size={14} />{copied ? t("copied") : t("copy")}</Button>
+    </header>
+    <div className="skill-code-viewer" role="region" aria-label={file.path}>
+      <code>{lines.map((line, index) => <span className="skill-code-line" key={index}><i>{index + 1}</i><b>{line || "\u00a0"}</b></span>)}</code>
+    </div>
+  </>;
+}
+
+function formatFileSize(bytes: number): string {
+  return bytes < 1_024 ? `${bytes} B` : `${(bytes / 1_024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
 }
 
 function nextSkillName(skills: Skill[]): string {
@@ -888,6 +1204,23 @@ function nextSkillName(skills: Skill[]): string {
     const candidate = `untitled-skill-${suffix}`;
     if (!names.has(candidate)) return candidate;
   }
+}
+
+function skillSourceLabel(skill: Skill, t: T): string {
+  if (skill.source?.type === "remote") return skill.source.provider;
+  if (skill.source?.type === "system") return systemSkillSourceLabel(skill.source.provider, t);
+  if (skill.source?.type === "created") return t("createdInPiWork");
+  return t("localSkill");
+}
+
+function skillSourceDetail(skill: Skill, t: T): string {
+  if (skill.source?.type === "remote") return skill.source.repositoryUrl ?? skill.source.sourceUrl;
+  if (skill.source?.type === "system" || skill.source?.type === "local") return skill.source.path ?? t("localSkill");
+  return t("createdInPiWork");
+}
+
+function formatInstallCount(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 export function AutomationsPage({ workspaceId, t }: { workspaceId: string; t: T }) {

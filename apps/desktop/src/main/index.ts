@@ -40,6 +40,7 @@ import {
   browserBoundsInputSchema,
   browserNavigateInputSchema,
   buildInfoSchema,
+  cancelRemoteSkillPreviewInputSchema,
   createDomainEntityInputSchema,
   generatePlanInputSchema,
   completeTaskInputSchema,
@@ -49,6 +50,7 @@ import {
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
   importSkillInputSchema,
+  installRemoteSkillsInputSchema,
   installManagedCliInputSchema,
   managedCliExecutionResultSchema,
   managedCliPackageSchema,
@@ -63,8 +65,11 @@ import {
   planSchema,
   promoteSessionInputSchema,
   publishArtifactInputSchema,
+  previewRemoteSkillInputSchema,
+  readSkillFileInputSchema,
   resumeTaskInputSchema,
   sendChatInputSchema,
+  searchSkillMarketplaceInputSchema,
   setProviderCredentialInputSchema,
   taskSchema,
   statusDefinitionSchema,
@@ -1143,7 +1148,23 @@ function registerIpc(): void {
     const { id } = removeDomainEntityInputSchema.parse(input);
     return getSkillManager().listFiles(id);
   });
+  ipcMain.handle("skill:read-file", (_event, input: unknown) => (
+    getSkillManager().readFile(readSkillFileInputSchema.parse(input))
+  ));
   ipcMain.handle("skill:scan-system", () => getSkillManager().scanSystem());
+  ipcMain.handle("skill:search-marketplace", (_event, input: unknown) => (
+    getSkillManager().searchMarketplace(searchSkillMarketplaceInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:preview-remote", (_event, input: unknown) => (
+    getSkillManager().previewRemote(previewRemoteSkillInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:install-remote", (_event, input: unknown) => (
+    getSkillManager().installRemote(installRemoteSkillsInputSchema.parse(input))
+  ));
+  ipcMain.handle("skill:cancel-remote-preview", async (_event, input: unknown) => {
+    const { previewId } = cancelRemoteSkillPreviewInputSchema.parse(input);
+    await getSkillManager().cancelRemotePreview(previewId);
+  });
   ipcMain.handle("skill:create", (_event, input: unknown) => (
     getSkillManager().create(createSkillInputSchema.parse(input))
   ));
@@ -1860,6 +1881,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   closeBrowserView();
+  void skillManager?.dispose();
   store?.close();
   agentProcess?.kill();
   piConsole?.close();

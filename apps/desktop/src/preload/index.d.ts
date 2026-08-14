@@ -166,7 +166,12 @@ type DomainApi<T> = {
 type SkillApi = {
   list(): Promise<Skill[]>;
   listFiles(id: string): Promise<Array<{ name: string; path: string; type: "directory" | "file" }>>;
+  readFile(id: string, path: string): Promise<import("@pi-work/protocol").SkillFileContent>;
   scanSystem(): Promise<import("@pi-work/protocol").SystemSkill[]>;
+  searchMarketplace(input: unknown): Promise<import("@pi-work/protocol").MarketplaceSkill[]>;
+  previewRemote(input: unknown): Promise<import("@pi-work/protocol").RemoteSkillPreview>;
+  installRemote(input: unknown): Promise<Skill[]>;
+  cancelRemotePreview(previewId: string): Promise<void>;
   create(input: unknown): Promise<Skill>;
   update(input: unknown): Promise<Skill>;
   remove(id: string): Promise<void>;

@@ -119,7 +119,12 @@ const piWork = {
   skill: {
     list: () => ipcRenderer.invoke("skill:list"),
     listFiles: (id: string) => ipcRenderer.invoke("skill:list-files", { id }),
+    readFile: (id: string, path: string) => ipcRenderer.invoke("skill:read-file", { id, path }),
     scanSystem: () => ipcRenderer.invoke("skill:scan-system"),
+    searchMarketplace: (input: unknown) => ipcRenderer.invoke("skill:search-marketplace", input),
+    previewRemote: (input: unknown) => ipcRenderer.invoke("skill:preview-remote", input),
+    installRemote: (input: unknown) => ipcRenderer.invoke("skill:install-remote", input),
+    cancelRemotePreview: (previewId: string) => ipcRenderer.invoke("skill:cancel-remote-preview", { previewId }),
     create: (input: unknown) => ipcRenderer.invoke("skill:create", input),
     update: (input: unknown) => ipcRenderer.invoke("skill:update", input),
     remove: (id: string) => ipcRenderer.invoke("skill:remove", { id }),

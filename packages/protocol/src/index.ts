@@ -245,6 +245,29 @@ export const mcpAuthorizationStatusSchema = z.object({
 });
 export type McpAuthorizationStatus = z.infer<typeof mcpAuthorizationStatusSchema>;
 
+export const skillSourceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("created") }),
+  z.object({
+    type: z.literal("local"),
+    path: z.string().min(1).max(4_096).optional(),
+  }),
+  z.object({
+    type: z.literal("system"),
+    provider: z.enum(["pi", "agents", "codex", "claude"]),
+    path: z.string().min(1).max(4_096),
+  }),
+  z.object({
+    type: z.literal("remote"),
+    provider: z.string().trim().min(1).max(120),
+    sourceUrl: z.url(),
+    repositoryUrl: z.url().optional(),
+    skillId: z.string().trim().min(1).max(240).optional(),
+    subpath: z.string().trim().min(1).max(2_048).optional(),
+    commit: z.string().trim().min(1).max(160).optional(),
+  }),
+]);
+export type SkillSource = z.infer<typeof skillSourceSchema>;
+
 export const skillSchema = z.object({
   id: z.uuid(),
   workspaceId: z.uuid().nullable(),
@@ -252,6 +275,7 @@ export const skillSchema = z.object({
   description: z.string().max(2_000),
   instructions: z.string().max(100_000),
   enabled: z.boolean(),
+  source: skillSourceSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -273,6 +297,64 @@ export const createSkillInputSchema = z.object({
 export const updateSkillInputSchema = createSkillInputSchema;
 export const importSkillInputSchema = z.object({
   path: z.string().trim().min(1).max(4_096),
+});
+export const readSkillFileInputSchema = z.object({
+  id: z.uuid(),
+  path: z.string().trim().min(1).max(2_048),
+});
+export const skillFileContentSchema = z.object({
+  path: z.string().min(1).max(2_048),
+  content: z.string(),
+  language: z.string().min(1).max(80),
+  size: z.number().int().nonnegative(),
+});
+export type SkillFileContent = z.infer<typeof skillFileContentSchema>;
+export const marketplaceSkillSchema = z.object({
+  id: z.string().trim().min(1).max(500),
+  skillId: z.string().trim().min(1).max(240),
+  name: z.string().trim().min(1).max(240),
+  installs: z.number().int().nonnegative(),
+  source: z.string().trim().min(1).max(240),
+  sourceUrl: z.url(),
+  detailUrl: z.url(),
+  installed: z.boolean(),
+});
+export type MarketplaceSkill = z.infer<typeof marketplaceSkillSchema>;
+export const searchSkillMarketplaceInputSchema = z.object({
+  provider: z.literal("skills.sh").default("skills.sh"),
+  query: z.string().trim().min(2).max(160),
+  limit: z.number().int().min(1).max(50).default(30),
+});
+export const previewRemoteSkillInputSchema = z.object({
+  sourceUrl: z.url(),
+  provider: z.string().trim().min(1).max(120).default("url"),
+  skillId: z.string().trim().min(1).max(240).optional(),
+});
+export const remoteSkillCandidateSchema = z.object({
+  id: z.string().trim().min(1).max(2_048),
+  name: skillNameSchema,
+  description: skillDescriptionSchema,
+  path: z.string().max(2_048),
+  files: z.number().int().nonnegative(),
+  duplicate: z.boolean(),
+});
+export type RemoteSkillCandidate = z.infer<typeof remoteSkillCandidateSchema>;
+export const remoteSkillPreviewSchema = z.object({
+  previewId: z.uuid(),
+  provider: z.string().trim().min(1).max(120),
+  sourceUrl: z.url(),
+  repositoryUrl: z.url().optional(),
+  commit: z.string().trim().min(1).max(160).optional(),
+  expiresAt: z.string().datetime(),
+  skills: z.array(remoteSkillCandidateSchema).min(1),
+});
+export type RemoteSkillPreview = z.infer<typeof remoteSkillPreviewSchema>;
+export const installRemoteSkillsInputSchema = z.object({
+  previewId: z.uuid(),
+  skillIds: z.array(z.string().trim().min(1).max(2_048)).min(1).max(100),
+});
+export const cancelRemoteSkillPreviewInputSchema = z.object({
+  previewId: z.uuid(),
 });
 export const setSkillEnabledInputSchema = z.object({
   id: z.uuid(),

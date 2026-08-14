@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentRequestSchema,
   agentMessageSchema,
+  cancelRemoteSkillPreviewInputSchema,
   createDomainEntityInputSchema,
   createArtifactInputSchema,
   createSkillInputSchema,
@@ -16,6 +17,11 @@ import {
   sendChatInputSchema,
   sessionSearchInputSchema,
   setSkillEnabledInputSchema,
+  skillSchema,
+  skillSourceSchema,
+  marketplaceSkillSchema,
+  previewRemoteSkillInputSchema,
+  installRemoteSkillsInputSchema,
   systemSkillSchema,
   taskSchema,
   taskStatusSchema,
@@ -185,6 +191,62 @@ describe("protocol schemas", () => {
       path: "/Users/example/.codex/skills/pdf-review",
       source: "codex",
       imported: false,
+    }).success).toBe(true);
+  });
+
+  it("validates Skill provenance and remains compatible with legacy Skills", () => {
+    const legacy = {
+      id: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      workspaceId: null,
+      name: "pdf-review",
+      description: "Reviews PDF documents.",
+      instructions: "# Instructions",
+      enabled: true,
+      createdAt: "2026-08-14T00:00:00.000Z",
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    };
+    expect(skillSchema.parse(legacy)).not.toHaveProperty("source");
+    expect(skillSourceSchema.safeParse({
+      type: "remote",
+      provider: "skills.sh",
+      sourceUrl: "https://www.skills.sh/example/repository/pdf-review",
+      repositoryUrl: "https://github.com/example/repository",
+      skillId: "pdf-review",
+      subpath: "skills/pdf-review",
+      commit: "abc123",
+    }).success).toBe(true);
+    expect(skillSourceSchema.safeParse({
+      type: "system",
+      provider: "unknown",
+      path: "/tmp/pdf-review",
+    }).success).toBe(false);
+  });
+
+  it("validates marketplace search, preview, and batch installation inputs", () => {
+    expect(marketplaceSkillSchema.safeParse({
+      id: "example/repository/pdf-review",
+      skillId: "pdf-review",
+      name: "pdf-review",
+      installs: 42,
+      source: "example/repository",
+      sourceUrl: "https://github.com/example/repository",
+      detailUrl: "https://www.skills.sh/example/repository/pdf-review",
+      installed: false,
+    }).success).toBe(true);
+    expect(previewRemoteSkillInputSchema.safeParse({
+      sourceUrl: "file:///tmp/skill",
+      provider: "url",
+    }).success).toBe(false);
+    expect(installRemoteSkillsInputSchema.safeParse({
+      previewId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      skillIds: [".", "skills/pdf-review"],
+    }).success).toBe(true);
+    expect(installRemoteSkillsInputSchema.safeParse({
+      previewId: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      skillIds: [],
+    }).success).toBe(false);
+    expect(cancelRemoteSkillPreviewInputSchema.safeParse({
+      previewId: "018f88d1-1eb5-709a-90ef-4325747e294c",
     }).success).toBe(true);
   });
 
