@@ -326,7 +326,13 @@ export const searchSkillMarketplaceInputSchema = z.object({
   limit: z.number().int().min(1).max(50).default(30),
 });
 export const previewRemoteSkillInputSchema = z.object({
-  sourceUrl: z.url(),
+  sourceUrl: z.url().refine(
+    (sourceUrl) => {
+      const protocol = new URL(sourceUrl).protocol;
+      return protocol === "http:" || protocol === "https:";
+    },
+    { message: "Expected an HTTP(S) URL" },
+  ),
   provider: z.string().trim().min(1).max(120).default("url"),
   skillId: z.string().trim().min(1).max(240).optional(),
 });
