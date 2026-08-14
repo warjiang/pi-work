@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
@@ -417,39 +417,76 @@ export class PiConsole {
       ...process.env,
       ...input.env,
     });
-    const shell = resolvePiConsoleLaunch(environment).executable;
+    const launch = resolvePiConsoleLaunch(environment);
     const timeoutMs = input.timeoutMs === undefined
       ? 0
       : Math.max(1, Math.min(10 * 60 * 1000, Math.floor(input.timeoutMs)));
 
     return new Promise((resolveResult) => {
-      exec(command, {
+      const shellName = basename(launch.executable);
+      const shellCommand = shellName === "bash" && environment.PI_WORK_TERMINAL_BASH_RC !== undefined
+        ? `. ${quotePosix(environment.PI_WORK_TERMINAL_BASH_RC)}\nexport PATH=${quotePosix(environment.PATH ?? "")}\n${command}`
+        : shellName === "zsh" && environment.ZDOTDIR !== undefined
+          ? `source ${quotePosix(join(environment.ZDOTDIR, ".zshrc"))}\nexport PATH=${quotePosix(environment.PATH ?? "")}\n${command}`
+          : command;
+      const shellArguments = shellName === "fish"
+        ? ["-c", command]
+        : ["-c", shellCommand];
+      const child = spawn(launch.executable, shellArguments, {
         cwd,
         env: environment,
-        shell,
-        timeout: timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
-      }, (error, stdout, stderr) => {
-        const executionError = error as (Error & {
-          code?: number | string;
-          signal?: NodeJS.Signals;
-          killed?: boolean;
-        }) | null;
+      });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      let settled = false;
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      const maximumBuffer = 10 * 1024 * 1024;
+      const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+        if (settled) return;
+        settled = true;
         resolveResult({
           command,
           cwd,
-          exitCode: executionError === null
-            ? 0
-            : typeof executionError.code === "number"
-              ? executionError.code
-              : null,
-          signal: executionError?.signal ?? null,
+          exitCode,
+          signal,
           stdout,
           stderr,
-          timedOut: executionError?.killed === true && timeoutMs > 0,
+          timedOut,
         });
+      };
+      const overflow = () => {
+        timedOut = false;
+        child.kill();
+        stderr = `${stderr}Output exceeded 10485760 bytes.\n`;
+      };
+      child.stdout.on("data", (chunk: string | Buffer) => {
+        const text = chunk.toString();
+        stdoutBytes += Buffer.byteLength(text);
+        if (stdoutBytes > maximumBuffer) overflow();
+        else stdout += text;
       });
+      child.stderr.on("data", (chunk: string | Buffer) => {
+        const text = chunk.toString();
+        stderrBytes += Buffer.byteLength(text);
+        if (stderrBytes > maximumBuffer) overflow();
+        else stderr += text;
+      });
+      child.on("error", (error) => {
+        stderr = `${stderr}${error.message}\n`;
+        finish(null, null);
+      });
+      child.on("close", (exitCode, signal) => finish(exitCode, signal));
+      if (timeoutMs > 0) {
+        setTimeout(() => {
+          if (settled) return;
+          timedOut = true;
+          child.kill();
+        }, timeoutMs);
+      }
     });
   }
 

@@ -73,6 +73,14 @@ function environmentStrings(environment: NodeJS.ProcessEnv): Record<string, stri
   );
 }
 
+function pathEntries(pathValue: string | undefined, platform: NodeJS.Platform): string[] {
+  if (!pathValue) return [];
+  return pathValue
+    .split(platform === "win32" ? ";" : delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function packageBins(packageJson: PackageJson): Record<string, string> {
   if (typeof packageJson.name !== "string") return {};
   if (typeof packageJson.bin === "string") {
@@ -398,14 +406,17 @@ export class ManagedCliRuntime {
     return join(this.runtimeBinDirectory, this.platform === "win32" ? `${command}.cmd` : command);
   }
 
-  private resolveManagedCommand(command: string): string {
+  private resolveManagedCommand(command: string, inheritedPath = process.env.PATH): string {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(command)) {
       throw new Error("Invalid managed CLI command.");
     }
     const candidates = this.platform === "win32"
       ? [join(this.binDirectory, `${command}.cmd`), join(this.npmGlobalBinDirectory, `${command}.cmd`)]
       : [join(this.binDirectory, command), join(this.npmGlobalBinDirectory, command)];
-    const executable = candidates.find((candidate) => existsSync(candidate));
+    const pathCandidates = this.platform === "win32"
+      ? pathEntries(inheritedPath, this.platform).flatMap((entry) => [join(entry, `${command}.cmd`), join(entry, command)])
+      : pathEntries(inheritedPath, this.platform).map((entry) => join(entry, command));
+    const executable = [...candidates, ...pathCandidates].find((candidate) => existsSync(candidate));
     if (executable === undefined) throw new Error(`Managed CLI command is not installed: ${command}`);
     return executable;
   }
@@ -640,6 +651,7 @@ export class ManagedCliRuntime {
       } else {
         const facadePath = join(this.binDirectory, name);
         const launcherPath = join(this.binDirectory, `.${name}-launcher`);
+        rmSync(facadePath, { force: true });
         writeFileSync(launcherPath, [
           "#!/bin/sh",
           `export HOME=${quotePosix(this.homeDirectory)}`,
@@ -649,7 +661,13 @@ export class ManagedCliRuntime {
           `exec ${quotePosix(target)} "$@"`,
           "",
         ].join("\n"), { mode: 0o755 });
-        symlinkSync(launcherPath, facadePath);
+        try {
+          symlinkSync(launcherPath, facadePath);
+        } catch (error) {
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
+          rmSync(facadePath, { recursive: true, force: true });
+          symlinkSync(launcherPath, facadePath);
+        }
       }
     }
   }
