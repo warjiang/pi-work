@@ -9661,6 +9661,18 @@ h3,
   font-size: 11px;
 }
 
+.skill-page-actions > button {
+  height: 28px;
+  padding-inline: 11px;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.skill-page-actions > button [class*="ui-icon"] {
+  width: 14px;
+  height: 14px;
+}
+
 .skill-manager-page .library-layout {
   grid-template-columns: clamp(216px, 23%, 270px) minmax(0, 1fr);
   min-height: 0;
@@ -9777,6 +9789,22 @@ h3,
   min-height: 0;
   overflow: hidden;
   background: var(--panel);
+}
+
+.skill-manager-page .resource-detail-empty {
+  gap: 8px;
+  padding: 24px;
+}
+
+.skill-manager-page .resource-detail-empty > .ui-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.skill-manager-page .resource-detail-empty p {
+  max-width: 42ch;
+  font-size: 12px;
 }
 
 .skill-editor-header {
