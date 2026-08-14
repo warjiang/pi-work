@@ -98,6 +98,39 @@ export const activities = sqliteTable("activities", {
   createdAt: text("created_at").notNull(),
 });
 
+export const modelUsage = sqliteTable("model_usage", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  workspaceId: text("workspace_id"),
+  requestId: text("request_id").notNull(),
+  messageId: text("message_id"),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  responseModel: text("response_model"),
+  api: text("api"),
+  stopReason: text("stop_reason"),
+  inputTokens: text("input_tokens").notNull(),
+  outputTokens: text("output_tokens").notNull(),
+  cacheReadTokens: text("cache_read_tokens").notNull(),
+  cacheWriteTokens: text("cache_write_tokens").notNull(),
+  reasoningTokens: text("reasoning_tokens").notNull(),
+  totalTokens: text("total_tokens").notNull(),
+  inputCost: text("input_cost").notNull(),
+  outputCost: text("output_cost").notNull(),
+  cacheReadCost: text("cache_read_cost").notNull(),
+  cacheWriteCost: text("cache_write_cost").notNull(),
+  totalCost: text("total_cost").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const telemetryOutbox = sqliteTable("telemetry_outbox", {
+  id: text("id").primaryKey(),
+  payload: text("payload").notNull(),
+  attempts: text("attempts").notNull(),
+  nextAttemptAt: text("next_attempt_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
 export const attachments = sqliteTable("attachments", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),

@@ -1769,7 +1769,7 @@ function ThoughtProcessCard({ activity, t, open = false, collapse = false, label
       }}
     >
       <summary>
-        <span className="thinking-marker"><Icon name="skills" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
+        <span className="thinking-marker"><Icon name="sparkles" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
         <span className="thinking-label">{label ?? t("thoughtProcess")}</span>
         {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
       </summary>

@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -132,6 +132,39 @@ describe("ManagedCliRuntime", () => {
       })],
     });
     expect(await runtime.remove("pi-work-managed-cli-fixture")).toEqual([]);
+  });
+
+  it("falls back to PATH for shell-installed CLIs that are not in the managed registry", async () => {
+    const { root, runtime } = await createRuntime();
+    const fixture = join(root, "shell-cli");
+    const binDirectory = join(root, "external-bin");
+    await mkdir(fixture, { recursive: true });
+    await mkdir(binDirectory, { recursive: true });
+    await writeFile(join(fixture, "cli.js"), [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify({ args: process.argv.slice(2), home: process.env.HOME }));",
+      "",
+    ].join("\n"));
+    await chmod(join(fixture, "cli.js"), 0o755);
+    await symlink(join(fixture, "cli.js"), join(binDirectory, "bytedcli"));
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDirectory}:${originalPath ?? "/usr/bin:/bin"}`;
+    try {
+      const result = await runtime.execute({
+        command: "bytedcli",
+        args: ["hello"],
+        cwd: fixture,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.command).toBe("bytedcli");
+      expect(JSON.parse(result.stdout)).toEqual({
+        args: ["hello"],
+        home: runtime.homeDirectory,
+      });
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
 

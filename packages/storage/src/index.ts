@@ -14,7 +14,10 @@ import type {
   ChatMessage,
   Conversation,
   Label,
+  ModelUsage,
+  ObservabilityStoredConfig,
   Plan,
+  RecordModelUsageInput,
   Run,
   SavedView,
   Session,
@@ -25,6 +28,8 @@ import type {
   Task,
   TaskStatus,
   ThinkingLevel,
+  UsageQueryInput,
+  UsageSummary,
   WorkEvent,
   Workspace,
   WorkspaceKind,
@@ -40,7 +45,10 @@ import {
   chatMessageSchema,
   eventSchema,
   labelSchema,
+  modelUsageSchema,
+  observabilityStoredConfigSchema,
   planSchema,
+  recordModelUsageInputSchema,
   runSchema,
   savedViewSchema,
   skillSchema,
@@ -48,6 +56,7 @@ import {
   statusDefinitionSchema,
   subtaskSchema,
   taskSchema,
+  usageSummarySchema,
   workspaceSchema,
 } from "@pi-work/protocol";
 import {
@@ -58,9 +67,11 @@ import {
   domainEntities,
   events,
   messages,
+  modelUsage,
   plans,
   runs,
   tasks,
+  telemetryOutbox,
   workspaces,
 } from "./schema.js";
 
@@ -389,6 +400,28 @@ export class PiWorkStore {
     return { task, workspace };
   }
 
+  getObservabilityConfig(): ObservabilityStoredConfig {
+    const row = this.db.select().from(appSettings).where(eq(appSettings.key, "observability")).get();
+    const value = row === undefined ? {} : (() => {
+      try {
+        return JSON.parse(row.value);
+      } catch {
+        return {};
+      }
+    })();
+    return observabilityStoredConfigSchema.parse(value);
+  }
+
+  setObservabilityConfig(input: Partial<ObservabilityStoredConfig>): ObservabilityStoredConfig {
+    const next = observabilityStoredConfigSchema.parse({ ...this.getObservabilityConfig(), ...input });
+    const value = JSON.stringify(next);
+    this.db.insert(appSettings).values({ key: "observability", value }).onConflictDoUpdate({
+      target: appSettings.key,
+      set: { value },
+    }).run();
+    return next;
+  }
+
   getAppSettings(): AppSettings {
     const values = Object.fromEntries(
       this.db.select().from(appSettings).all().map(({ key, value }) => [key, JSON.parse(value)]),
@@ -652,6 +685,109 @@ export class PiWorkStore {
         metadata: JSON.parse(row.metadata),
         createdAt: row.createdAt,
       }));
+  }
+
+  recordModelUsage(input: RecordModelUsageInput): ModelUsage {
+    const parsed = recordModelUsageInputSchema.parse(input);
+    const usage = modelUsageSchema.parse({ ...parsed, id: randomUUID(), createdAt: timestamp() });
+    this.db.insert(modelUsage).values({
+      id: usage.id,
+      taskId: usage.taskId,
+      workspaceId: usage.workspaceId,
+      requestId: usage.requestId,
+      messageId: usage.messageId,
+      provider: usage.provider,
+      model: usage.model,
+      responseModel: usage.responseModel,
+      api: usage.api,
+      stopReason: usage.stopReason,
+      inputTokens: String(usage.inputTokens),
+      outputTokens: String(usage.outputTokens),
+      cacheReadTokens: String(usage.cacheReadTokens),
+      cacheWriteTokens: String(usage.cacheWriteTokens),
+      reasoningTokens: String(usage.reasoningTokens),
+      totalTokens: String(usage.totalTokens),
+      inputCost: String(usage.inputCost),
+      outputCost: String(usage.outputCost),
+      cacheReadCost: String(usage.cacheReadCost),
+      cacheWriteCost: String(usage.cacheWriteCost),
+      totalCost: String(usage.totalCost),
+      createdAt: usage.createdAt,
+    }).run();
+    return usage;
+  }
+
+  usageSummary(input: UsageQueryInput = { since: null, until: null, workspaceId: null }): UsageSummary {
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (input.since !== null) {
+      conditions.push("created_at >= ?");
+      params.push(input.since);
+    }
+    if (input.until !== null) {
+      conditions.push("created_at <= ?");
+      params.push(input.until);
+    }
+    if (input.workspaceId !== null) {
+      conditions.push("workspace_id = ?");
+      params.push(input.workspaceId);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const totalsExpr = `
+      COUNT(*) AS requests,
+      COALESCE(SUM(CAST(input_tokens AS REAL)), 0) AS inputTokens,
+      COALESCE(SUM(CAST(output_tokens AS REAL)), 0) AS outputTokens,
+      COALESCE(SUM(CAST(cache_read_tokens AS REAL)), 0) AS cacheReadTokens,
+      COALESCE(SUM(CAST(cache_write_tokens AS REAL)), 0) AS cacheWriteTokens,
+      COALESCE(SUM(CAST(reasoning_tokens AS REAL)), 0) AS reasoningTokens,
+      COALESCE(SUM(CAST(total_tokens AS REAL)), 0) AS totalTokens,
+      COALESCE(SUM(CAST(total_cost AS REAL)), 0) AS totalCost`;
+    const totalsRow = this.sqlite.prepare(
+      `SELECT ${totalsExpr} FROM model_usage ${where}`,
+    ).get(...params) as Record<string, number>;
+    const byModel = this.sqlite.prepare(
+      `SELECT provider, model, ${totalsExpr} FROM model_usage ${where} GROUP BY provider, model ORDER BY totalCost DESC`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    const byDay = this.sqlite.prepare(
+      `SELECT substr(created_at, 1, 10) AS day, ${totalsExpr} FROM model_usage ${where} GROUP BY day ORDER BY day ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    return usageSummarySchema.parse({
+      totals: totalsRow,
+      byModel,
+      byDay,
+    });
+  }
+
+  enqueueTelemetry(payload: string, nextAttemptAt = timestamp()): void {
+    this.db.insert(telemetryOutbox).values({
+      id: randomUUID(),
+      payload,
+      attempts: "0",
+      nextAttemptAt,
+      createdAt: timestamp(),
+    }).run();
+  }
+
+  listDueTelemetry(limit = 20, now = timestamp()): Array<{ id: string; payload: string; attempts: number }> {
+    return (this.sqlite.prepare(
+      "SELECT id, payload, attempts FROM telemetry_outbox WHERE next_attempt_at <= ? ORDER BY created_at ASC LIMIT ?",
+    ).all(now, limit) as Array<{ id: string; payload: string; attempts: string }>)
+      .map((row) => ({ id: row.id, payload: row.payload, attempts: Number(row.attempts) }));
+  }
+
+  markTelemetryRetry(id: string, attempts: number, nextAttemptAt: string): void {
+    this.db.update(telemetryOutbox)
+      .set({ attempts: String(attempts), nextAttemptAt })
+      .where(eq(telemetryOutbox.id, id)).run();
+  }
+
+  deleteTelemetry(id: string): void {
+    this.db.delete(telemetryOutbox).where(eq(telemetryOutbox.id, id)).run();
+  }
+
+  countTelemetryOutbox(): number {
+    const row = this.sqlite.prepare("SELECT COUNT(*) AS count FROM telemetry_outbox").get() as { count: number };
+    return row.count;
   }
 
   addAttachment(input: Omit<Attachment, "id" | "createdAt">): Attachment {
@@ -1109,6 +1245,40 @@ export class PiWorkStore {
         size TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS model_usage (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        workspace_id TEXT,
+        request_id TEXT NOT NULL,
+        message_id TEXT,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        response_model TEXT,
+        api TEXT,
+        stop_reason TEXT,
+        input_tokens TEXT NOT NULL DEFAULT '0',
+        output_tokens TEXT NOT NULL DEFAULT '0',
+        cache_read_tokens TEXT NOT NULL DEFAULT '0',
+        cache_write_tokens TEXT NOT NULL DEFAULT '0',
+        reasoning_tokens TEXT NOT NULL DEFAULT '0',
+        total_tokens TEXT NOT NULL DEFAULT '0',
+        input_cost TEXT NOT NULL DEFAULT '0',
+        output_cost TEXT NOT NULL DEFAULT '0',
+        cache_read_cost TEXT NOT NULL DEFAULT '0',
+        cache_write_cost TEXT NOT NULL DEFAULT '0',
+        total_cost TEXT NOT NULL DEFAULT '0',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS model_usage_created_at ON model_usage(created_at);
+      CREATE INDEX IF NOT EXISTS model_usage_task ON model_usage(task_id);
+      CREATE TABLE IF NOT EXISTS telemetry_outbox (
+        id TEXT PRIMARY KEY NOT NULL,
+        payload TEXT NOT NULL,
+        attempts TEXT NOT NULL DEFAULT '0',
+        next_attempt_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS telemetry_outbox_next_attempt ON telemetry_outbox(next_attempt_at);
     `);
     this.addColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'folder'");
     this.addColumn("workspaces", "directories", "TEXT NOT NULL DEFAULT '[]'");

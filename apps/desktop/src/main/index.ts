@@ -66,6 +66,9 @@ import {
   planSchema,
   promoteSessionInputSchema,
   publishArtifactInputSchema,
+  observabilitySettingsSchema,
+  updateObservabilitySettingsInputSchema,
+  usageQueryInputSchema,
   previewRemoteSkillInputSchema,
   readSkillFileInputSchema,
   resumeTaskInputSchema,
@@ -107,12 +110,16 @@ import {
   resolveBundledPiRuntime,
 } from "./pi-console.js";
 import { loadWindowBounds, saveWindowBounds } from "./window-state.js";
+import { SecretsBroker, maskSecret } from "./secrets-broker.js";
+import { LangfuseExporter, type LangfuseConfig, type RunContext } from "./observability.js";
 
 let mainWindow: BrowserWindow | null = null;
 let windowStateTimer: ReturnType<typeof setTimeout> | null = null;
 let store: PiWorkStore;
 let agentProcess: UtilityProcess | null = null;
 let credentialBroker: CredentialBroker;
+let secretsBroker: SecretsBroker;
+let observabilityExporter: LangfuseExporter | null = null;
 let piConsole: PiConsole | null = null;
 let managedCliRuntime: ManagedCliRuntime | null = null;
 let browserView: WebContentsView | null = null;
@@ -232,6 +239,55 @@ function collectRunEvent(response: Extract<AgentMessage, { type: "event" }>): vo
       detail: event.payload.errorMessage === undefined ? "" : String(event.payload.errorMessage),
       metadata,
     });
+  }
+}
+
+function recordUsageEvent(response: Extract<AgentMessage, { type: "event" }>): void {
+  if (response.event.kind !== "usage") return;
+  const payload = response.event.payload as {
+    provider?: unknown;
+    model?: unknown;
+    responseModel?: unknown;
+    api?: unknown;
+    stopReason?: unknown;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      reasoning?: number;
+      totalTokens?: number;
+      cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+    };
+  };
+  const usage = payload.usage;
+  if (usage === undefined) return;
+  try {
+    const task = getStore().getTask(response.sessionId);
+    getStore().recordModelUsage({
+      taskId: response.sessionId,
+      workspaceId: task?.workspaceId ?? null,
+      requestId: response.requestId,
+      messageId: null,
+      provider: typeof payload.provider === "string" ? payload.provider : "",
+      model: typeof payload.model === "string" ? payload.model : "",
+      responseModel: typeof payload.responseModel === "string" ? payload.responseModel : null,
+      api: typeof payload.api === "string" ? payload.api : null,
+      stopReason: typeof payload.stopReason === "string" ? payload.stopReason : null,
+      inputTokens: Math.max(0, Math.round(usage.input ?? 0)),
+      outputTokens: Math.max(0, Math.round(usage.output ?? 0)),
+      cacheReadTokens: Math.max(0, Math.round(usage.cacheRead ?? 0)),
+      cacheWriteTokens: Math.max(0, Math.round(usage.cacheWrite ?? 0)),
+      reasoningTokens: Math.max(0, Math.round(usage.reasoning ?? 0)),
+      totalTokens: Math.max(0, Math.round(usage.totalTokens ?? 0)),
+      inputCost: Math.max(0, usage.cost?.input ?? 0),
+      outputCost: Math.max(0, usage.cost?.output ?? 0),
+      cacheReadCost: Math.max(0, usage.cost?.cacheRead ?? 0),
+      cacheWriteCost: Math.max(0, usage.cost?.cacheWrite ?? 0),
+      totalCost: Math.max(0, usage.cost?.total ?? 0),
+    });
+  } catch {
+    // A deleted session should not break usage accounting for the run.
   }
 }
 
@@ -395,6 +451,93 @@ function getCredentialBroker(): CredentialBroker {
     );
   }
   return credentialBroker;
+}
+
+function getSecretsBroker(): SecretsBroker {
+  if (secretsBroker === undefined) {
+    secretsBroker = new SecretsBroker(join(app.getPath("userData"), "pi-agent"));
+  }
+  return secretsBroker;
+}
+
+/**
+ * Resolves the effective Langfuse config. Environment variables win over stored
+ * settings so operators can point a whole machine at a shared instance. Returns
+ * null when disabled or incomplete, which short-circuits the exporter entirely.
+ */
+async function resolveLangfuseConfig(): Promise<LangfuseConfig | null> {
+  const stored = getStore().getObservabilityConfig();
+  const envEnabled = process.env.LANGFUSE_HOST !== undefined
+    || process.env.LANGFUSE_PUBLIC_KEY !== undefined
+    || process.env.LANGFUSE_SECRET_KEY !== undefined;
+  if (!stored.enabled && !envEnabled) return null;
+  const host = process.env.LANGFUSE_HOST?.trim() || stored.host;
+  const publicKey = process.env.LANGFUSE_PUBLIC_KEY?.trim() || stored.publicKey;
+  const secretKey = process.env.LANGFUSE_SECRET_KEY?.trim() || (await getSecretsBroker().getLangfuseSecretKey()) || "";
+  if (host === "" || publicKey === "" || secretKey === "") return null;
+  return { host, publicKey, secretKey, captureContent: stored.captureContent };
+}
+
+function resolveRunContext(taskId: string, requestId: string): RunContext | null {
+  try {
+    const task = getStore().getTask(taskId);
+    if (task === null) return null;
+    const messages = getStore().listMessages(taskId);
+    const userMessage = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
+    const workspace = getStore().getWorkspace(task.workspaceId);
+    return {
+      taskId,
+      workspaceId: task.workspaceId,
+      provider: task.providerId ?? "",
+      model: task.modelId ?? "",
+      thinkingLevel: task.thinkingLevel,
+      permissionMode: task.permissionMode,
+      cwd: task.workingDirectory ?? workspace?.rootPath ?? "",
+      appVersion: app.getVersion(),
+      userMessage,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getObservabilityExporter(): LangfuseExporter {
+  if (observabilityExporter === null) {
+    observabilityExporter = new LangfuseExporter({
+      resolveConfig: resolveLangfuseConfig,
+      resolveRunContext,
+      outbox: {
+        enqueue: (payload, nextAttemptAt) => getStore().enqueueTelemetry(payload, nextAttemptAt),
+        listDue: (limit) => getStore().listDueTelemetry(limit),
+        markRetry: (id, attempts, nextAttemptAt) => getStore().markTelemetryRetry(id, attempts, nextAttemptAt),
+        delete: (id) => getStore().deleteTelemetry(id),
+      },
+      log: (message, error) => {
+        console.warn(`[observability] ${message}`, error instanceof Error ? error.message : "");
+      },
+    });
+    observabilityExporter.start();
+  }
+  return observabilityExporter;
+}
+
+async function observabilitySettingsView() {
+  const stored = getStore().getObservabilityConfig();
+  const storedSecret = await getSecretsBroker().getLangfuseSecretKey();
+  const envSecret = process.env.LANGFUSE_SECRET_KEY?.trim();
+  const effectiveSecret = envSecret !== undefined && envSecret.length > 0 ? envSecret : storedSecret;
+  const envOverride = process.env.LANGFUSE_HOST !== undefined
+    || process.env.LANGFUSE_PUBLIC_KEY !== undefined
+    || process.env.LANGFUSE_SECRET_KEY !== undefined;
+  return observabilitySettingsSchema.parse({
+    enabled: stored.enabled,
+    host: process.env.LANGFUSE_HOST?.trim() || stored.host,
+    publicKey: process.env.LANGFUSE_PUBLIC_KEY?.trim() || stored.publicKey,
+    captureContent: stored.captureContent,
+    secretKeyMasked: maskSecret(effectiveSecret),
+    hasSecretKey: effectiveSecret !== null && effectiveSecret !== undefined && effectiveSecret.length > 0,
+    envOverride,
+  });
 }
 
 function getMcpOAuthManager(): McpOAuthManager {
@@ -601,6 +744,12 @@ function getAgentProcess(): UtilityProcess {
         clearPendingToolApprovals(response.sessionId);
       }
       collectRunEvent(response);
+      recordUsageEvent(response);
+      try {
+        getObservabilityExporter().handleEvent(response);
+      } catch {
+        // Telemetry must never interrupt the agent event channel.
+      }
       mainWindow?.webContents.send("agent:event", response);
       return;
     }
@@ -639,7 +788,10 @@ function agentRuntime(cwd = app.getPath("userData"), sessionId?: string): AgentR
     nodeExecutable: app.getPath("exe"),
   });
   const environment = getManagedCliRuntime().agentEnvironment(
-    { PATH: isolatedEnvironment.PATH, HOME: isolatedEnvironment.HOME },
+    {
+      PATH: process.env.PATH ?? isolatedEnvironment.PATH,
+      HOME: isolatedEnvironment.HOME,
+    },
     sessionId === undefined ? {} : sessionEnvironments.get(sessionId),
   );
   return {
@@ -1136,6 +1288,20 @@ function registerIpc(): void {
   ipcMain.handle("settings:get", () => appSettingsSchema.parse(getStore().getAppSettings()));
   ipcMain.handle("settings:update", (_event, input: unknown) => (
     getStore().updateAppSettings(updateAppSettingsInputSchema.parse(input))
+  ));
+  ipcMain.handle("observability:get", async () => observabilitySettingsView());
+  ipcMain.handle("observability:update", async (_event, input: unknown) => {
+    const parsed = updateObservabilitySettingsInputSchema.parse(input);
+    const { secretKey, ...stored } = parsed;
+    getStore().setObservabilityConfig(withoutUndefined(stored));
+    if (secretKey !== undefined) {
+      await getSecretsBroker().setLangfuseSecretKey(secretKey.length === 0 ? null : secretKey);
+    }
+    await getObservabilityExporter().refresh();
+    return observabilitySettingsView();
+  });
+  ipcMain.handle("usage:summary", (_event, input: unknown) => (
+    getStore().usageSummary(usageQueryInputSchema.parse(input ?? {}))
   ));
   ipcMain.handle("extension:list", () => listExtensions());
   ipcMain.handle("extension:install", async (_event, source: unknown) => {
@@ -1904,6 +2070,7 @@ app.whenReady().then(async () => {
     getStore().updateAppSettings(legacyDefault);
   }
   registerIpc();
+  getObservabilityExporter();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1921,6 +2088,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   closeBrowserView();
   void skillManager?.dispose();
+  observabilityExporter?.persistPendingSync();
   store?.close();
   agentProcess?.kill();
   piConsole?.close();

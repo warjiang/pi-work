@@ -63,7 +63,7 @@ export type ToolApprovalRequester = (
 ) => Promise<boolean>;
 
 export type AgentStreamListener = (
-  kind: "text_delta" | "thinking" | "tool_call" | "tool_update" | "tool_result" | "file_change" | "runtime",
+  kind: "text_delta" | "thinking" | "tool_call" | "tool_update" | "tool_result" | "file_change" | "runtime" | "usage",
   payload: Record<string, unknown>,
 ) => void;
 
@@ -703,9 +703,11 @@ export function consumeSessionEvent(
     case "message_start":
       onEvent?.("runtime", { state: "message_start" });
       return;
-    case "message_end":
+    case "message_end": {
+      emitAssistantUsage(event.message, onEvent);
       onEvent?.("runtime", { state: "message_end" });
       return;
+    }
     case "message_update": {
       const update = event.assistantMessageEvent;
       if (update.type === "text_delta") {
@@ -1030,6 +1032,53 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+/**
+ * Forwards token/cost accounting from a completed assistant message. Pi Work's
+ * observability layer relies on this because `CreateAgentSessionOptions` does not
+ * expose a telemetry context, so the subscription stream is the only usage source.
+ */
+function emitAssistantUsage(message: unknown, onEvent?: AgentStreamListener): void {
+  if (onEvent === undefined) return;
+  const record = asRecord(message);
+  if (record.role !== "assistant") return;
+  const usage = asRecord(record.usage);
+  const cost = asRecord(usage.cost);
+  const outputText = Array.isArray(record.content)
+    ? record.content
+        .filter((part): part is { type: string; text: string } =>
+          asRecord(part).type === "text" && typeof asRecord(part).text === "string")
+        .map((part) => part.text)
+        .join("")
+    : "";
+  onEvent("usage", {
+    provider: typeof record.provider === "string" ? record.provider : "",
+    model: typeof record.model === "string" ? record.model : "",
+    responseModel: typeof record.responseModel === "string" ? record.responseModel : null,
+    api: typeof record.api === "string" ? record.api : null,
+    stopReason: typeof record.stopReason === "string" ? record.stopReason : null,
+    output: outputText,
+    usage: {
+      input: numeric(usage.input),
+      output: numeric(usage.output),
+      cacheRead: numeric(usage.cacheRead),
+      cacheWrite: numeric(usage.cacheWrite),
+      reasoning: numeric(usage.reasoning),
+      totalTokens: numeric(usage.totalTokens),
+      cost: {
+        input: numeric(cost.input),
+        output: numeric(cost.output),
+        cacheRead: numeric(cost.cacheRead),
+        cacheWrite: numeric(cost.cacheWrite),
+        total: numeric(cost.total),
+      },
+    },
+  });
+}
+
+function numeric(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function boundaryTool(

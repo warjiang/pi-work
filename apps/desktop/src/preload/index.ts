@@ -15,6 +15,11 @@ const piWork = {
     get: () => ipcRenderer.invoke("settings:get"),
     update: (input: unknown) => ipcRenderer.invoke("settings:update", input),
   },
+  observability: {
+    get: () => ipcRenderer.invoke("observability:get"),
+    update: (input: unknown) => ipcRenderer.invoke("observability:update", input),
+    usage: (input: unknown = {}) => ipcRenderer.invoke("usage:summary", input),
+  },
   system: {
     openExternal: (url: string) => ipcRenderer.invoke("system:open-external", { url }),
     info: () => ipcRenderer.invoke("system:info"),

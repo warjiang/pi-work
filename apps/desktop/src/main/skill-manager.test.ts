@@ -153,6 +153,41 @@ describe("SkillManager", () => {
     expect((await manager.list()).map(({ id }) => id)).not.toContain(skill.id);
   });
 
+  it("parses YAML block-scalar descriptions and keeps the frontmatter intact on update", async () => {
+    const { userData, manager } = await createFixture();
+    const source = join(userData, "block-skill");
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, "SKILL.md"), [
+      "---",
+      "name: seedream",
+      "description: |",
+      "  Generates images from prompts.",
+      "  Triggers when the user asks to draw or render.",
+      "license: MIT",
+      "---",
+      "# Instructions",
+      "Call the API.",
+      "",
+    ].join("\n"), "utf8");
+
+    const skill = await manager.import(source);
+    expect(skill.description).toBe(
+      "Generates images from prompts.\nTriggers when the user asks to draw or render.",
+    );
+
+    const destination = join(userData, "pi-agent", "skills", skill.id);
+    await manager.update(skill.id, {
+      name: "seedream",
+      description: skill.description,
+      instructions: "# Updated",
+      enabled: true,
+    });
+    const written = await readFile(join(destination, "SKILL.md"), "utf8");
+    expect(written).toContain("license: MIT");
+    expect(written.match(/Triggers when the user asks to draw or render\./g) ?? []).toHaveLength(1);
+    expect((await manager.list()).find(({ id }) => id === skill.id)?.description).toBe(skill.description);
+  });
+
   it("migrates legacy workspace drafts into unique managed Skills", async () => {
     const { userData, store } = await createFixture();
     const first = store.createSkill({
