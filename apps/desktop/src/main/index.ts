@@ -639,7 +639,10 @@ function agentRuntime(cwd = app.getPath("userData"), sessionId?: string): AgentR
     nodeExecutable: app.getPath("exe"),
   });
   const environment = getManagedCliRuntime().agentEnvironment(
-    { PATH: isolatedEnvironment.PATH, HOME: isolatedEnvironment.HOME },
+    {
+      PATH: process.env.PATH ?? isolatedEnvironment.PATH,
+      HOME: isolatedEnvironment.HOME,
+    },
     sessionId === undefined ? {} : sessionEnvironments.get(sessionId),
   );
   return {
