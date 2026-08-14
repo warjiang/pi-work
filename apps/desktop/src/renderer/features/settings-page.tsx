@@ -6,6 +6,7 @@ import type {
   BuildInfo,
   ModelCatalog,
   ProviderConfig,
+  Workspace,
 } from "@pi-work/protocol";
 import {
   AlertDialog,
@@ -71,6 +72,7 @@ export const settingsNavigationGroups = [
     label: "settingsGroupWorkspace",
     sections: [
       { id: "modelsCredentials", icon: "models" },
+      { id: "workFolders", icon: "workspace" },
       { id: "permissions", icon: "permissions" },
     ],
   },
@@ -98,12 +100,15 @@ export function SettingsPage(props: {
   section: SettingsSection;
   settings: AppSettings;
   buildInfo: BuildInfo;
+  workspaces: Workspace[];
   providers: ProviderConfig[];
   models: ModelCatalog | undefined;
   t: T;
   onSectionChange(section: SettingsSection): void;
   onClose(): void;
   onUpdate(value: Partial<AppSettings>): Promise<unknown>;
+  onAddWorkspace(): Promise<Workspace | null>;
+  onAddWorkspaceDirectory(workspaceId: string): Promise<Workspace | null>;
   onProvidersChanged(): Promise<unknown>;
   onModelsRefresh(): Promise<unknown>;
   onRestartOnboarding(): Promise<unknown>;
@@ -169,6 +174,7 @@ export function SettingsPage(props: {
               </header>
               {activeSection === "general" ? <GeneralSettings {...props} /> : null}
               {activeSection === "modelsCredentials" ? <ModelSettings {...props} /> : null}
+              {activeSection === "workFolders" ? <FolderSettings {...props} /> : null}
               {activeSection === "permissions" ? <PermissionSettings {...props} /> : null}
               {activeSection === "skills" ? <SkillsPage embedded t={props.t} /> : null}
               {activeSection === "mcp" ? <McpSettingsPage t={props.t} /> : null}
@@ -185,10 +191,13 @@ export function SettingsPage(props: {
 
 type BaseProps = {
   settings: AppSettings;
+  workspaces: Workspace[];
   providers: ProviderConfig[];
   models: ModelCatalog | undefined;
   t: T;
   onUpdate(value: Partial<AppSettings>): Promise<unknown>;
+  onAddWorkspace(): Promise<Workspace | null>;
+  onAddWorkspaceDirectory(workspaceId: string): Promise<Workspace | null>;
   onProvidersChanged(): Promise<unknown>;
   onModelsRefresh(): Promise<unknown>;
   onRestartOnboarding(): Promise<unknown>;
@@ -568,6 +577,16 @@ function modelTestResultLabel(
   const locale = language === "zh-CN" ? "zh-CN" : "en-US";
   const testedAt = new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(result.testedAt));
   return `${t(result.success ? "modelTestPassed" : "modelTestFailed")} · ${testedAt}`;
+}
+
+function FolderSettings(props: BaseProps) {
+  const folders = props.workspaces.filter(({ kind }) => kind === "folder");
+  return <SettingsSectionBlock className="settings-folders" title={props.t("workFolders")} detail={props.t("folderAccessDetail")} showTitle={false}>
+    <div className="folder-settings-list">{folders.map((workspace) => <div key={workspace.id}><Icon name="workspace" /><span><strong>{workspace.name}</strong>{workspace.directories.map((directory) => <code key={directory}>{directory}</code>)}</span><Button variant="ghost" size="sm" onClick={() => void props.onAddWorkspaceDirectory(workspace.id)}><Icon name="folder-plus" size={14} />{props.t("addDirectory")}</Button><Badge>{workspace.directories.length}</Badge></div>)}{folders.length === 0 ? <p>{props.t("noItems")}</p> : null}</div>
+    <div className="settings-section-footer">
+      <Button variant="outline" size="sm" onClick={() => void props.onAddWorkspace()}><Icon name="folder-plus" />{props.t("addWorkFolder")}</Button>
+    </div>
+  </SettingsSectionBlock>;
 }
 
 function PermissionSettings(props: BaseProps) {

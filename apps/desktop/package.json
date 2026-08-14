@@ -16,6 +16,8 @@
     "ensure:electron": "electron --version",
     "prepackage": "pnpm ensure:node-pty-permissions",
     "package": "pnpm icons && pnpm build && pnpm prepare:pi-runtime && electron-builder --publish never",
+    "ci:package:mac:dry-run": "pnpm icons && pnpm build && pnpm prepare:pi-runtime && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --publish never -c.mac.identity=null -c.mac.notarize=false",
+    "ci:package:mac": "pnpm icons && pnpm build && pnpm prepare:pi-runtime && electron-builder --mac dmg zip --publish never -c.forceCodeSigning=true",
     "icons": "node scripts/generate-icons.mjs",
     "prepare:pi-runtime": "tsx scripts/prepare-pi-runtime.mts",
     "verify:pi-runtime": "tsx scripts/verify-pi-runtime.mts"

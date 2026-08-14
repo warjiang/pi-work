@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig } from "@pi-work/protocol";
+import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, Workspace } from "@pi-work/protocol";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { translator } from "@/i18n.js";
@@ -27,6 +27,15 @@ const buildInfo: BuildInfo = {
 };
 
 const providers: ProviderConfig[] = [{ providerId: "kimi-coding" }];
+const workspace: Workspace = {
+  id: "10000000-0000-4000-8000-000000000001",
+  name: "Demo workspace",
+  rootPath: "/tmp/demo",
+  directories: ["/tmp/demo"],
+  outputPath: "/tmp/demo/output",
+  kind: "folder",
+  createdAt: "2026-08-13T00:00:00.000Z",
+};
 const models: ModelCatalog = {
   diagnostics: [],
   models: [
@@ -47,6 +56,7 @@ describe("SettingsPage", () => {
     expect(icons).toMatchObject({
       general: "sliders",
       modelsCredentials: "models",
+      workFolders: "workspace",
       permissions: "permissions",
       skills: "skills",
       mcp: "source",
@@ -54,7 +64,6 @@ describe("SettingsPage", () => {
       browser: "browser",
       about: "info",
     });
-    expect(icons).not.toHaveProperty("workFolders");
     expect(icons).not.toHaveProperty("appearance");
     expect(icons).not.toHaveProperty("shortcuts");
   });
@@ -65,12 +74,15 @@ describe("SettingsPage", () => {
         section="about"
         settings={settings}
         buildInfo={buildInfo}
+        workspaces={[]}
         providers={[]}
         models={undefined}
         t={translator("en")}
         onSectionChange={() => undefined}
         onClose={() => undefined}
         onUpdate={async () => undefined}
+        onAddWorkspace={async () => null}
+        onAddWorkspaceDirectory={async () => null}
         onProvidersChanged={async () => undefined}
         onModelsRefresh={async () => undefined}
         onRestartOnboarding={async () => undefined}
@@ -101,12 +113,15 @@ describe("SettingsPage", () => {
           section="modelsCredentials"
           settings={settings}
           buildInfo={buildInfo}
+          workspaces={[]}
           providers={providers}
           models={models}
           t={translator("en")}
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
+          onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
@@ -132,6 +147,7 @@ describe("SettingsPage", () => {
             disabledModelKeys: ["newapi/gpt-5-mini"],
           }}
           buildInfo={buildInfo}
+          workspaces={[]}
           providers={[{ providerId: "newapi" }]}
           models={{
             diagnostics: [],
@@ -144,6 +160,8 @@ describe("SettingsPage", () => {
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
+          onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
@@ -164,12 +182,15 @@ describe("SettingsPage", () => {
           section="extensions"
           settings={settings}
           buildInfo={buildInfo}
+          workspaces={[]}
           providers={[]}
           models={undefined}
           t={translator("en")}
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
+          onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
@@ -190,12 +211,15 @@ describe("SettingsPage", () => {
           section="mcp"
           settings={settings}
           buildInfo={buildInfo}
+          workspaces={[workspace]}
           providers={[]}
           models={undefined}
           t={translator("en")}
           onSectionChange={() => undefined}
           onClose={() => undefined}
           onUpdate={async () => undefined}
+          onAddWorkspace={async () => null}
+          onAddWorkspaceDirectory={async () => null}
           onProvidersChanged={async () => undefined}
           onModelsRefresh={async () => undefined}
           onRestartOnboarding={async () => undefined}
