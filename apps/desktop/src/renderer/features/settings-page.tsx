@@ -302,7 +302,7 @@ function ModelSettings(props: BaseProps) {
     await props.onProvidersChanged();
   }
   return <>
-    <SettingsSectionBlock title={props.t("modelsCredentials")} detail={props.t("credentialDetail")} showTitle={false}>
+    <SettingsSectionBlock className="model-settings" title={props.t("modelsCredentials")} detail={props.t("credentialDetail")} showTitle={false}>
       <div className="model-connection-form">
         <div className="model-connection-copy">
           <span>{props.t("addProvider")}</span>
@@ -382,10 +382,12 @@ function ModelSettings(props: BaseProps) {
         </div>
       </section>
       <SettingsSubsection title={props.t("defaultModel")} detail={props.t("defaultModelDetail")}>
-        <Select value={defaultModelKey} onValueChange={(value) => {
-          const model = modelOptions.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
-          if (model) void props.onUpdate({ providerId: model.providerId, modelId: model.modelId, thinkingLevel: model.thinkingLevels.includes(props.settings.thinkingLevel) ? props.settings.thinkingLevel : (model.thinkingLevels[0] ?? "off") });
-        }}><SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger><SelectContent><SelectGroup>{modelOptions.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent></Select>
+        <div className="default-model-control">
+          <Select value={defaultModelKey} onValueChange={(value) => {
+            const model = modelOptions.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
+            if (model) void props.onUpdate({ providerId: model.providerId, modelId: model.modelId, thinkingLevel: model.thinkingLevels.includes(props.settings.thinkingLevel) ? props.settings.thinkingLevel : (model.thinkingLevels[0] ?? "off") });
+          }}><SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger><SelectContent><SelectGroup>{modelOptions.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent></Select>
+        </div>
       </SettingsSubsection>
     </SettingsSectionBlock>
     <AlertDialog open={removeProvider !== null} onOpenChange={(open) => { if (!open) setRemoveProvider(null); }}><AlertDialogContent className="settings-confirm-dialog"><AlertDialogHeader><AlertDialogTitle>{props.t("removeCredential")}</AlertDialogTitle><AlertDialogDescription>{removeProvider}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{props.t("cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{props.t("delete")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
@@ -394,14 +396,16 @@ function ModelSettings(props: BaseProps) {
 
 function FolderSettings(props: BaseProps) {
   const folders = props.workspaces.filter(({ kind }) => kind === "folder");
-  return <SettingsSectionBlock title={props.t("workFolders")} detail={props.t("folderAccessDetail")} showTitle={false}>
+  return <SettingsSectionBlock className="settings-folders" title={props.t("workFolders")} detail={props.t("folderAccessDetail")} showTitle={false}>
     <div className="folder-settings-list">{folders.map((workspace) => <div key={workspace.id}><Icon name="workspace" /><span><strong>{workspace.name}</strong>{workspace.directories.map((directory) => <code key={directory}>{directory}</code>)}</span><Button variant="ghost" size="sm" onClick={() => void props.onAddWorkspaceDirectory(workspace.id)}><Icon name="folder-plus" size={14} />{props.t("addDirectory")}</Button><Badge>{workspace.directories.length}</Badge></div>)}{folders.length === 0 ? <p>{props.t("noItems")}</p> : null}</div>
-    <Button variant="outline" onClick={() => void props.onAddWorkspace()}><Icon name="folder-plus" />{props.t("addWorkFolder")}</Button>
+    <div className="settings-section-footer">
+      <Button variant="outline" size="sm" onClick={() => void props.onAddWorkspace()}><Icon name="folder-plus" />{props.t("addWorkFolder")}</Button>
+    </div>
   </SettingsSectionBlock>;
 }
 
 function PermissionSettings(props: BaseProps) {
-  return <SettingsSectionBlock title={props.t("permissions")} detail={props.t("permissionDetail")} showTitle={false}>
+  return <SettingsSectionBlock className="settings-permissions" title={props.t("permissions")} detail={props.t("permissionDetail")} showTitle={false}>
     <Alert className="permission-default"><Icon name="lock" /><AlertDescription><strong>{props.t("askEveryTime")}</strong><span>{props.t("permissionDefaultDetail")}</span></AlertDescription></Alert>
     <Alert className="risk-alert"><AlertDescription>{props.t("automaticRisk")}</AlertDescription></Alert>
   </SettingsSectionBlock>;
@@ -768,7 +772,7 @@ function AboutSettings({ buildInfo, t }: { buildInfo: BuildInfo; t: T }) {
     { key: "commit", value: buildInfo.commit },
   ];
   return (
-    <SettingsSectionBlock title={t("about")} detail={t("buildInformationDetail")} showTitle={false}>
+    <SettingsSectionBlock className="settings-about" title={t("about")} detail={t("buildInformationDetail")} showTitle={false}>
       <div className="about-heading">
         <PiMark className="about-mark" />
         <span><strong>{t("appName")}</strong><small>{t("aboutDetail")}</small></span>

@@ -6811,10 +6811,10 @@ h3,
   min-height: 0;
   align-content: start;
   grid-auto-rows: max-content;
-  gap: 14px;
+  gap: 12px;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 22px clamp(22px, 3vw, 46px) 30px;
+  padding: 18px clamp(22px, 3vw, 40px) 24px;
   scrollbar-width: none;
 }
 
@@ -7086,14 +7086,14 @@ h3,
 
 .settings-page-heading {
   display: grid;
-  min-height: 28px;
+  min-height: 25px;
   align-items: center;
   border: 0;
   padding: 0 1px;
 }
 
 .settings-page-heading h1 {
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -7103,10 +7103,10 @@ h3,
   width: 100%;
   max-width: none;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: none;
-  padding: 16px 18px;
+  padding: 14px 16px;
 }
 
 .settings-shell .settings-section h2 {
@@ -7116,24 +7116,24 @@ h3,
 }
 
 .settings-shell .settings-section + .settings-section {
-  padding-top: 16px;
+  padding-top: 14px;
 }
 
 .settings-shell .settings-section > header p {
   max-width: 61ch;
-  margin-top: 3px;
+  margin-top: 2px;
   font-size: 12px;
   line-height: 1.45;
 }
 
 .settings-shell .settings-subsection {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .settings-shell .settings-subsection + .settings-subsection {
   border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  padding-top: 15px;
+  padding-top: 13px;
 }
 
 .settings-shell .settings-subsection > header {
@@ -7155,7 +7155,7 @@ h3,
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(272px, 0.8fr);
   align-items: start;
-  gap: 28px;
+  gap: 22px;
 }
 
 .settings-general-preferences,
@@ -7165,13 +7165,13 @@ h3,
 }
 
 .settings-general-preferences {
-  gap: 20px;
+  gap: 16px;
 }
 
 .settings-general-utilities {
   gap: 0;
   border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  padding-left: 24px;
+  padding-left: 20px;
 }
 
 .settings-language-row,
@@ -7179,9 +7179,9 @@ h3,
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  padding-bottom: 18px;
+  padding-bottom: 15px;
 }
 
 .settings-language-row > div:first-child,
@@ -7248,9 +7248,9 @@ h3,
 .settings-theme-choice {
   display: grid;
   height: auto;
-  min-height: 82px;
+  min-height: 72px;
   justify-items: start;
-  gap: 7px;
+  gap: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-muted) 44%, transparent);
@@ -7341,7 +7341,7 @@ h3,
 }
 
 .settings-shell .setting-switch {
-  min-height: 52px;
+  min-height: 48px;
   align-items: center;
   padding: 7px 11px;
 }
@@ -7382,19 +7382,29 @@ h3,
   border-radius: 0;
 }
 
+.settings-section-footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  padding-top: 10px;
+}
+
+.settings-section-footer > button {
+  min-width: 132px;
+}
+
 .settings-shell .model-connection-form {
   display: grid;
-  gap: 12px;
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: 0;
-  background: transparent;
-  padding: 0 0 14px;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-muted) 42%, var(--panel));
+  padding: 12px;
 }
 
 .model-connection-copy {
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 
 .model-connection-copy > span,
@@ -7414,11 +7424,12 @@ h3,
 
 .settings-shell .model-connection-form .credential-form {
   grid-template-columns: minmax(160px, 0.8fr) minmax(240px, 1fr) auto;
-  gap: 11px;
+  gap: 9px;
 }
 
 .settings-shell .model-connection-form .credential-form > button {
-  min-width: 118px;
+  min-width: 112px;
+  align-self: end;
 }
 
 .settings-shell .provider-combobox-trigger {
@@ -7434,8 +7445,8 @@ h3,
 
 .connected-providers {
   display: grid;
-  gap: 11px;
-  padding-top: 3px;
+  gap: 9px;
+  padding-top: 2px;
 }
 
 .connected-providers > header {
@@ -7577,9 +7588,9 @@ h3,
 .settings-shell .credential-list > .credential-provider {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px 18px;
+  gap: 9px 18px;
   align-items: center;
-  padding: 14px 15px;
+  padding: 10px 2px;
 }
 
 .credential-provider-identity {
@@ -7591,12 +7602,12 @@ h3,
 
 .credential-provider-status {
   display: grid;
-  width: 29px;
-  height: 29px;
+  width: 27px;
+  height: 27px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--success) 38%, var(--border));
-  border-radius: 9px;
+  border-radius: 7px;
   background: color-mix(in srgb, var(--success) 10%, var(--panel));
   color: color-mix(in srgb, var(--success) 80%, var(--text));
 }
@@ -7621,18 +7632,130 @@ h3,
 
 .settings-shell .credential-provider > .provider-models {
   grid-column: 1 / -1;
-  margin-top: 1px;
+  margin-top: 0;
 }
 
 .credential-empty-state {
   display: flex;
-  min-height: 74px;
+  min-height: 58px;
   align-items: center;
   border: 1px dashed color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: 11px;
   padding: 0 14px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.settings-folders .folder-settings-list > div {
+  min-height: 48px;
+  padding-block: 9px;
+}
+
+.settings-folders .folder-settings-list > div > .ui-icon {
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-muted) 50%, transparent);
+  color: var(--muted);
+}
+
+.settings-folders .folder-settings-list > div > button {
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.settings-folders .folder-settings-list > div > button:hover {
+  background: color-mix(in srgb, var(--hover) 74%, transparent);
+  color: var(--text);
+}
+
+.settings-folders .folder-settings-list > div > span:last-child {
+  min-width: 22px;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-muted) 78%, transparent);
+  padding: 0 6px;
+  color: var(--faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+}
+
+.settings-folders .folder-settings-list > p {
+  display: grid;
+  min-height: 58px;
+  place-items: center start;
+  border: 1px dashed color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-permissions > div {
+  gap: 9px;
+}
+
+.settings-permissions .permission-default,
+.settings-permissions .risk-alert {
+  min-height: 0;
+  border-radius: 8px;
+  padding: 10px 11px;
+}
+
+.settings-permissions .permission-default {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+}
+
+.settings-permissions .permission-default > .ui-icon {
+  margin-top: 1px;
+}
+
+.settings-permissions .permission-default span {
+  line-height: 1.45;
+}
+
+.settings-permissions .risk-alert {
+  color: color-mix(in srgb, var(--amber) 82%, var(--text));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-settings .settings-subsection {
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 0.85fr);
+  align-items: center;
+  gap: 18px;
+  padding-top: 13px;
+}
+
+.model-settings .settings-subsection > header {
+  max-width: 54ch;
+}
+
+.model-settings .default-model-control {
+  min-width: 0;
+}
+
+.settings-about > div {
+  gap: 10px;
+}
+
+.settings-about .about-heading {
+  padding-bottom: 7px;
+}
+
+.settings-about .build-info-list > div {
+  min-height: 35px;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 10px;
+  padding-block: 7px;
 }
 
 .extension-store {
@@ -8709,6 +8832,11 @@ h3,
     width: 100%;
     justify-content: space-between;
   }
+
+  .model-settings .settings-subsection {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
 }
 
 :root[data-compact="true"] .sidebar-body {
@@ -8802,6 +8930,18 @@ h3,
 
   .settings-shell .model-connection-form .credential-form {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-folders .folder-settings-list > div {
+    flex-wrap: wrap;
+  }
+
+  .settings-folders .folder-settings-list > div > span:nth-child(2) {
+    min-width: calc(100% - 38px);
+  }
+
+  .settings-folders .folder-settings-list > div > button {
+    margin-left: 36px;
   }
 
   .settings-general-layout {
