@@ -735,6 +735,18 @@ export function TaskWorkbench(props: {
     runPrompt(content);
   }
 
+  function editMessageInComposer(content: string) {
+    setInput(content);
+    requestAnimationFrame(() => {
+      const field = composerInput.current;
+      if (field === null) return;
+      field.focus();
+      const caret = field.value.length;
+      field.setSelectionRange(caret, caret);
+      field.scrollIntoView({ block: "nearest" });
+    });
+  }
+
   function changeModel(value: string) {
     const model = availableModels.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
     if (model === undefined) return;
@@ -873,6 +885,8 @@ export function TaskWorkbench(props: {
                   attachments={savedAttachments.data ?? []}
                   collapsingProcessMessageId={collapsingProcessMessageId}
                   t={props.t}
+                  language={props.settings?.language ?? "en"}
+                  onEditMessage={personal || !props.session.running ? editMessageInComposer : undefined}
                   onPreview={(attachment) => {
                     if (typeof window.piWork.attachment.preview !== "function") {
                       setError("Image preview is ready after restarting Pi Work.");
@@ -1264,12 +1278,87 @@ export function TaskWorkbench(props: {
   }
 }
 
-function MessageList({ messages, activities, attachments, collapsingProcessMessageId, t, onPreview }: {
+function relativeMessageTime(iso: string, language: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const locale = language === "zh" ? "zh-CN" : "en";
+  const diffMs = date.getTime() - Date.now();
+  const diffSec = Math.round(diffMs / 1000);
+  const absSec = Math.abs(diffSec);
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  if (absSec < 45) return language === "zh" ? "刚刚" : "just now";
+  if (absSec < 3600) return rtf.format(Math.round(diffSec / 60), "minute");
+  if (absSec < 86400) return rtf.format(Math.round(diffSec / 3600), "hour");
+  if (absSec < 604800) return rtf.format(Math.round(diffSec / 86400), "day");
+  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(date);
+}
+
+function absoluteMessageTime(iso: string, language: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const locale = language === "zh" ? "zh-CN" : "en";
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function MessageActions({ content, createdAt, language, t, onEdit }: {
+  content: string;
+  createdAt: string;
+  language: string;
+  t: T;
+  onEdit?: (() => void) | undefined;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyResetTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
+  }, []);
+  const copy = () => {
+    void navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = window.setTimeout(() => setCopied(false), 1600);
+    }).catch(() => undefined);
+  };
+  return (
+    <div className="message-actions" role="group">
+      <time
+        className="message-actions-time"
+        dateTime={createdAt}
+        title={absoluteMessageTime(createdAt, language)}
+      >{relativeMessageTime(createdAt, language)}</time>
+      <button
+        type="button"
+        className="message-action-button"
+        data-copied={copied ? "true" : undefined}
+        aria-label={copied ? t("copied") : t("copyMessage")}
+        title={copied ? t("copied") : t("copyMessage")}
+        onClick={copy}
+      >
+        <Icon name={copied ? "check" : "copy"} size={14} />
+      </button>
+      {onEdit ? (
+        <button
+          type="button"
+          className="message-action-button"
+          aria-label={t("editMessageResend")}
+          title={t("editMessageResend")}
+          onClick={onEdit}
+        >
+          <Icon name="square-pen" size={14} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function MessageList({ messages, activities, attachments, collapsingProcessMessageId, t, language, onEditMessage, onPreview }: {
   messages: ChatMessage[];
   activities: Activity[];
   attachments: StoredAttachment[];
   collapsingProcessMessageId: string | null;
   t: T;
+  language: string;
+  onEditMessage?: ((content: string) => void) | undefined;
   onPreview(attachment: StoredAttachment): void;
 }) {
   return (
@@ -1278,12 +1367,22 @@ function MessageList({ messages, activities, attachments, collapsingProcessMessa
         const startsTurn = message.role === "user";
         const visibleContent = visibleMessageContent(message.content);
         const platformLinks = message.role === "user" ? knownPlatformLinks(visibleContent) : [];
+        const showActions = message.role !== "system" && visibleContent !== "";
         return (
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
             <article className={`message ${message.role}${platformLinks.length > 0 ? " has-platform-links" : ""}`}>
               {message.role === "assistant"
                 ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} animateCollapse={message.id === collapsingProcessMessageId} t={t} />{visibleContent !== "" ? <AssistantResult content={visibleContent} t={t} /> : null}</>
                 : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <UserMessageContent content={visibleContent} links={platformLinks} /> : null}</>}
+              {showActions ? (
+                <MessageActions
+                  content={visibleContent}
+                  createdAt={message.createdAt}
+                  language={language}
+                  t={t}
+                  onEdit={message.role === "user" && onEditMessage ? () => onEditMessage(visibleContent) : undefined}
+                />
+              ) : null}
             </article>
           </div>
         );

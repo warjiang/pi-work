@@ -13,6 +13,7 @@ export type InspectorTab = "task" | "plan" | "activity" | "output";
 export type WorkspaceScope = "personal" | string;
 export type SettingsSection =
   | "general"
+  | "preferences"
   | "appearance"
   | "modelsCredentials"
   | "workFolders"
@@ -21,7 +22,6 @@ export type SettingsSection =
   | "mcp"
   | "extensions"
   | "browser"
-  | "observability"
   | "shortcuts"
   | "about";
 

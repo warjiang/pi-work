@@ -96,6 +96,7 @@ describe("command settings", () => {
   it("links each search result to its exact settings section", () => {
     expect(commandSettingItems.map(({ section }) => section)).toEqual([
       "general",
+      "preferences",
       "modelsCredentials",
       "permissions",
       "skills",

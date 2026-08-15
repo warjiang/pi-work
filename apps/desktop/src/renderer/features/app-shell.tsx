@@ -319,6 +319,7 @@ type SearchItem = {
 
 export const commandSettingItems: ReadonlyArray<{ section: SettingsSection; key: MessageKey }> = [
   { section: "general", key: "general" },
+  { section: "preferences", key: "preferences" },
   { section: "modelsCredentials", key: "modelsCredentials" },
   { section: "permissions", key: "permissions" },
   { section: "skills", key: "skills" },

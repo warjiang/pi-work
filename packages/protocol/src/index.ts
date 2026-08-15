@@ -1041,10 +1041,32 @@ export const usageByDaySchema = usageTotalsSchema.extend({
 });
 export type UsageByDay = z.infer<typeof usageByDaySchema>;
 
+export const usageByModelDaySchema = usageTotalsSchema.extend({
+  day: z.string(),
+  provider: z.string(),
+  model: z.string(),
+});
+export type UsageByModelDay = z.infer<typeof usageByModelDaySchema>;
+
+export const usageByHourSchema = usageTotalsSchema.extend({
+  hour: z.string(),
+});
+export type UsageByHour = z.infer<typeof usageByHourSchema>;
+
+export const usageByModelHourSchema = usageTotalsSchema.extend({
+  hour: z.string(),
+  provider: z.string(),
+  model: z.string(),
+});
+export type UsageByModelHour = z.infer<typeof usageByModelHourSchema>;
+
 export const usageSummarySchema = z.object({
   totals: usageTotalsSchema,
   byModel: z.array(usageByModelSchema),
   byDay: z.array(usageByDaySchema),
+  byModelDay: z.array(usageByModelDaySchema),
+  byHour: z.array(usageByHourSchema),
+  byModelHour: z.array(usageByModelHourSchema),
 });
 export type UsageSummary = z.infer<typeof usageSummarySchema>;
 

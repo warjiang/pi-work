@@ -751,10 +751,22 @@ export class PiWorkStore {
     const byDay = this.sqlite.prepare(
       `SELECT substr(created_at, 1, 10) AS day, ${totalsExpr} FROM model_usage ${where} GROUP BY day ORDER BY day ASC`,
     ).all(...params) as Array<Record<string, unknown>>;
+    const byModelDay = this.sqlite.prepare(
+      `SELECT substr(created_at, 1, 10) AS day, provider, model, ${totalsExpr} FROM model_usage ${where} GROUP BY day, provider, model ORDER BY day ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    const byHour = this.sqlite.prepare(
+      `SELECT strftime('%Y-%m-%dT%H', created_at, 'localtime') AS hour, ${totalsExpr} FROM model_usage ${where} GROUP BY hour ORDER BY hour ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    const byModelHour = this.sqlite.prepare(
+      `SELECT strftime('%Y-%m-%dT%H', created_at, 'localtime') AS hour, provider, model, ${totalsExpr} FROM model_usage ${where} GROUP BY hour, provider, model ORDER BY hour ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
     return usageSummarySchema.parse({
       totals: totalsRow,
       byModel,
       byDay,
+      byModelDay,
+      byHour,
+      byModelHour,
     });
   }
 
