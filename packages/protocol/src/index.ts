@@ -524,6 +524,7 @@ export const sendChatInputSchema = z.object({
   workspaceId: z.uuid().nullable(),
   taskId: z.uuid().nullable(),
   content: z.string().trim().min(1).max(100_000),
+  editMessageId: z.uuid().optional(),
   providerId: z.string().trim().min(1).max(80),
   modelId: z.string().trim().min(1).max(160),
   thinkingLevel: thinkingLevelSchema,

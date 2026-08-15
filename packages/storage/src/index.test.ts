@@ -82,6 +82,60 @@ describe("PiWorkStore", () => {
     store.close();
   });
 
+  it("edits a message and truncates everything after it", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Research",
+      rootPath: "/workspace/research",
+      outputPath: "/workspace/research/Pi Work",
+    });
+    const task = store.createTask({
+      workspaceId: workspace.id,
+      title: "Compare the options",
+      goal: "Compare the options",
+    });
+
+    const first = store.addMessage({ taskId: task.id, role: "user", content: "First question" });
+    const reply = store.addMessage({ taskId: task.id, role: "assistant", content: "First answer" });
+    store.addActivity({ sessionId: task.id, messageId: reply.id, kind: "thinking", title: "Thinking", detail: "", metadata: {} });
+    store.addAttachment({ sessionId: task.id, messageId: reply.id, name: "note.txt", path: "/tmp/note.txt", mimeType: "text/plain", size: 4 });
+    store.addMessage({ taskId: task.id, role: "user", content: "Second question" });
+
+    const edited = store.editMessage(first.id, "First question, revised");
+    expect(edited.content).toBe("First question, revised");
+
+    const remaining = store.listMessages(task.id);
+    expect(remaining.map(({ content }) => content)).toEqual(["First question, revised"]);
+    expect(store.listActivities(task.id)).toHaveLength(0);
+    expect(store.listAttachments(task.id)).toHaveLength(0);
+    expect(() => store.editMessage("00000000-0000-0000-0000-000000000000", "x")).toThrow("Message not found.");
+    store.close();
+  });
+
+  it("keeps the edited message's own attachments intact", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Research",
+      rootPath: "/workspace/research",
+      outputPath: "/workspace/research/Pi Work",
+    });
+    const task = store.createTask({
+      workspaceId: workspace.id,
+      title: "Compare the options",
+      goal: "Compare the options",
+    });
+
+    const first = store.addMessage({ taskId: task.id, role: "user", content: "Look at this" });
+    store.addAttachment({ sessionId: task.id, messageId: first.id, name: "image.png", path: "/tmp/image.png", mimeType: "image/png", size: 8 });
+    store.addMessage({ taskId: task.id, role: "assistant", content: "Sure" });
+
+    store.editMessage(first.id, "Look at this again");
+
+    expect(store.listMessages(task.id).map(({ role }) => role)).toEqual(["user"]);
+    expect(store.listAttachments(task.id).map(({ name }) => name)).toEqual(["image.png"]);
+    store.close();
+  });
+
   it("stores chat messages and updates a slash-command goal", () => {
     const store = new PiWorkStore();
     const workspace = store.createWorkspace({

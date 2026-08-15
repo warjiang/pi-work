@@ -63,7 +63,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
-import { Icon } from "@/components/ui/icon.js";
+import { Icon, type IconName } from "@/components/ui/icon.js";
 import { Input } from "@/components/ui/input.js";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog.js";
 import {
@@ -626,7 +626,7 @@ export function TaskWorkbench(props: {
     ]);
   };
   const send = useMutation({
-    mutationFn: (content: string) => {
+    mutationFn: ({ content, editMessageId }: { content: string; editMessageId?: string }) => {
       clearStream();
       setRunNotice(null);
       setLiveProcess({ thoughts: [], tools: [], timeline: [], notice: null });
@@ -635,23 +635,27 @@ export function TaskWorkbench(props: {
         workspaceId: props.workspace?.id ?? null,
         taskId: sessionId,
         content,
+        ...(editMessageId === undefined ? {} : { editMessageId }),
         providerId,
         modelId,
         thinkingLevel,
         permissionMode: props.session.permissionMode,
         planMode: personal ? false : props.session.planMode,
-        attachments,
+        attachments: editMessageId === undefined ? attachments : [],
       });
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["messages", sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["attachments", sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["activities", sessionId] }),
         props.onRefresh(),
       ]);
-      setInput("");
-      setAttachments([]);
-      localStorage.removeItem(draftKey);
+      if (variables.editMessageId === undefined) {
+        setInput("");
+        setAttachments([]);
+        localStorage.removeItem(draftKey);
+      }
       setPendingPrompt(null);
     },
     onError: (cause: Error) => {
@@ -735,16 +739,30 @@ export function TaskWorkbench(props: {
     runPrompt(content);
   }
 
-  function editMessageInComposer(content: string) {
-    setInput(content);
-    requestAnimationFrame(() => {
-      const field = composerInput.current;
-      if (field === null) return;
-      field.focus();
-      const caret = field.value.length;
-      field.setSelectionRange(caret, caret);
-      field.scrollIntoView({ block: "nearest" });
+  async function submitMessageEdit(messageId: string, content: string) {
+    const trimmed = content.trim();
+    if (trimmed === "" || send.isPending) return;
+    if (props.session.running) {
+      try {
+        await window.piWork.session.stop(sessionId);
+        await refreshTaskData();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+    }
+    queryClient.setQueryData<ChatMessage[]>(["messages", sessionId], (current) => {
+      if (current === undefined) return current;
+      const index = current.findIndex((message) => message.id === messageId);
+      if (index === -1) return current;
+      const target = current[index];
+      if (target === undefined) return current;
+      return [...current.slice(0, index), { ...target, content: trimmed }];
     });
+    setStreamFollowing(true);
+    setAtLatest(true);
+    scheduleScrollToLatest("smooth");
+    send.mutate({ content: trimmed, editMessageId: messageId });
   }
 
   function changeModel(value: string) {
@@ -771,7 +789,7 @@ export function TaskWorkbench(props: {
     || streamed !== "";
   const showRunLoading = !liveResponsePersisted
     && (send.isPending || props.session.running)
-    && !hasLiveActivity;
+    && streamed === "";
   const progressAnnouncement = useMemo(() => {
     if (!send.isPending && !props.session.running) return runNotice ?? "";
     const runningTool = liveProcess.tools.find((tool) => !tool.complete);
@@ -886,7 +904,7 @@ export function TaskWorkbench(props: {
                   collapsingProcessMessageId={collapsingProcessMessageId}
                   t={props.t}
                   language={props.settings?.language ?? "en"}
-                  onEditMessage={personal || !props.session.running ? editMessageInComposer : undefined}
+                  onSubmitEdit={personal || !props.session.running ? submitMessageEdit : undefined}
                   onPreview={(attachment) => {
                     if (typeof window.piWork.attachment.preview !== "function") {
                       setError("Image preview is ready after restarting Pi Work.");
@@ -903,8 +921,12 @@ export function TaskWorkbench(props: {
               {pendingPrompt !== null ? (
                 <article className="message user pending"><UserMessageContent content={pendingPrompt} /></article>
               ) : null}
-              {!liveResponsePersisted && hasLiveActivity ? (
-                <article className="message assistant"><LiveProcessView collapse={streamed !== ""} process={liveProcess} t={props.t} />{streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}</article>
+              {!liveResponsePersisted && (hasLiveActivity || showRunLoading) ? (
+                <article className="message assistant">
+                  {hasLiveActivity ? <LiveProcessView collapse={streamed !== ""} process={liveProcess} t={props.t} /> : null}
+                  {streamed !== "" ? <AssistantResult streaming content={streamed} t={props.t} /> : null}
+                  {showRunLoading ? <RunLoadingState label={props.t("runStarting")} /> : null}
+                </article>
               ) : null}
               {!personal && props.session.status === "awaiting_plan_approval" && plan.data !== null && plan.data !== undefined ? (
                 <PlanApprovalCard
@@ -918,7 +940,6 @@ export function TaskWorkbench(props: {
                 />
               ) : null}
               {approvals.map((approval) => <ToolApprovalCard key={approval.approvalId} approval={approval} t={props.t} onResolve={(approved) => resolveApproval(approval.approvalId, approved)} />)}
-              {showRunLoading ? <RunLoadingState label={props.t("runStarting")} /> : null}
             </div>
           </div>
         </div>
@@ -1274,7 +1295,7 @@ export function TaskWorkbench(props: {
     setAtLatest(true);
     setPendingPrompt(content);
     scheduleScrollToLatest("smooth");
-    send.mutate(content);
+    send.mutate({ content });
   }
 }
 
@@ -1340,8 +1361,8 @@ function MessageActions({ content, createdAt, language, t, onEdit }: {
         <button
           type="button"
           className="message-action-button"
-          aria-label={t("editMessageResend")}
-          title={t("editMessageResend")}
+          aria-label={t("editMessage")}
+          title={t("editMessage")}
           onClick={onEdit}
         >
           <Icon name="square-pen" size={14} />
@@ -1351,16 +1372,17 @@ function MessageActions({ content, createdAt, language, t, onEdit }: {
   );
 }
 
-function MessageList({ messages, activities, attachments, collapsingProcessMessageId, t, language, onEditMessage, onPreview }: {
+function MessageList({ messages, activities, attachments, collapsingProcessMessageId, t, language, onSubmitEdit, onPreview }: {
   messages: ChatMessage[];
   activities: Activity[];
   attachments: StoredAttachment[];
   collapsingProcessMessageId: string | null;
   t: T;
   language: string;
-  onEditMessage?: ((content: string) => void) | undefined;
+  onSubmitEdit?: ((messageId: string, content: string) => void) | undefined;
   onPreview(attachment: StoredAttachment): void;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
   return (
     <div className="messages">
       {messages.map((message) => {
@@ -1368,25 +1390,94 @@ function MessageList({ messages, activities, attachments, collapsingProcessMessa
         const visibleContent = visibleMessageContent(message.content);
         const platformLinks = message.role === "user" ? knownPlatformLinks(visibleContent) : [];
         const showActions = message.role !== "system" && visibleContent !== "";
+        const editing = editingId === message.id;
         return (
           <div className="message-turn" id={startsTurn ? turnTargetId(message.id) : undefined} key={message.id}>
-            <article className={`message ${message.role}${platformLinks.length > 0 ? " has-platform-links" : ""}`}>
+            <article className={`message ${message.role}${platformLinks.length > 0 ? " has-platform-links" : ""}${editing ? " is-editing" : ""}`}>
               {message.role === "assistant"
                 ? <><HistoricalProcess activities={activities.filter((activity) => (activity.kind === "thinking" || activity.kind === "tool_result") && activity.messageId === message.id)} animateCollapse={message.id === collapsingProcessMessageId} t={t} />{visibleContent !== "" ? <AssistantResult content={visibleContent} t={t} /> : null}</>
-                : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <UserMessageContent content={visibleContent} links={platformLinks} /> : null}</>}
-              {showActions ? (
+                : editing
+                  ? <MessageEditor
+                      initialContent={visibleContent}
+                      t={t}
+                      onCancel={() => setEditingId(null)}
+                      onSave={(content) => {
+                        setEditingId(null);
+                        onSubmitEdit?.(message.id, content);
+                      }}
+                    />
+                  : <><MessageAttachments attachments={attachments.filter((attachment) => attachment.messageId === message.id)} onPreview={onPreview} />{visibleContent !== "" ? <UserMessageContent content={visibleContent} links={platformLinks} /> : null}</>}
+              {showActions && !editing ? (
                 <MessageActions
                   content={visibleContent}
                   createdAt={message.createdAt}
                   language={language}
                   t={t}
-                  onEdit={message.role === "user" && onEditMessage ? () => onEditMessage(visibleContent) : undefined}
+                  onEdit={message.role === "user" && onSubmitEdit ? () => setEditingId(message.id) : undefined}
                 />
               ) : null}
             </article>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function MessageEditor({ initialContent, t, onSave, onCancel }: {
+  initialContent: string;
+  t: T;
+  onSave: (content: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initialContent);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const grow = (field: HTMLTextAreaElement) => {
+    field.style.height = "auto";
+    field.style.height = `${field.scrollHeight}px`;
+  };
+  useEffect(() => {
+    const field = fieldRef.current;
+    if (field === null) return;
+    field.focus();
+    const caret = field.value.length;
+    field.setSelectionRange(caret, caret);
+    grow(field);
+  }, []);
+  const trimmed = value.trim();
+  const submit = () => {
+    if (trimmed === "") return;
+    onSave(trimmed);
+  };
+  return (
+    <div className="message-editor">
+      <textarea
+        ref={fieldRef}
+        className="message-editor-field"
+        value={value}
+        rows={1}
+        aria-label={t("editMessage")}
+        onChange={(event) => {
+          setValue(event.target.value);
+          grow(event.target);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            submit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+        }}
+      />
+      <div className="message-editor-footer">
+        <span className="message-editor-hint">{t("editMessageHint")}</span>
+        <div className="message-editor-buttons">
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>{t("cancel")}</Button>
+          <Button type="button" size="sm" disabled={trimmed === ""} onClick={submit}>{t("editMessageSave")}</Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1808,7 +1899,7 @@ function ThoughtProcessCard({ activity, t, open = false, collapse = false, label
   collapse?: boolean;
   label?: string;
 }) {
-  const preview = summarizeProcessValue(activity.detail);
+  const preview = summarizeThinkingPreview(activity.detail);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const previousCollapseRef = useRef(collapse);
@@ -1868,7 +1959,7 @@ function ThoughtProcessCard({ activity, t, open = false, collapse = false, label
       }}
     >
       <summary>
-        <span className="thinking-marker"><Icon name="sparkles" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
+        <span className="thinking-marker"><Icon name="brain" size={14} /><Icon name="chevron-down" size={14} className="thinking-chevron" /></span>
         <span className="thinking-label">{label ?? t("thoughtProcess")}</span>
         {preview ? <span className="thinking-preview" title={preview}>{preview}</span> : null}
       </summary>
@@ -1945,11 +2036,12 @@ function ToolProcessCard({ tool, t, animate = false, collapse = false }: { tool:
   const previousCompleteRef = useRef(tool.complete);
   const previousCollapseRef = useRef(collapse);
   const collapsingRef = useRef(false);
-  const [open, setOpen] = useState(animate && !tool.complete && !collapse);
+  const [open, setOpen] = useState(false);
 
   useGSAP(() => {
+    const details = detailsRef.current;
     const expanded = expandedRef.current;
-    if (!animate || tool.complete || expanded === null) return;
+    if (!animate || tool.complete || expanded === null || details === null || !details.open) return;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     gsap.fromTo(expanded, {
       height: 0,
@@ -1970,7 +2062,7 @@ function ToolProcessCard({ tool, t, animate = false, collapse = false }: { tool:
     const expanded = expandedRef.current;
     const justCompleted = !previousCompleteRef.current && tool.complete;
     previousCompleteRef.current = tool.complete;
-    if (!animate || collapse || !justCompleted || details === null || expanded === null) return;
+    if (!animate || collapse || !justCompleted || details === null || expanded === null || !details.open) return;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const summary = details.querySelector(":scope > summary");
     collapsingRef.current = true;
@@ -2208,11 +2300,27 @@ function nextThoughtSegmentId(thoughts: LiveThought[]): number {
   return thoughts.reduce((highest, thought) => Math.max(highest, thought.segmentId), -1) + 1;
 }
 
-function toolIcon(toolName: string) {
-  const normalized = toolName.toLowerCase();
-  if (normalized.includes("search") || normalized.includes("web") || normalized.includes("browse")) return "search" as const;
-  if (normalized.includes("read") || normalized.includes("write") || normalized.includes("file")) return "file" as const;
-  return "terminal" as const;
+function toolIcon(toolName: string): IconName {
+  const n = toolName.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  const has = (...keys: string[]) => keys.some((key) => n.includes(key));
+  // Fetching a specific URL / page.
+  if (has("fetch", "http", "url", "curl", "scrape", "crawl", "browse", "navigate", "visit", "open_page")) return "browser";
+  // Searching the web or content (grep, web_search, get_search_content…).
+  if (has("search", "grep", "ripgrep", "query", "lookup", "find_text")) return "search";
+  // Listing / exploring the filesystem.
+  if (has("glob", "find_file", "list_dir", "list_files", "readdir", "tree")) return "folder-search";
+  if (has("ls", "list", "dir")) return "workspace";
+  // Task / todo management (before edit, so TodoWrite/update_plan don't read as edits).
+  if (has("todo", "task", "plan")) return "list-todo";
+  // Editing or writing files.
+  if (has("edit", "write", "create", "update", "patch", "replace", "apply", "modify", "insert", "append")) return "file-pen";
+  // Reading / viewing files.
+  if (has("read", "cat", "view", "open", "get_file", "file")) return "file-text";
+  // Removing files.
+  if (has("delete", "remove", "unlink", "rm_")) return "file-x";
+  // Shell execution (bash, sh, exec, run…).
+  if (has("bash", "shell", "sh", "zsh", "exec", "command", "run", "terminal", "process")) return "terminal";
+  return "terminal";
 }
 
 function processArguments(value: unknown): Record<string, unknown> {
@@ -2233,6 +2341,25 @@ export function summarizeProcessValue(value: unknown): string {
   const parsed = typeof value === "string" ? parseToolValue(value) : value;
   const summary = summarizeToolValue(parsed);
   return summary ? truncateProcessValue(summary, 160) : "";
+}
+
+export function summarizeThinkingPreview(detail: unknown): string {
+  if (typeof detail !== "string") return summarizeProcessValue(detail);
+  const stripped = stripInlineMarkdown(detail).replace(/\s+/g, " ").trim();
+  return truncateProcessValue(stripped, 160);
+}
+
+function stripInlineMarkdown(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, "")
+    .replace(/(\*\*|__|~~)(.+?)\1/g, "$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*+/g, "")
+    .replace(/`+/g, "");
 }
 
 function formatProcessValue(value: unknown): string {
