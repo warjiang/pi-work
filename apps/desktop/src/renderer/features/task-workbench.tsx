@@ -990,7 +990,7 @@ export function TaskWorkbench(props: {
               .then((attachment) => setAttachments((current) => mergeAttachments(current, [attachment])))
               .catch((cause: Error) => setError(cause.message));
           }} onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }
@@ -1026,7 +1026,7 @@ export function TaskWorkbench(props: {
               {send.isPending || props.session.running ? (
                 <Button size="icon" className="send-button stop-button" type="button" aria-label={props.t("stop")} onClick={() => void window.piWork.session.stop(sessionId).then(refreshTaskData).catch((cause: Error) => setError(cause.message))}><Icon name="stop" size={14} fill="currentColor" strokeWidth={0} /></Button>
               ) : (
-                <Button size="icon" className="send-button" aria-label={props.t("send")} disabled={input.trim() === ""}><Icon name="arrow-up" /></Button>
+                <Button size="icon" className="send-button" title={props.t("sendHint")} aria-label={props.t("send")} disabled={input.trim() === ""}><Icon name="arrow-up" /></Button>
               )}
             </div>
           </div>
@@ -1462,7 +1462,7 @@ function MessageEditor({ initialContent, t, onSave, onCancel }: {
           grow(event.target);
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
             event.preventDefault();
             submit();
           } else if (event.key === "Escape") {

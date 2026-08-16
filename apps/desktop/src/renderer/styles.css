@@ -1856,7 +1856,7 @@ kbd {
 }
 
 .assistant-result > .markdown-message {
-  max-width: 68ch;
+  max-width: 80ch;
   font-size: 14px;
   line-height: 1.7;
   text-wrap: pretty;
@@ -11853,7 +11853,7 @@ h3,
 .settings-shell .settings-preferences-card .settings-subsection {
   gap: 0;
   border-top: 0;
-  padding-bottom: 20px;
+  padding-bottom: 12px;
 }
 
 .settings-shell .settings-general-onboarding .settings-subsection {
@@ -11882,7 +11882,7 @@ h3,
 }
 
 .settings-preferences-card .settings-subsection > header {
-  padding: 18px 20px 12px;
+  padding: 12px 20px 8px;
 }
 
 .settings-preferences-card .settings-subsection h2 {
@@ -11900,7 +11900,7 @@ h3,
 }
 
 .settings-preferences-card + .settings-preferences-card {
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .settings-preferences-card .settings-language-row,
@@ -11909,7 +11909,7 @@ h3,
   align-items: center;
   gap: 16px;
   margin-block: 0;
-  padding: 14px 0;
+  padding: 10px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
@@ -11955,12 +11955,12 @@ h3,
 }
 
 .settings-shell .settings-preferences-card .setting-switch {
-  min-height: 58px;
+  min-height: 48px;
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 0;
   background: transparent;
-  padding: 9px 20px;
+  padding: 6px 20px;
   transition: background var(--dur-fast) var(--ease-standard);
 }
 
