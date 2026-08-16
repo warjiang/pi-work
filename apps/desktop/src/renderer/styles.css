@@ -2908,6 +2908,54 @@ kbd {
   padding-inline: 9px;
 }
 
+.conductor-panel .inspector-help {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0 0 10px;
+}
+
+.conductor-run-summary,
+.conductor-node-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.conductor-run-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.conductor-node-list {
+  display: grid;
+  gap: 8px;
+}
+
+.conductor-node-card header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conductor-node-card small {
+  color: var(--muted-foreground);
+}
+
+.conductor-node-card pre {
+  margin: 8px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.conductor-spec-editor {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .inspector-body {
   min-width: 0;
   min-height: 0;

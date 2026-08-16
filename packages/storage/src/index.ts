@@ -10,13 +10,20 @@ import type {
   Attachment,
   Automation,
   AutomationRun,
+  Board,
+  BoardColumn,
+  BoardSnapshot,
   BrowserTab,
   ChatMessage,
   Conversation,
+  ConductorNodeState,
+  ConductorRun,
+  ConductorSpec,
   Label,
   ModelUsage,
   ObservabilityStoredConfig,
   Plan,
+  Project,
   RecordModelUsageInput,
   Run,
   SavedView,
@@ -27,11 +34,13 @@ import type {
   Subtask,
   Task,
   TaskStatus,
+  TaskBoardState,
   ThinkingLevel,
   UsageQueryInput,
   UsageSummary,
   WorkEvent,
   Workspace,
+  WorkspaceDirectory,
   WorkspaceKind,
 } from "@pi-work/protocol";
 import {
@@ -41,13 +50,20 @@ import {
   attachmentSchema,
   automationRunSchema,
   automationSchema,
+  boardColumnSchema,
+  boardSchema,
+  boardSnapshotSchema,
   browserTabSchema,
   chatMessageSchema,
+  conductorNodeStateSchema,
+  conductorRunSchema,
+  conductorSpecSchema,
   eventSchema,
   labelSchema,
   modelUsageSchema,
   observabilityStoredConfigSchema,
   planSchema,
+  projectSchema,
   recordModelUsageInputSchema,
   runSchema,
   savedViewSchema,
@@ -56,23 +72,34 @@ import {
   statusDefinitionSchema,
   subtaskSchema,
   taskSchema,
+  taskBoardStateSchema,
   usageSummarySchema,
   workspaceSchema,
+  workspaceDirectorySchema,
 } from "@pi-work/protocol";
 import {
   activities,
   appSettings,
   artifacts,
   attachments,
+  boardColumns,
+  boards,
+  commandReceipts,
+  conductorNodeStates,
+  conductorRuns,
   domainEntities,
   events,
   messages,
   modelUsage,
   plans,
+  projects,
   runs,
   tasks,
+  taskBoardState,
   telemetryOutbox,
   workspaces,
+  workspaceDirectories,
+  workspaceEvents,
 } from "./schema.js";
 
 function timestamp(): string {
@@ -92,6 +119,46 @@ function pathInside(rootPath: string, candidatePath: string): boolean {
   );
 }
 
+const boardRankStep = 1_024;
+
+function canonicalPath(path: string): string {
+  return resolve(path);
+}
+
+function parseWorkspaceDirectory(row: typeof workspaceDirectories.$inferSelect): WorkspaceDirectory {
+  return workspaceDirectorySchema.parse(row);
+}
+
+function parseProject(row: typeof projects.$inferSelect): Project {
+  return projectSchema.parse(row);
+}
+
+function parseBoard(row: typeof boards.$inferSelect): Board {
+  return boardSchema.parse(row);
+}
+
+function parseBoardColumn(row: typeof boardColumns.$inferSelect): BoardColumn {
+  return boardColumnSchema.parse({
+    ...row,
+    statusIds: JSON.parse(row.statusIds) as unknown,
+  });
+}
+
+function parseTaskBoardState(row: typeof taskBoardState.$inferSelect): TaskBoardState {
+  return taskBoardStateSchema.parse(row);
+}
+
+function parseConductorRun(row: typeof conductorRuns.$inferSelect): ConductorRun {
+  return conductorRunSchema.parse({
+    ...row,
+    spec: JSON.parse(row.spec) as unknown,
+  });
+}
+
+function parseConductorNodeState(row: typeof conductorNodeStates.$inferSelect): ConductorNodeState {
+  return conductorNodeStateSchema.parse(row);
+}
+
 function parseWorkspace(row: typeof workspaces.$inferSelect): Workspace {
   const directories = JSON.parse(row.directories) as unknown;
   return workspaceSchema.parse({
@@ -99,6 +166,7 @@ function parseWorkspace(row: typeof workspaces.$inferSelect): Workspace {
     directories: Array.isArray(directories) && directories.length > 0
       ? directories
       : [row.rootPath],
+    updatedAt: row.updatedAt ?? row.createdAt,
   });
 }
 
@@ -180,14 +248,25 @@ export class PiWorkStore {
     kind?: WorkspaceKind;
     id?: string;
   }): Workspace {
+    const now = timestamp();
     const workspace = workspaceSchema.parse({
       id: input.id ?? randomUUID(),
       ...input,
-      directories: input.directories ?? [input.rootPath],
+      rootPath: canonicalPath(input.rootPath),
+      outputPath: canonicalPath(input.outputPath),
+      directories: (input.directories ?? [input.rootPath]).map(canonicalPath),
       kind: input.kind ?? "folder",
-      createdAt: timestamp(),
+      version: 0,
+      createdAt: now,
+      updatedAt: now,
     });
-    this.db.insert(workspaces).values(workspaceValues(workspace)).run();
+    const transaction = this.sqlite.transaction(() => {
+      this.db.insert(workspaces).values(workspaceValues(workspace)).run();
+      for (const [index, directory] of workspace.directories.entries()) {
+        this.insertWorkspaceDirectory(workspace.id, directory, index === 0, now);
+      }
+    });
+    transaction();
     return workspace;
   }
 
@@ -200,17 +279,79 @@ export class PiWorkStore {
     return row === undefined ? null : parseWorkspace(row);
   }
 
+  updateWorkspace(workspaceId: string, input: {
+    name?: string;
+    outputPath?: string;
+    expectedVersion?: number;
+  }): Workspace {
+    const workspace = this.requireWorkspace(workspaceId);
+    if (input.expectedVersion !== undefined && input.expectedVersion !== workspace.version) {
+      throw new Error("Workspace was changed by another command.");
+    }
+    const updatedAt = timestamp();
+    this.db.update(workspaces).set({
+      name: input.name ?? workspace.name,
+      outputPath: input.outputPath === undefined ? workspace.outputPath : canonicalPath(input.outputPath),
+      version: workspace.version + 1,
+      updatedAt,
+    }).where(eq(workspaces.id, workspaceId)).run();
+    this.appendWorkspaceEvent(workspaceId, "workspace.updated", workspaceId, input);
+    return this.requireWorkspace(workspaceId);
+  }
+
+  listWorkspaceDirectories(workspaceId: string): WorkspaceDirectory[] {
+    this.requireWorkspace(workspaceId);
+    return this.db.select().from(workspaceDirectories)
+      .where(eq(workspaceDirectories.workspaceId, workspaceId))
+      .orderBy(desc(workspaceDirectories.isRoot), asc(workspaceDirectories.createdAt))
+      .all()
+      .map(parseWorkspaceDirectory);
+  }
+
   addWorkspaceDirectory(workspaceId: string, directory: string): Workspace {
     const workspace = this.requireFolderWorkspace(workspaceId);
-    const directories = [...new Set([...workspace.directories, directory])];
-    this.db.update(workspaces).set({
-      directories: JSON.stringify(directories),
-    }).where(eq(workspaces.id, workspaceId)).run();
-    return { ...workspace, directories };
+    const normalized = canonicalPath(directory);
+    const directories = [...new Set([...workspace.directories.map(canonicalPath), normalized])];
+    if (directories.length === workspace.directories.length) return workspace;
+    const now = timestamp();
+    const transaction = this.sqlite.transaction(() => {
+      this.insertWorkspaceDirectory(workspaceId, normalized, false, now);
+      this.db.update(workspaces).set({
+        directories: JSON.stringify(directories),
+        version: workspace.version + 1,
+        updatedAt: now,
+      }).where(eq(workspaces.id, workspaceId)).run();
+      this.appendWorkspaceEvent(workspaceId, "workspace.directory_added", workspaceId, { path: normalized });
+    });
+    transaction();
+    return this.requireWorkspace(workspaceId);
+  }
+
+  removeWorkspaceDirectory(workspaceId: string, directoryId: string): Workspace {
+    const workspace = this.requireFolderWorkspace(workspaceId);
+    const directory = this.db.select().from(workspaceDirectories)
+      .where(and(eq(workspaceDirectories.id, directoryId), eq(workspaceDirectories.workspaceId, workspaceId)))
+      .get();
+    if (directory === undefined) throw new Error("Workspace directory not found.");
+    if (directory.isRoot) throw new Error("The root directory cannot be removed.");
+    const directories = workspace.directories.filter((path) => canonicalPath(path) !== directory.canonicalPath);
+    const now = timestamp();
+    const transaction = this.sqlite.transaction(() => {
+      this.db.delete(workspaceDirectories).where(eq(workspaceDirectories.id, directoryId)).run();
+      this.db.update(workspaces).set({
+        directories: JSON.stringify(directories),
+        version: workspace.version + 1,
+        updatedAt: now,
+      }).where(eq(workspaces.id, workspaceId)).run();
+      this.appendWorkspaceEvent(workspaceId, "workspace.directory_removed", workspaceId, { path: directory.path });
+    });
+    transaction();
+    return this.requireWorkspace(workspaceId);
   }
 
   createTask(input: {
     workspaceId: string;
+    projectId?: string | null;
     title: string;
     goal: string;
     kind?: Task["kind"];
@@ -231,6 +372,7 @@ export class PiWorkStore {
       id: input.id ?? randomUUID(),
       ...input,
       status: "draft",
+      projectId: input.projectId ?? null,
       providerId: input.providerId ?? null,
       modelId: input.modelId ?? null,
       thinkingLevel: input.thinkingLevel ?? "off",
@@ -248,6 +390,7 @@ export class PiWorkStore {
       updatedAt: createdAt,
     });
     this.db.insert(tasks).values(taskValues(task)).run();
+    this.ensureTaskBoardStates(task);
     this.createRun(task.id, task.status);
     this.appendEvent(task.id, "task.created", { title: task.title });
     return task;
@@ -333,16 +476,39 @@ export class PiWorkStore {
 
   updateSession(sessionId: string, input: Partial<Pick<
     Session,
-    "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "permissionMode" | "planMode" | "workingDirectory" | "running"
+    "projectId" | "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "permissionMode" | "planMode" | "workingDirectory" | "running"
   >>): Session {
     const current = this.requireTask(sessionId);
     const workspace = this.requireWorkspace(current.workspaceId);
     this.assertSessionWorkspaceKind(workspace, current.kind);
     this.validateSessionResources(workspace, input);
+    if (input.projectId !== undefined && input.projectId !== null) {
+      const project = this.getProject(workspace.id, input.projectId);
+      if (project === null) throw new Error("Project belongs to a different workspace.");
+    }
     this.validateWorkingDirectory(workspace, input.workingDirectory);
     const next = taskSchema.parse({ ...current, ...input, updatedAt: timestamp() });
-    this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
-    this.appendEvent(sessionId, "session.updated", input);
+    const transaction = this.sqlite.transaction(() => {
+      this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
+      if (next.kind === "task" && input.projectId !== undefined && current.projectId !== next.projectId) {
+        const oldProjectBoards = this.db.select({ id: boards.id }).from(boards).where(and(
+          eq(boards.workspaceId, current.workspaceId),
+          current.projectId === null ? isNull(boards.projectId) : eq(boards.projectId, current.projectId),
+          eq(boards.kind, "project"),
+        )).all();
+        for (const board of oldProjectBoards) {
+          this.db.delete(taskBoardState).where(and(
+            eq(taskBoardState.taskId, sessionId),
+            eq(taskBoardState.boardId, board.id),
+          )).run();
+        }
+      }
+      if (next.kind === "task" && (input.projectId !== undefined || input.statusId !== undefined)) {
+        this.ensureTaskBoardStates(next);
+      }
+      this.appendEvent(sessionId, "session.updated", input);
+    });
+    transaction();
     return next;
   }
 
@@ -391,6 +557,12 @@ export class PiWorkStore {
       this.sqlite.prepare("DELETE FROM messages WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM plans WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM runs WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM task_board_state WHERE task_id = ?").run(taskId);
+      const conductorRows = this.sqlite.prepare("SELECT id FROM conductor_runs WHERE task_id = ?").all(taskId) as Array<{ id: string }>;
+      for (const run of conductorRows) {
+        this.sqlite.prepare("DELETE FROM conductor_node_states WHERE run_id = ?").run(run.id);
+      }
+      this.sqlite.prepare("DELETE FROM conductor_runs WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
       if (workspace.kind === "managed") {
         this.sqlite.prepare("DELETE FROM workspaces WHERE id = ?").run(workspace.id);
@@ -457,6 +629,432 @@ export class PiWorkStore {
       .orderBy(asc(tasks.createdAt))
       .all()
       .map(parseTask);
+  }
+
+  createProject(input: {
+    workspaceId: string;
+    name: string;
+    description?: string;
+    color?: string;
+  }): Project {
+    this.requireFolderWorkspace(input.workspaceId);
+    const now = timestamp();
+    const project = projectSchema.parse({
+      id: randomUUID(),
+      ...input,
+      description: input.description ?? "",
+      color: input.color ?? "#8a8275",
+      archived: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.insert(projects).values(project).run();
+      this.createBoardInternal({
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        name: project.name,
+        kind: "project",
+      });
+      this.appendWorkspaceEvent(project.workspaceId, "project.created", project.id, project);
+    });
+    transaction();
+    return project;
+  }
+
+  listProjects(workspaceId: string, includeArchived = false): Project[] {
+    this.requireFolderWorkspace(workspaceId);
+    const rows = this.db.select().from(projects)
+      .where(eq(projects.workspaceId, workspaceId))
+      .orderBy(asc(projects.createdAt))
+      .all()
+      .map(parseProject);
+    return includeArchived ? rows : rows.filter(({ archived }) => !archived);
+  }
+
+  getProject(workspaceId: string, projectId: string): Project | null {
+    const row = this.db.select().from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.workspaceId, workspaceId)))
+      .get();
+    return row === undefined ? null : parseProject(row);
+  }
+
+  updateProject(workspaceId: string, projectId: string, input: Partial<Pick<
+    Project,
+    "name" | "description" | "color" | "archived"
+  >>): Project {
+    const current = this.getProject(workspaceId, projectId);
+    if (current === null) throw new Error("Project not found.");
+    const next = projectSchema.parse({ ...current, ...input, updatedAt: timestamp() });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.update(projects).set(next).where(eq(projects.id, projectId)).run();
+      if (input.name !== undefined) {
+        this.db.update(boards).set({ name: next.name, updatedAt: next.updatedAt })
+          .where(and(eq(boards.workspaceId, workspaceId), eq(boards.projectId, projectId)))
+          .run();
+      }
+      this.appendWorkspaceEvent(workspaceId, "project.updated", projectId, input);
+    });
+    transaction();
+    return next;
+  }
+
+  removeProject(workspaceId: string, projectId: string): void {
+    const project = this.getProject(workspaceId, projectId);
+    if (project === null) throw new Error("Project not found.");
+    const boardRows = this.db.select().from(boards)
+      .where(and(eq(boards.workspaceId, workspaceId), eq(boards.projectId, projectId)))
+      .all();
+    const transaction = this.sqlite.transaction(() => {
+      this.sqlite.prepare("UPDATE tasks SET project_id = NULL, updated_at = ? WHERE workspace_id = ? AND project_id = ?")
+        .run(timestamp(), workspaceId, projectId);
+      for (const board of boardRows) {
+        this.sqlite.prepare("DELETE FROM task_board_state WHERE board_id = ?").run(board.id);
+        this.sqlite.prepare("DELETE FROM board_columns WHERE board_id = ?").run(board.id);
+      }
+      this.sqlite.prepare("DELETE FROM boards WHERE workspace_id = ? AND project_id = ?").run(workspaceId, projectId);
+      this.sqlite.prepare("DELETE FROM projects WHERE id = ? AND workspace_id = ?").run(projectId, workspaceId);
+      this.appendWorkspaceEvent(workspaceId, "project.removed", projectId, {});
+    });
+    transaction();
+  }
+
+  createBoard(input: { workspaceId: string; projectId?: string | null; name: string }): Board {
+    this.requireFolderWorkspace(input.workspaceId);
+    if (input.projectId !== undefined && input.projectId !== null && this.getProject(input.workspaceId, input.projectId) === null) {
+      throw new Error("Project not found.");
+    }
+    return this.createBoardInternal({
+      workspaceId: input.workspaceId,
+      projectId: input.projectId ?? null,
+      name: input.name,
+      kind: input.projectId === undefined || input.projectId === null ? "workspace" : "project",
+    });
+  }
+
+  listBoards(workspaceId: string): Board[] {
+    this.requireFolderWorkspace(workspaceId);
+    this.ensureDefaultBoard(workspaceId);
+    return this.db.select().from(boards)
+      .where(eq(boards.workspaceId, workspaceId))
+      .orderBy(asc(boards.createdAt))
+      .all()
+      .map(parseBoard);
+  }
+
+  getBoardSnapshot(workspaceId: string, boardId?: string): BoardSnapshot {
+    this.requireFolderWorkspace(workspaceId);
+    const board = boardId === undefined
+      ? this.ensureDefaultBoard(workspaceId)
+      : this.requireBoard(workspaceId, boardId);
+    for (const task of this.listTasks(workspaceId)) {
+      if (board.kind === "workspace" || task.projectId === board.projectId) {
+        this.ensureBoardState(task, board);
+      }
+    }
+    return boardSnapshotSchema.parse({
+      board,
+      columns: this.listBoardColumns(workspaceId, board.id),
+      states: this.db.select().from(taskBoardState)
+        .where(and(eq(taskBoardState.workspaceId, workspaceId), eq(taskBoardState.boardId, board.id)))
+        .orderBy(asc(taskBoardState.columnId), asc(taskBoardState.rank))
+        .all()
+        .map(parseTaskBoardState),
+    });
+  }
+
+  listBoardColumns(workspaceId: string, boardId: string): BoardColumn[] {
+    this.requireBoard(workspaceId, boardId);
+    return this.db.select().from(boardColumns)
+      .where(and(eq(boardColumns.workspaceId, workspaceId), eq(boardColumns.boardId, boardId)))
+      .orderBy(asc(boardColumns.position))
+      .all()
+      .map(parseBoardColumn);
+  }
+
+  createBoardColumn(input: {
+    workspaceId: string;
+    boardId: string;
+    name: string;
+    color: string;
+    statusIds?: string[];
+    dropStatusId?: string | null;
+  }): BoardColumn {
+    const board = this.requireBoard(input.workspaceId, input.boardId);
+    this.validateBoardStatusIds(input.workspaceId, [...(input.statusIds ?? []), ...(input.dropStatusId ? [input.dropStatusId] : [])]);
+    const now = timestamp();
+    const column = boardColumnSchema.parse({
+      id: randomUUID(),
+      ...input,
+      statusIds: input.statusIds ?? [],
+      dropStatusId: input.dropStatusId ?? null,
+      position: this.listBoardColumns(input.workspaceId, input.boardId).length,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.insert(boardColumns).values({ ...column, statusIds: JSON.stringify(column.statusIds) }).run();
+      this.bumpBoard(board);
+      this.appendWorkspaceEvent(input.workspaceId, "board.column_created", column.id, column);
+    });
+    transaction();
+    return column;
+  }
+
+  updateBoardColumn(workspaceId: string, boardId: string, columnId: string, input: Partial<Pick<
+    BoardColumn,
+    "name" | "color" | "position" | "statusIds" | "dropStatusId"
+  >>): BoardColumn {
+    const board = this.requireBoard(workspaceId, boardId);
+    const current = this.requireBoardColumn(workspaceId, boardId, columnId);
+    const dropStatusId = input.dropStatusId !== undefined ? input.dropStatusId : current.dropStatusId;
+    this.validateBoardStatusIds(workspaceId, [
+      ...(input.statusIds ?? current.statusIds),
+      ...(dropStatusId === null ? [] : [dropStatusId]),
+    ]);
+    const next = boardColumnSchema.parse({ ...current, ...input, updatedAt: timestamp() });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.update(boardColumns).set({ ...next, statusIds: JSON.stringify(next.statusIds) })
+        .where(eq(boardColumns.id, columnId)).run();
+      this.bumpBoard(board);
+      this.appendWorkspaceEvent(workspaceId, "board.column_updated", columnId, input);
+    });
+    transaction();
+    return next;
+  }
+
+  removeBoardColumn(workspaceId: string, boardId: string, columnId: string, migrateToColumnId: string): void {
+    if (columnId === migrateToColumnId) throw new Error("Choose a different destination column.");
+    const board = this.requireBoard(workspaceId, boardId);
+    this.requireBoardColumn(workspaceId, boardId, columnId);
+    this.requireBoardColumn(workspaceId, boardId, migrateToColumnId);
+    if (this.listBoardColumns(workspaceId, boardId).length <= 1) throw new Error("A board must keep at least one column.");
+    const transaction = this.sqlite.transaction(() => {
+      const destination = this.db.select().from(taskBoardState)
+        .where(and(eq(taskBoardState.boardId, boardId), eq(taskBoardState.columnId, migrateToColumnId)))
+        .orderBy(asc(taskBoardState.rank)).all();
+      const moving = this.db.select().from(taskBoardState)
+        .where(and(eq(taskBoardState.boardId, boardId), eq(taskBoardState.columnId, columnId)))
+        .orderBy(asc(taskBoardState.rank)).all();
+      this.sqlite.prepare("UPDATE task_board_state SET rank = rank + 1000000000 WHERE board_id = ? AND column_id = ?")
+        .run(boardId, migrateToColumnId);
+      [...destination, ...moving].forEach((state, index) => {
+        this.sqlite.prepare(
+          "UPDATE task_board_state SET column_id = ?, rank = ?, version = version + 1, updated_at = ? WHERE task_id = ? AND board_id = ?",
+        ).run(migrateToColumnId, (index + 1) * boardRankStep, timestamp(), state.taskId, boardId);
+      });
+      this.db.delete(boardColumns).where(eq(boardColumns.id, columnId)).run();
+      this.bumpBoard(board);
+      this.appendWorkspaceEvent(workspaceId, "board.column_removed", columnId, { migrateToColumnId });
+    });
+    transaction();
+  }
+
+  moveBoardCard(input: {
+    commandId: string;
+    workspaceId: string;
+    boardId: string;
+    taskId: string;
+    toColumnId: string;
+    beforeTaskId?: string | null;
+    afterTaskId?: string | null;
+    expectedVersion: number;
+  }): BoardSnapshot {
+    const receipt = this.db.select().from(commandReceipts).where(eq(commandReceipts.id, input.commandId)).get();
+    if (receipt !== undefined) return boardSnapshotSchema.parse(JSON.parse(receipt.result));
+    const board = this.requireBoard(input.workspaceId, input.boardId);
+    const task = this.requireTask(input.taskId);
+    if (task.workspaceId !== input.workspaceId) throw new Error("Task belongs to a different workspace.");
+    if (board.kind === "project" && task.projectId !== board.projectId) throw new Error("Task is outside this project board.");
+    const targetColumn = this.requireBoardColumn(input.workspaceId, input.boardId, input.toColumnId);
+    const current = this.ensureBoardState(task, board);
+    if (current.version !== input.expectedVersion) throw new Error("Card was moved by another command.");
+
+    let snapshot!: BoardSnapshot;
+    const transaction = this.sqlite.transaction(() => {
+      const target = this.db.select().from(taskBoardState)
+        .where(and(eq(taskBoardState.boardId, board.id), eq(taskBoardState.columnId, targetColumn.id)))
+        .orderBy(asc(taskBoardState.rank))
+        .all()
+        .filter(({ taskId }) => taskId !== task.id);
+      const beforeIndex = input.beforeTaskId === undefined || input.beforeTaskId === null
+        ? -1
+        : target.findIndex(({ taskId }) => taskId === input.beforeTaskId);
+      const afterIndex = input.afterTaskId === undefined || input.afterTaskId === null
+        ? -1
+        : target.findIndex(({ taskId }) => taskId === input.afterTaskId);
+      const insertAt = beforeIndex >= 0 ? beforeIndex : afterIndex >= 0 ? afterIndex + 1 : target.length;
+      target.splice(insertAt, 0, {
+        taskId: task.id,
+        workspaceId: input.workspaceId,
+        boardId: board.id,
+        columnId: targetColumn.id,
+        rank: 0,
+        version: current.version,
+        updatedAt: timestamp(),
+      });
+      this.sqlite.prepare("UPDATE task_board_state SET rank = rank + 1000000000 WHERE board_id = ? AND column_id = ?")
+        .run(board.id, targetColumn.id);
+      target.forEach((state, index) => {
+        this.sqlite.prepare(
+          "UPDATE task_board_state SET column_id = ?, rank = ?, version = version + 1, updated_at = ? WHERE task_id = ? AND board_id = ?",
+        ).run(targetColumn.id, (index + 1) * boardRankStep, timestamp(), state.taskId, board.id);
+      });
+      if (targetColumn.dropStatusId !== null) {
+        this.db.update(tasks).set({ statusId: targetColumn.dropStatusId, updatedAt: timestamp() })
+          .where(eq(tasks.id, task.id)).run();
+      }
+      this.bumpBoard(board);
+      this.appendWorkspaceEvent(input.workspaceId, "board.card_moved", task.id, {
+        boardId: board.id,
+        columnId: targetColumn.id,
+      });
+      snapshot = this.getBoardSnapshot(input.workspaceId, board.id);
+      this.db.insert(commandReceipts).values({
+        id: input.commandId,
+        workspaceId: input.workspaceId,
+        kind: "board.move_card",
+        result: JSON.stringify(snapshot),
+        createdAt: timestamp(),
+      }).run();
+    });
+    transaction();
+    return snapshot;
+  }
+
+  createConductorRun(input: { workspaceId: string; taskId: string; spec: ConductorSpec }): ConductorRun {
+    const task = this.requireTask(input.taskId);
+    if (task.workspaceId !== input.workspaceId) throw new Error("Task belongs to a different workspace.");
+    const spec = conductorSpecSchema.parse(input.spec);
+    const now = timestamp();
+    const run = conductorRunSchema.parse({
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+      status: "pending",
+      spec,
+      lastEventSequence: 0,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.insert(conductorRuns).values({ ...run, spec: JSON.stringify(run.spec) }).run();
+      for (const node of spec.nodes) {
+        this.db.insert(conductorNodeStates).values({
+          runId: run.id,
+          nodeId: node.id,
+          status: node.dependsOn.length === 0 ? "ready" : "pending",
+          attempt: 0,
+          output: null,
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: now,
+        }).run();
+      }
+      this.appendWorkspaceEvent(input.workspaceId, "run.created", run.id, { taskId: input.taskId });
+    });
+    transaction();
+    return run;
+  }
+
+  getConductorRun(workspaceId: string, runId: string): ConductorRun | null {
+    const row = this.db.select().from(conductorRuns)
+      .where(and(eq(conductorRuns.id, runId), eq(conductorRuns.workspaceId, workspaceId)))
+      .get();
+    return row === undefined ? null : parseConductorRun(row);
+  }
+
+  listConductorRuns(workspaceId: string, taskId?: string): ConductorRun[] {
+    this.requireFolderWorkspace(workspaceId);
+    const rows = taskId === undefined
+      ? this.db.select().from(conductorRuns).where(eq(conductorRuns.workspaceId, workspaceId)).orderBy(desc(conductorRuns.createdAt)).all()
+      : this.db.select().from(conductorRuns).where(and(
+        eq(conductorRuns.workspaceId, workspaceId),
+        eq(conductorRuns.taskId, taskId),
+      )).orderBy(desc(conductorRuns.createdAt)).all();
+    return rows.map(parseConductorRun);
+  }
+
+  listConductorNodeStates(workspaceId: string, runId: string): ConductorNodeState[] {
+    const run = this.getConductorRun(workspaceId, runId);
+    if (run === null) throw new Error("Run not found.");
+    const states = this.db.select().from(conductorNodeStates)
+      .where(eq(conductorNodeStates.runId, runId))
+      .all()
+      .map(parseConductorNodeState);
+    const order = new Map(run.spec.nodes.map(({ id }, index) => [id, index]));
+    return states.sort((left, right) => (
+      (order.get(left.nodeId) ?? Number.MAX_SAFE_INTEGER)
+      - (order.get(right.nodeId) ?? Number.MAX_SAFE_INTEGER)
+    ));
+  }
+
+  updateConductorRunStatus(
+    workspaceId: string,
+    runId: string,
+    status: ConductorRun["status"],
+  ): ConductorRun {
+    const current = this.getConductorRun(workspaceId, runId);
+    if (current === null) throw new Error("Run not found.");
+    const now = timestamp();
+    this.db.update(conductorRuns).set({
+      status,
+      updatedAt: now,
+      completedAt: ["completed", "failed", "cancelled"].includes(status) ? now : null,
+      leaseOwner: status === "running" ? current.leaseOwner : null,
+      leaseExpiresAt: status === "running" ? current.leaseExpiresAt : null,
+    }).where(eq(conductorRuns.id, runId)).run();
+    this.appendWorkspaceEvent(workspaceId, `run.${status}`, runId, {});
+    return this.getConductorRun(workspaceId, runId)!;
+  }
+
+  claimConductorRun(workspaceId: string, runId: string, owner: string, leaseMs = 30_000): ConductorRun {
+    const run = this.getConductorRun(workspaceId, runId);
+    if (run === null) throw new Error("Run not found.");
+    const now = new Date();
+    if (run.leaseExpiresAt !== null && new Date(run.leaseExpiresAt) > now && run.leaseOwner !== owner) {
+      throw new Error("Run is leased by another conductor.");
+    }
+    this.db.update(conductorRuns).set({
+      leaseOwner: owner,
+      leaseExpiresAt: new Date(now.getTime() + leaseMs).toISOString(),
+      status: "running",
+      updatedAt: now.toISOString(),
+    }).where(eq(conductorRuns.id, runId)).run();
+    return this.getConductorRun(workspaceId, runId)!;
+  }
+
+  updateConductorNodeState(
+    workspaceId: string,
+    runId: string,
+    nodeId: string,
+    input: Partial<Pick<ConductorNodeState, "status" | "attempt" | "output" | "error" | "startedAt" | "completedAt">>,
+  ): ConductorNodeState {
+    const run = this.getConductorRun(workspaceId, runId);
+    if (run === null) throw new Error("Run not found.");
+    const currentRow = this.db.select().from(conductorNodeStates)
+      .where(and(eq(conductorNodeStates.runId, runId), eq(conductorNodeStates.nodeId, nodeId)))
+      .get();
+    if (currentRow === undefined) throw new Error("Run node not found.");
+    const next = conductorNodeStateSchema.parse({ ...parseConductorNodeState(currentRow), ...input, updatedAt: timestamp() });
+    const transaction = this.sqlite.transaction(() => {
+      this.db.update(conductorNodeStates).set(next).where(and(
+        eq(conductorNodeStates.runId, runId),
+        eq(conductorNodeStates.nodeId, nodeId),
+      )).run();
+      this.db.update(conductorRuns).set({
+        lastEventSequence: run.lastEventSequence + 1,
+        updatedAt: next.updatedAt,
+      }).where(eq(conductorRuns.id, runId)).run();
+      this.appendWorkspaceEvent(workspaceId, "run.node_updated", nodeId, { runId, ...input });
+      if (next.status === "completed") this.releaseReadyConductorNodes(run, nodeId);
+    });
+    transaction();
+    return next;
   }
 
   createDomainEntity<T extends DomainValue>(
@@ -550,6 +1148,15 @@ export class PiWorkStore {
     const workspaceId = this.workspaceIdOf(status);
     const transaction = this.sqlite.transaction(() => {
       this.sqlite.prepare("UPDATE tasks SET status_id = NULL WHERE workspace_id = ? AND status_id = ?").run(workspaceId, id);
+      const columns = this.db.select().from(boardColumns).where(eq(boardColumns.workspaceId, workspaceId)).all();
+      for (const column of columns) {
+        const statusIds = JSON.parse(column.statusIds) as string[];
+        this.db.update(boardColumns).set({
+          statusIds: JSON.stringify(statusIds.filter((statusId) => statusId !== id)),
+          dropStatusId: column.dropStatusId === id ? null : column.dropStatusId,
+          updatedAt: timestamp(),
+        }).where(eq(boardColumns.id, column.id)).run();
+      }
       this.sqlite.prepare("DELETE FROM domain_entities WHERE id = ? AND domain = 'status'").run(id);
     });
     transaction();
@@ -992,6 +1599,223 @@ export class PiWorkStore {
       .map((row) => eventSchema.parse(JSON.parse(row.value)));
   }
 
+  listWorkspaceEvents(workspaceId: string, afterSequence = -1): Array<{
+    id: string;
+    workspaceId: string;
+    sequence: number;
+    kind: string;
+    entityId: string | null;
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }> {
+    this.requireWorkspace(workspaceId);
+    const rows = this.sqlite.prepare(
+      "SELECT id, workspace_id, sequence, kind, entity_id, payload, created_at FROM workspace_events WHERE workspace_id = ? AND sequence > ? ORDER BY sequence",
+    ).all(workspaceId, afterSequence) as Array<{
+      id: string;
+      workspace_id: string;
+      sequence: number;
+      kind: string;
+      entity_id: string | null;
+      payload: string;
+      created_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      workspaceId: row.workspace_id,
+      sequence: row.sequence,
+      kind: row.kind,
+      entityId: row.entity_id,
+      payload: JSON.parse(row.payload) as Record<string, unknown>,
+      createdAt: row.created_at,
+    }));
+  }
+
+  private insertWorkspaceDirectory(workspaceId: string, path: string, isRoot: boolean, createdAt: string): void {
+    const normalized = canonicalPath(path);
+    const owner = this.db.select().from(workspaceDirectories)
+      .where(eq(workspaceDirectories.canonicalPath, normalized))
+      .get();
+    if (owner !== undefined && owner.workspaceId !== workspaceId) {
+      throw new Error("This directory is already associated with another workspace.");
+    }
+    if (owner !== undefined) return;
+    this.db.insert(workspaceDirectories).values({
+      id: randomUUID(),
+      workspaceId,
+      path: normalized,
+      canonicalPath: normalized,
+      isRoot,
+      createdAt,
+    }).run();
+  }
+
+  private appendWorkspaceEvent(
+    workspaceId: string,
+    kind: string,
+    entityId: string | null,
+    payload: unknown,
+  ): void {
+    const row = this.sqlite.prepare(
+      "SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence FROM workspace_events WHERE workspace_id = ?",
+    ).get(workspaceId) as { sequence: number };
+    this.db.insert(workspaceEvents).values({
+      id: randomUUID(),
+      workspaceId,
+      sequence: row.sequence,
+      kind,
+      entityId,
+      payload: JSON.stringify(payload),
+      createdAt: timestamp(),
+    }).run();
+  }
+
+  private createBoardInternal(input: {
+    workspaceId: string;
+    projectId: string | null;
+    name: string;
+    kind: Board["kind"];
+  }): Board {
+    const now = timestamp();
+    const board = boardSchema.parse({
+      id: randomUUID(),
+      ...input,
+      version: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    this.db.insert(boards).values(board).run();
+    const statuses = this.listStatuses(input.workspaceId);
+    const templates = statuses.length > 0
+      ? [...statuses].sort((a, b) => a.position - b.position).map((status) => ({
+        name: status.name,
+        color: status.color,
+        statusIds: [status.id],
+        dropStatusId: status.id,
+      }))
+      : [
+        { name: "Inbox", color: "#8a8275", statusIds: [], dropStatusId: null },
+        { name: "In progress", color: "#5b7db1", statusIds: [], dropStatusId: null },
+        { name: "Done", color: "#4f8f68", statusIds: [], dropStatusId: null },
+      ];
+    templates.forEach((template, position) => {
+      this.db.insert(boardColumns).values({
+        id: randomUUID(),
+        workspaceId: input.workspaceId,
+        boardId: board.id,
+        name: template.name,
+        color: template.color,
+        position,
+        statusIds: JSON.stringify(template.statusIds),
+        dropStatusId: template.dropStatusId,
+        createdAt: now,
+        updatedAt: now,
+      }).run();
+    });
+    this.appendWorkspaceEvent(input.workspaceId, "board.created", board.id, board);
+    return board;
+  }
+
+  private ensureDefaultBoard(workspaceId: string): Board {
+    const row = this.db.select().from(boards).where(and(
+      eq(boards.workspaceId, workspaceId),
+      eq(boards.kind, "workspace"),
+      isNull(boards.projectId),
+    )).orderBy(asc(boards.createdAt)).get();
+    return row === undefined
+      ? this.createBoardInternal({ workspaceId, projectId: null, name: "Workspace", kind: "workspace" })
+      : parseBoard(row);
+  }
+
+  private requireBoard(workspaceId: string, boardId: string): Board {
+    const row = this.db.select().from(boards).where(and(
+      eq(boards.id, boardId),
+      eq(boards.workspaceId, workspaceId),
+    )).get();
+    if (row === undefined) throw new Error("Board not found.");
+    return parseBoard(row);
+  }
+
+  private requireBoardColumn(workspaceId: string, boardId: string, columnId: string): BoardColumn {
+    const row = this.db.select().from(boardColumns).where(and(
+      eq(boardColumns.id, columnId),
+      eq(boardColumns.workspaceId, workspaceId),
+      eq(boardColumns.boardId, boardId),
+    )).get();
+    if (row === undefined) throw new Error("Board column not found.");
+    return parseBoardColumn(row);
+  }
+
+  private bumpBoard(board: Board): void {
+    this.db.update(boards).set({
+      version: board.version + 1,
+      updatedAt: timestamp(),
+    }).where(eq(boards.id, board.id)).run();
+  }
+
+  private validateBoardStatusIds(workspaceId: string, statusIds: string[]): void {
+    const known = new Set(this.listStatuses(workspaceId).map(({ id }) => id));
+    for (const statusId of statusIds) {
+      if (!known.has(statusId)) throw new Error("Board status belongs to a different workspace.");
+    }
+  }
+
+  private ensureTaskBoardStates(task: Task): void {
+    if (task.kind !== "task") return;
+    const workspaceBoard = this.ensureDefaultBoard(task.workspaceId);
+    this.ensureBoardState(task, workspaceBoard);
+    if (task.projectId === null) return;
+    const projectBoardRow = this.db.select().from(boards).where(and(
+      eq(boards.workspaceId, task.workspaceId),
+      eq(boards.projectId, task.projectId),
+    )).get();
+    if (projectBoardRow !== undefined) this.ensureBoardState(task, parseBoard(projectBoardRow));
+  }
+
+  private ensureBoardState(task: Task, board: Board): TaskBoardState {
+    const existing = this.db.select().from(taskBoardState).where(and(
+      eq(taskBoardState.taskId, task.id),
+      eq(taskBoardState.boardId, board.id),
+    )).get();
+    if (existing !== undefined) return parseTaskBoardState(existing);
+    const columns = this.listBoardColumns(board.workspaceId, board.id);
+    if (columns.length === 0) throw new Error("Board has no columns.");
+    const workflowStatusId = task.statusId;
+    const mapped = workflowStatusId === null
+      ? null
+      : columns.find(({ statusIds }) => statusIds.includes(workflowStatusId));
+    const column = mapped ?? columns[0]!;
+    const last = this.db.select().from(taskBoardState).where(and(
+      eq(taskBoardState.boardId, board.id),
+      eq(taskBoardState.columnId, column.id),
+    )).orderBy(desc(taskBoardState.rank)).get();
+    const state = taskBoardStateSchema.parse({
+      taskId: task.id,
+      workspaceId: task.workspaceId,
+      boardId: board.id,
+      columnId: column.id,
+      rank: (last?.rank ?? 0) + boardRankStep,
+      version: 0,
+      updatedAt: timestamp(),
+    });
+    this.db.insert(taskBoardState).values(state).run();
+    return state;
+  }
+
+  private releaseReadyConductorNodes(run: ConductorRun, _completedNodeId: string): void {
+    const states = new Map(this.listConductorNodeStates(run.workspaceId, run.id).map((state) => [state.nodeId, state]));
+    for (const node of run.spec.nodes) {
+      const state = states.get(node.id);
+      if (state?.status !== "pending") continue;
+      if (node.dependsOn.every((dependency) => states.get(dependency)?.status === "completed")) {
+        this.db.update(conductorNodeStates).set({ status: "ready", updatedAt: timestamp() }).where(and(
+          eq(conductorNodeStates.runId, run.id),
+          eq(conductorNodeStates.nodeId, node.id),
+        )).run();
+      }
+    }
+  }
+
   private requireTask(taskId: string): Task {
     const task = this.getTask(taskId);
     if (task === null) {
@@ -1127,11 +1951,15 @@ export class PiWorkStore {
   }
 
   private appendEvent(taskId: string, type: WorkEvent["type"], payload: Record<string, unknown>): void {
-    const nextSequence = this.db.select().from(events).where(eq(events.taskId, taskId)).all().length;
+    const task = this.requireTask(taskId);
+    const row = this.sqlite.prepare(
+      "SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence FROM events WHERE task_id = ?",
+    ).get(taskId) as { sequence: number };
     const event = eventSchema.parse({
       protocolVersion: 1,
+      workspaceId: task.workspaceId,
       taskId,
-      sequence: nextSequence,
+      sequence: row.sequence,
       timestamp: timestamp(),
       type,
       payload,
@@ -1139,7 +1967,7 @@ export class PiWorkStore {
     this.db.insert(events).values({
       id: randomUUID(),
       taskId,
-      sequence: String(event.sequence),
+      sequence: event.sequence,
       value: JSON.stringify(event),
     }).run();
   }
@@ -1158,6 +1986,7 @@ export class PiWorkStore {
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT NOT NULL,
+        project_id TEXT,
         title TEXT NOT NULL,
         goal TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -1209,8 +2038,109 @@ export class PiWorkStore {
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY NOT NULL,
         task_id TEXT NOT NULL,
-        sequence TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
         value TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS events_task_sequence ON events(task_id, sequence);
+      CREATE TABLE IF NOT EXISTS workspace_directories (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        canonical_path TEXT NOT NULL UNIQUE,
+        is_root INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS workspace_directories_workspace ON workspace_directories(workspace_id);
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '#8a8275',
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS projects_workspace ON projects(workspace_id, archived);
+      CREATE TABLE IF NOT EXISTS boards (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS boards_project ON boards(workspace_id, project_id) WHERE project_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS boards_workspace_default ON boards(workspace_id) WHERE kind = 'workspace' AND project_id IS NULL;
+      CREATE TABLE IF NOT EXISTS board_columns (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        board_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        status_ids TEXT NOT NULL DEFAULT '[]',
+        drop_status_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS board_columns_board ON board_columns(board_id, position);
+      CREATE TABLE IF NOT EXISTS task_board_state (
+        task_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        board_id TEXT NOT NULL,
+        column_id TEXT NOT NULL,
+        rank INTEGER NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, board_id),
+        UNIQUE (board_id, column_id, rank)
+      );
+      CREATE INDEX IF NOT EXISTS task_board_state_board ON task_board_state(board_id, column_id, rank);
+      CREATE TABLE IF NOT EXISTS command_receipts (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        result TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workspace_events (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        entity_id TEXT,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (workspace_id, sequence)
+      );
+      CREATE TABLE IF NOT EXISTS conductor_runs (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        last_event_sequence INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS conductor_runs_workspace_status ON conductor_runs(workspace_id, status);
+      CREATE TABLE IF NOT EXISTS conductor_node_states (
+        run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt INTEGER NOT NULL DEFAULT 0,
+        output TEXT,
+        error TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, node_id)
       );
       CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY NOT NULL,
@@ -1282,7 +2212,11 @@ export class PiWorkStore {
     `);
     this.addColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'folder'");
     this.addColumn("workspaces", "directories", "TEXT NOT NULL DEFAULT '[]'");
+    this.addColumn("workspaces", "version", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("workspaces", "updated_at", "TEXT");
     this.sqlite.exec("UPDATE workspaces SET directories = json_array(root_path) WHERE directories = '[]'");
+    this.sqlite.exec("UPDATE workspaces SET updated_at = created_at WHERE updated_at IS NULL");
+    this.addColumn("tasks", "project_id", "TEXT");
     this.addColumn("tasks", "provider_id", "TEXT");
     this.addColumn("tasks", "model_id", "TEXT");
     this.addColumn("tasks", "thinking_level", "TEXT NOT NULL DEFAULT 'off'");
@@ -1296,6 +2230,8 @@ export class PiWorkStore {
     this.addColumn("tasks", "plan_mode", "TEXT NOT NULL DEFAULT '0'");
     this.addColumn("tasks", "working_directory", "TEXT");
     this.addColumn("tasks", "running", "TEXT NOT NULL DEFAULT '0'");
+    this.backfillWorkspaceDirectories();
+    this.ensureIntegerEventSequence();
   }
 
   private addColumn(table: string, column: string, definition: string): void {
@@ -1303,5 +2239,40 @@ export class PiWorkStore {
     if (!columns.some(({ name }) => name === column)) {
       this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
+  }
+
+  private backfillWorkspaceDirectories(): void {
+    const existing = this.sqlite.prepare("SELECT COUNT(*) AS count FROM workspace_directories").get() as { count: number };
+    if (existing.count > 0) return;
+    const rows = this.db.select().from(workspaces).all();
+    const transaction = this.sqlite.transaction(() => {
+      for (const row of rows) {
+        const workspace = parseWorkspace(row);
+        workspace.directories.forEach((directory, index) => {
+          this.insertWorkspaceDirectory(workspace.id, directory, index === 0, workspace.createdAt);
+        });
+      }
+    });
+    transaction();
+  }
+
+  private ensureIntegerEventSequence(): void {
+    const info = this.sqlite.prepare("PRAGMA table_info(events)").all() as Array<{ name: string; type: string }>;
+    const sequence = info.find(({ name }) => name === "sequence");
+    if (sequence?.type.toLocaleUpperCase() === "INTEGER") return;
+    this.sqlite.exec(`
+      DROP INDEX IF EXISTS events_task_sequence;
+      ALTER TABLE events RENAME TO events_legacy;
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        value TEXT NOT NULL
+      );
+      INSERT INTO events (id, task_id, sequence, value)
+      SELECT id, task_id, CAST(sequence AS INTEGER), value FROM events_legacy;
+      DROP TABLE events_legacy;
+      CREATE UNIQUE INDEX events_task_sequence ON events(task_id, sequence);
+    `);
   }
 }

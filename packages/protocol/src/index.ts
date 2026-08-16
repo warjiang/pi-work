@@ -37,13 +37,26 @@ export const workspaceSchema = z.object({
   directories: z.array(z.string().min(1)).min(1),
   outputPath: z.string().min(1),
   kind: workspaceKindSchema,
+  version: z.number().int().nonnegative().default(0),
   createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime().optional(),
 });
 export type Workspace = z.infer<typeof workspaceSchema>;
+
+export const workspaceDirectorySchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid(),
+  path: z.string().min(1),
+  canonicalPath: z.string().min(1),
+  isRoot: z.boolean(),
+  createdAt: z.string().datetime(),
+});
+export type WorkspaceDirectory = z.infer<typeof workspaceDirectorySchema>;
 
 export const taskSchema = z.object({
   id: z.uuid(),
   workspaceId: z.uuid(),
+  projectId: z.uuid().nullable().default(null),
   title: z.string().min(1).max(160),
   goal: z.string().min(1),
   status: taskStatusSchema,
@@ -130,8 +143,65 @@ export const statusDefinitionSchema = z.object({
   name: z.string().trim().min(1).max(80),
   color: z.string().trim().min(1).max(32),
   position: z.number().int().nonnegative(),
+  category: z.enum(["backlog", "open", "active", "review", "closed", "cancelled"]).default("open"),
 });
 export type StatusDefinition = z.infer<typeof statusDefinitionSchema>;
+
+export const projectSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid(),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(4_000).default(""),
+  color: z.string().trim().min(1).max(32).default("#8a8275"),
+  archived: z.boolean().default(false),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Project = z.infer<typeof projectSchema>;
+
+export const boardSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid(),
+  projectId: z.uuid().nullable(),
+  name: z.string().trim().min(1).max(120),
+  kind: z.enum(["workspace", "project"]),
+  version: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Board = z.infer<typeof boardSchema>;
+
+export const boardColumnSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid(),
+  boardId: z.uuid(),
+  name: z.string().trim().min(1).max(80),
+  color: z.string().trim().min(1).max(32),
+  position: z.number().int().nonnegative(),
+  statusIds: z.array(z.uuid()),
+  dropStatusId: z.uuid().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type BoardColumn = z.infer<typeof boardColumnSchema>;
+
+export const taskBoardStateSchema = z.object({
+  taskId: z.uuid(),
+  workspaceId: z.uuid(),
+  boardId: z.uuid(),
+  columnId: z.uuid(),
+  rank: z.number().int().positive(),
+  version: z.number().int().nonnegative(),
+  updatedAt: z.string().datetime(),
+});
+export type TaskBoardState = z.infer<typeof taskBoardStateSchema>;
+
+export const boardSnapshotSchema = z.object({
+  board: boardSchema,
+  columns: z.array(boardColumnSchema),
+  states: z.array(taskBoardStateSchema),
+});
+export type BoardSnapshot = z.infer<typeof boardSnapshotSchema>;
 
 export const labelSchema = z.object({
   id: z.uuid(),
@@ -454,6 +524,79 @@ export const runSchema = z.object({
 });
 export type Run = z.infer<typeof runSchema>;
 
+export const conductorRunStatuses = ["pending", "running", "paused", "completed", "failed", "cancelled"] as const;
+export const conductorNodeStatuses = ["pending", "ready", "running", "completed", "failed", "skipped", "cancelled"] as const;
+export const conductorNodeSchema = z.object({
+  id: z.uuid(),
+  title: z.string().trim().min(1).max(160),
+  prompt: z.string().trim().min(1).max(100_000),
+  dependsOn: z.array(z.uuid()).default([]),
+  maxAttempts: z.number().int().min(1).max(10).default(1),
+});
+export type ConductorNode = z.infer<typeof conductorNodeSchema>;
+export const conductorSpecSchema = z.object({
+  nodes: z.array(conductorNodeSchema).min(1).max(100),
+  maxParallel: z.number().int().min(1).max(16).default(4),
+}).superRefine((spec, context) => {
+  const ids = new Set(spec.nodes.map(({ id }) => id));
+  for (const [index, node] of spec.nodes.entries()) {
+    if (node.dependsOn.includes(node.id)) {
+      context.addIssue({ code: "custom", path: ["nodes", index, "dependsOn"], message: "A node cannot depend on itself." });
+    }
+    for (const dependency of node.dependsOn) {
+      if (!ids.has(dependency)) {
+        context.addIssue({ code: "custom", path: ["nodes", index, "dependsOn"], message: `Unknown dependency: ${dependency}` });
+      }
+    }
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const nodesById = new Map(spec.nodes.map((node) => [node.id, node]));
+  const hasCycle = (nodeId: string): boolean => {
+    if (visiting.has(nodeId)) return true;
+    if (visited.has(nodeId)) return false;
+    visiting.add(nodeId);
+    const cyclic = nodesById.get(nodeId)?.dependsOn.some(hasCycle) ?? false;
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    return cyclic;
+  };
+  if (spec.nodes.some(({ id }) => hasCycle(id))) {
+    context.addIssue({
+      code: "custom",
+      path: ["nodes"],
+      message: "Conductor dependencies must form an acyclic graph.",
+    });
+  }
+});
+export type ConductorSpec = z.infer<typeof conductorSpecSchema>;
+export const conductorRunSchema = z.object({
+  id: z.uuid(),
+  workspaceId: z.uuid(),
+  taskId: z.uuid(),
+  status: z.enum(conductorRunStatuses),
+  spec: conductorSpecSchema,
+  lastEventSequence: z.number().int().nonnegative(),
+  leaseOwner: z.string().nullable(),
+  leaseExpiresAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  completedAt: z.string().datetime().nullable(),
+});
+export type ConductorRun = z.infer<typeof conductorRunSchema>;
+export const conductorNodeStateSchema = z.object({
+  runId: z.uuid(),
+  nodeId: z.uuid(),
+  status: z.enum(conductorNodeStatuses),
+  attempt: z.number().int().nonnegative(),
+  output: z.string().nullable(),
+  error: z.string().nullable(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+  updatedAt: z.string().datetime(),
+});
+export type ConductorNodeState = z.infer<typeof conductorNodeStateSchema>;
+
 export const planStepSchema = z.object({
   id: z.uuid(),
   title: z.string().min(1).max(160),
@@ -489,8 +632,23 @@ export const addWorkspaceDirectoryInputSchema = z.object({
   workspaceId: z.uuid(),
 });
 
+export const removeWorkspaceDirectoryInputSchema = z.object({
+  workspaceId: z.uuid(),
+  directoryId: z.uuid(),
+});
+
+export const updateWorkspaceInputSchema = z.object({
+  workspaceId: z.uuid(),
+  name: z.string().trim().min(1).max(80).optional(),
+  outputPath: z.string().min(1).optional(),
+  expectedVersion: z.number().int().nonnegative().optional(),
+}).refine(({ name, outputPath }) => name !== undefined || outputPath !== undefined, {
+  message: "Update at least one workspace field.",
+});
+
 export const createTaskInputSchema = z.object({
   workspaceId: z.uuid(),
+  projectId: z.uuid().nullable().default(null),
   title: z.string().trim().min(1).max(160),
   goal: z.string().trim().min(1).max(10_000),
   kind: sessionKindSchema.default("task"),
@@ -543,6 +701,7 @@ export const sessionSearchInputSchema = z.object({
 
 export const updateSessionInputSchema = z.object({
   sessionId: z.uuid(),
+  projectId: z.uuid().nullable().optional(),
   title: z.string().trim().min(1).max(160).optional(),
   status: taskStatusSchema.optional(),
   archived: z.boolean().optional(),
@@ -566,11 +725,79 @@ export const createDomainEntityInputSchema = z.object({
 });
 
 export const updateDomainEntityInputSchema = z.object({
+  workspaceId: z.uuid().optional(),
   id: z.uuid(),
   value: z.record(z.string(), z.unknown()),
 });
 
-export const removeDomainEntityInputSchema = z.object({ id: z.uuid() });
+export const removeDomainEntityInputSchema = z.object({ workspaceId: z.uuid().optional(), id: z.uuid() });
+
+export const createProjectInputSchema = projectSchema.pick({
+  workspaceId: true,
+  name: true,
+  description: true,
+  color: true,
+}).partial({ description: true, color: true });
+export const updateProjectInputSchema = z.object({
+  workspaceId: z.uuid(),
+  projectId: z.uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().max(4_000).optional(),
+  color: z.string().trim().min(1).max(32).optional(),
+  archived: z.boolean().optional(),
+});
+export const removeProjectInputSchema = z.object({ workspaceId: z.uuid(), projectId: z.uuid() });
+
+export const createBoardInputSchema = z.object({
+  workspaceId: z.uuid(),
+  projectId: z.uuid().nullable().default(null),
+  name: z.string().trim().min(1).max(120),
+});
+export const createBoardColumnInputSchema = z.object({
+  workspaceId: z.uuid(),
+  boardId: z.uuid(),
+  name: z.string().trim().min(1).max(80),
+  color: z.string().trim().min(1).max(32),
+  statusIds: z.array(z.uuid()).default([]),
+  dropStatusId: z.uuid().nullable().default(null),
+});
+export const updateBoardColumnInputSchema = createBoardColumnInputSchema.partial({
+  name: true,
+  color: true,
+  statusIds: true,
+  dropStatusId: true,
+}).extend({
+  columnId: z.uuid(),
+  position: z.number().int().nonnegative().optional(),
+});
+export const removeBoardColumnInputSchema = z.object({
+  workspaceId: z.uuid(),
+  boardId: z.uuid(),
+  columnId: z.uuid(),
+  migrateToColumnId: z.uuid(),
+});
+export const moveBoardCardInputSchema = z.object({
+  commandId: z.uuid(),
+  workspaceId: z.uuid(),
+  boardId: z.uuid(),
+  taskId: z.uuid(),
+  toColumnId: z.uuid(),
+  beforeTaskId: z.uuid().nullable().default(null),
+  afterTaskId: z.uuid().nullable().default(null),
+  expectedVersion: z.number().int().nonnegative(),
+}).refine(({ beforeTaskId, afterTaskId }) => beforeTaskId === null || afterTaskId === null, {
+  message: "Specify at most one neighboring task.",
+});
+
+export const createConductorRunInputSchema = z.object({
+  workspaceId: z.uuid(),
+  taskId: z.uuid(),
+  spec: conductorSpecSchema,
+});
+export const conductorRunCommandInputSchema = z.object({
+  workspaceId: z.uuid(),
+  runId: z.uuid(),
+});
 
 export const providerConfigSchema = z.object({
   providerId: z.string().trim().min(1).max(80),
@@ -931,6 +1158,7 @@ export const agentResponseSchema = agentMessageSchema;
 
 export const eventSchema = z.object({
   protocolVersion: z.literal(1),
+  workspaceId: z.uuid().nullable().default(null),
   taskId: z.uuid(),
   sequence: z.number().int().nonnegative(),
   timestamp: z.string().datetime(),
@@ -944,6 +1172,18 @@ export const eventSchema = z.object({
     "artifact.published",
     "task.completed",
     "task.cancelled",
+    "project.created",
+    "project.updated",
+    "project.removed",
+    "board.card_moved",
+    "run.created",
+    "run.started",
+    "run.paused",
+    "run.resumed",
+    "run.cancelled",
+    "run.completed",
+    "run.failed",
+    "run.node_updated",
   ]),
   payload: z.record(z.string(), z.unknown()),
 });

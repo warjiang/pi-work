@@ -9,7 +9,7 @@ export type AppView =
   | "automations"
   | "folder-settings";
 
-export type InspectorTab = "task" | "plan" | "activity" | "output";
+export type InspectorTab = "task" | "plan" | "orchestration" | "activity" | "output";
 export type WorkspaceScope = "personal" | string;
 export type SettingsSection =
   | "general"

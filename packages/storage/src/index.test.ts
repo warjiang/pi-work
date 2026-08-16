@@ -719,4 +719,208 @@ describe("PiWorkStore", () => {
     expect(reloaded.publicKey).toBe("pk-lf-1");
     store.close();
   });
+
+  it("enforces canonical workspace directory ownership and protects the root", () => {
+    const store = new PiWorkStore();
+    const first = store.createWorkspace({
+      name: "First",
+      rootPath: "/workspace/first/../shared",
+      outputPath: "/workspace/shared/output",
+    });
+    const second = store.createWorkspace({
+      name: "Second",
+      rootPath: "/workspace/second",
+      outputPath: "/workspace/second/output",
+    });
+    expect(() => store.addWorkspaceDirectory(second.id, "/workspace/shared")).toThrow("another workspace");
+    const root = store.listWorkspaceDirectories(first.id).find(({ isRoot }) => isRoot);
+    expect(root).toBeDefined();
+    expect(() => store.removeWorkspaceDirectory(first.id, root!.id)).toThrow("root directory");
+    store.close();
+  });
+
+  it("keeps workflow status separate from durable board placement and makes moves idempotent", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/product-board",
+      outputPath: "/workspace/product-board/output",
+    });
+    const todo = store.createDomainEntity("status", statusDefinitionSchema, {
+      workspaceId: workspace.id,
+      name: "To do",
+      color: "#888",
+      position: 0,
+      category: "open",
+    });
+    const done = store.createDomainEntity("status", statusDefinitionSchema, {
+      workspaceId: workspace.id,
+      name: "Done",
+      color: "#484",
+      position: 1,
+      category: "closed",
+    });
+    const createdTask = store.createTask({ workspaceId: workspace.id, title: "Ship", goal: "Ship it" });
+    const task = store.updateSession(createdTask.id, { statusId: todo.id });
+    const initial = store.getBoardSnapshot(workspace.id);
+    const target = initial.columns.find(({ dropStatusId }) => dropStatusId === done.id)!;
+    const state = initial.states.find(({ taskId }) => taskId === task.id)!;
+    const commandId = randomUUID();
+    const moved = store.moveBoardCard({
+      commandId,
+      workspaceId: workspace.id,
+      boardId: initial.board.id,
+      taskId: task.id,
+      toColumnId: target.id,
+      beforeTaskId: null,
+      afterTaskId: null,
+      expectedVersion: state.version,
+    });
+    expect(moved.states.find(({ taskId }) => taskId === task.id)?.columnId).toBe(target.id);
+    expect(store.getTask(task.id)?.statusId).toBe(done.id);
+    expect(store.moveBoardCard({
+      commandId,
+      workspaceId: workspace.id,
+      boardId: initial.board.id,
+      taskId: task.id,
+      toColumnId: target.id,
+      beforeTaskId: null,
+      afterTaskId: null,
+      expectedVersion: state.version,
+    })).toEqual(moved);
+    expect(() => store.moveBoardCard({
+      commandId: randomUUID(),
+      workspaceId: workspace.id,
+      boardId: initial.board.id,
+      taskId: task.id,
+      toColumnId: initial.columns[0]!.id,
+      beforeTaskId: null,
+      afterTaskId: null,
+      expectedVersion: state.version,
+    })).toThrow("another command");
+    store.close();
+  });
+
+  it("creates project boards and removes stale project placement when a task changes project", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/project-boards",
+      outputPath: "/workspace/project-boards/output",
+    });
+    const first = store.createProject({ workspaceId: workspace.id, name: "First" });
+    const second = store.createProject({ workspaceId: workspace.id, name: "Second" });
+    const boards = store.listBoards(workspace.id);
+    const firstBoard = boards.find(({ projectId }) => projectId === first.id)!;
+    const secondBoard = boards.find(({ projectId }) => projectId === second.id)!;
+    const task = store.createTask({ workspaceId: workspace.id, projectId: first.id, title: "Task", goal: "Do it" });
+    expect(store.getBoardSnapshot(workspace.id, firstBoard.id).states.some(({ taskId }) => taskId === task.id)).toBe(true);
+    store.updateSession(task.id, { projectId: second.id });
+    expect(store.getBoardSnapshot(workspace.id, firstBoard.id).states.some(({ taskId }) => taskId === task.id)).toBe(false);
+    expect(store.getBoardSnapshot(workspace.id, secondBoard.id).states.some(({ taskId }) => taskId === task.id)).toBe(true);
+    store.close();
+  });
+
+  it("places board cards before and after exact neighboring tasks", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Ordered board",
+      rootPath: "/workspace/ordered-board",
+      outputPath: "/workspace/ordered-board/output",
+    });
+    const first = store.createTask({ workspaceId: workspace.id, title: "First", goal: "First" });
+    const second = store.createTask({ workspaceId: workspace.id, title: "Second", goal: "Second" });
+    const third = store.createTask({ workspaceId: workspace.id, title: "Third", goal: "Third" });
+    const initial = store.getBoardSnapshot(workspace.id);
+    const columnId = initial.columns[0]!.id;
+    const thirdState = initial.states.find(({ taskId }) => taskId === third.id)!;
+
+    const before = store.moveBoardCard({
+      commandId: randomUUID(),
+      workspaceId: workspace.id,
+      boardId: initial.board.id,
+      taskId: third.id,
+      toColumnId: columnId,
+      beforeTaskId: first.id,
+      afterTaskId: null,
+      expectedVersion: thirdState.version,
+    });
+    expect(before.states.filter(({ columnId: id }) => id === columnId).map(({ taskId }) => taskId))
+      .toEqual([third.id, first.id, second.id]);
+
+    const firstState = before.states.find(({ taskId }) => taskId === first.id)!;
+    const after = store.moveBoardCard({
+      commandId: randomUUID(),
+      workspaceId: workspace.id,
+      boardId: initial.board.id,
+      taskId: first.id,
+      toColumnId: columnId,
+      beforeTaskId: null,
+      afterTaskId: second.id,
+      expectedVersion: firstState.version,
+    });
+    expect(after.states.filter(({ columnId: id }) => id === columnId).map(({ taskId }) => taskId))
+      .toEqual([third.id, second.id, first.id]);
+    store.close();
+  });
+
+  it("persists conductor dependencies, leases, retries, and pause state", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Product",
+      rootPath: "/workspace/conductor",
+      outputPath: "/workspace/conductor/output",
+    });
+    const task = store.createTask({ workspaceId: workspace.id, title: "Research", goal: "Synthesize" });
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    const run = store.createConductorRun({
+      workspaceId: workspace.id,
+      taskId: task.id,
+      spec: {
+        maxParallel: 2,
+        nodes: [
+          { id: firstId, title: "Collect", prompt: "Collect facts", dependsOn: [], maxAttempts: 2 },
+          { id: secondId, title: "Write", prompt: "Write result", dependsOn: [firstId], maxAttempts: 1 },
+        ],
+      },
+    });
+    const initialStates = new Map(store.listConductorNodeStates(workspace.id, run.id).map((state) => [state.nodeId, state.status]));
+    expect(initialStates.get(firstId)).toBe("ready");
+    expect(initialStates.get(secondId)).toBe("pending");
+    expect(store.claimConductorRun(workspace.id, run.id, "owner-a").leaseOwner).toBe("owner-a");
+    expect(() => store.claimConductorRun(workspace.id, run.id, "owner-b")).toThrow("leased");
+    store.updateConductorNodeState(workspace.id, run.id, firstId, {
+      status: "completed",
+      attempt: 1,
+      output: "facts",
+      completedAt: new Date().toISOString(),
+    });
+    expect(store.listConductorNodeStates(workspace.id, run.id).find(({ nodeId }) => nodeId === secondId)?.status).toBe("ready");
+    expect(store.updateConductorRunStatus(workspace.id, run.id, "paused").status).toBe("paused");
+    store.close();
+  });
+
+  it("orders workspace and task event sequences numerically beyond ten events", () => {
+    const store = new PiWorkStore();
+    const workspace = store.createWorkspace({
+      name: "Events",
+      rootPath: "/workspace/events",
+      outputPath: "/workspace/events/output",
+    });
+    for (let index = 0; index < 12; index += 1) {
+      store.updateWorkspace(workspace.id, { name: `Events ${index}` });
+    }
+    const task = store.createTask({ workspaceId: workspace.id, title: "Events", goal: "Test ordering" });
+    for (let index = 0; index < 12; index += 1) {
+      store.updateSession(task.id, { title: `Task ${index}` });
+    }
+    const workspaceSequences = store.listWorkspaceEvents(workspace.id).map(({ sequence }) => sequence);
+    expect(workspaceSequences).toEqual(Array.from({ length: workspaceSequences.length }, (_, index) => index));
+    expect(workspaceSequences.at(-1)).toBeGreaterThan(10);
+    const sequences = store.listEvents(task.id).map(({ sequence }) => sequence);
+    expect(sequences).toEqual([...sequences].sort((left, right) => left - right));
+    expect(sequences.at(-1)).toBeGreaterThan(10);
+    store.close();
+  });
 });

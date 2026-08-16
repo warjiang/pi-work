@@ -11,6 +11,8 @@ import type {
   Attachment as StoredAttachment,
   AttachmentDraft,
   ChatMessage,
+  ConductorNodeState,
+  ConductorRun,
   Label,
   ModelCatalog,
   ModelOption,
@@ -22,6 +24,7 @@ import type {
   ToolApproval,
   Workspace,
 } from "@pi-work/protocol";
+import { conductorSpecSchema } from "@pi-work/protocol";
 import { MarkdownMessage } from "@/components/markdown-message.js";
 import { knownPlatformLinks, PlatformLinkCard } from "@/components/platform-link.js";
 import {
@@ -2226,6 +2229,7 @@ function TaskInspector(props: {
           <TabsList className="inspector-tabs">
             <TabsTrigger value="task">{props.t("task")}</TabsTrigger>
             <TabsTrigger value="plan">{props.t("plan")}</TabsTrigger>
+            <TabsTrigger value="orchestration">{props.t("orchestration")}</TabsTrigger>
             <TabsTrigger value="activity">{props.t("activity")}</TabsTrigger>
             <TabsTrigger value="output">{props.t("results")}</TabsTrigger>
           </TabsList>
@@ -2285,6 +2289,9 @@ function TaskInspector(props: {
             )}
           </InspectorSection>
         ) : null}
+        {props.tab === "orchestration" && props.workspace !== null ? (
+          <ConductorPanel session={props.session} workspace={props.workspace} t={props.t} />
+        ) : null}
         {props.tab === "activity" ? (
           <InspectorSection title={props.t("activity")}>
             {props.activityError ? <TaskSectionError t={props.t} onRetry={props.onRetryActivity} /> : props.activityLoading ? <InspectorLoading t={props.t} /> : (
@@ -2324,6 +2331,138 @@ function TaskInspector(props: {
         ) : null}
       </div>
     </aside>
+  );
+}
+
+function ConductorPanel(props: { session: Session; workspace: Workspace; t: T }) {
+  const queryClient = useQueryClient();
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [specDraft, setSpecDraft] = useState(() => JSON.stringify({
+    nodes: [{
+      id: crypto.randomUUID(),
+      title: props.session.title,
+      prompt: props.session.goal,
+      dependsOn: [],
+      maxAttempts: 2,
+    }],
+    maxParallel: 4,
+  }, null, 2));
+  const runs = useQuery({
+    queryKey: ["conductor-runs", props.workspace.id, props.session.id],
+    queryFn: () => window.piWork.conductor.list({
+      workspaceId: props.workspace.id,
+      taskId: props.session.id,
+    }),
+    refetchInterval: (query) => (query.state.data as ConductorRun[] | undefined)
+      ?.some(({ status }) => status === "pending" || status === "running") ? 1_000 : false,
+  });
+  const selectedRun = (runs.data ?? []).find(({ id }) => id === selectedRunId) ?? runs.data?.[0] ?? null;
+  const nodes = useQuery({
+    queryKey: ["conductor-nodes", props.workspace.id, selectedRun?.id],
+    queryFn: () => window.piWork.conductor.nodes({
+      workspaceId: props.workspace.id,
+      runId: selectedRun!.id,
+    }),
+    enabled: selectedRun !== null,
+    refetchInterval: selectedRun?.status === "pending" || selectedRun?.status === "running" ? 1_000 : false,
+  });
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["conductor-runs", props.workspace.id, props.session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["conductor-nodes", props.workspace.id] }),
+    ]);
+  };
+  const command = async (action: "start" | "pause" | "resume" | "stop") => {
+    if (selectedRun === null) return;
+    setError(null);
+    try {
+      await window.piWork.conductor[action]({
+        workspaceId: props.workspace.id,
+        runId: selectedRun.id,
+      });
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : props.t("failedToLoad"));
+    }
+  };
+  const createRun = async () => {
+    setError(null);
+    try {
+      const spec = conductorSpecSchema.parse(JSON.parse(specDraft));
+      const run = await window.piWork.conductor.create({
+        workspaceId: props.workspace.id,
+        taskId: props.session.id,
+        spec,
+      });
+      setSelectedRunId(run.id);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : props.t("invalidConductorSpec"));
+    }
+  };
+  return (
+    <div className="inspector-section-stack conductor-panel">
+      <InspectorSection title={props.t("orchestration")}>
+        <p className="inspector-help">{props.t("orchestrationDetail")}</p>
+        {(runs.data?.length ?? 0) > 0 ? (
+          <Select value={selectedRun?.id ?? ""} onValueChange={setSelectedRunId}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent><SelectGroup>{runs.data?.map((run, index) => (
+              <SelectItem key={run.id} value={run.id}>
+                {props.t("conductorRun")} {runs.data!.length - index} · {run.status}
+              </SelectItem>
+            ))}</SelectGroup></SelectContent>
+          </Select>
+        ) : <span className="inspector-empty-inline">{props.t("noConductorRuns")}</span>}
+        {selectedRun !== null ? (
+          <div className="conductor-run-summary">
+            <Badge>{selectedRun.status}</Badge>
+            <span>{selectedRun.spec.nodes.length} {props.t("conductorNodes")}</span>
+            <div className="inspector-actions">
+              {selectedRun.status === "pending" ? <Button size="sm" onClick={() => void command("start")}>{props.t("start")}</Button> : null}
+              {selectedRun.status === "running" ? <Button size="sm" variant="outline" onClick={() => void command("pause")}>{props.t("pause")}</Button> : null}
+              {selectedRun.status === "paused" ? <Button size="sm" onClick={() => void command("resume")}>{props.t("resume")}</Button> : null}
+              {selectedRun.status === "pending" || selectedRun.status === "running" || selectedRun.status === "paused"
+                ? <Button size="sm" variant="ghost" onClick={() => void command("stop")}>{props.t("stop")}</Button>
+                : null}
+            </div>
+          </div>
+        ) : null}
+      </InspectorSection>
+      {selectedRun !== null ? (
+        <InspectorSection title={props.t("conductorNodes")}>
+          <div className="conductor-node-list">
+            {(nodes.data ?? []).map((state) => (
+              <ConductorNodeCard key={state.nodeId} run={selectedRun} state={state} />
+            ))}
+          </div>
+        </InspectorSection>
+      ) : null}
+      <InspectorSection title={props.t("newConductorRun")}>
+        <Textarea
+          className="conductor-spec-editor"
+          value={specDraft}
+          onChange={(event) => setSpecDraft(event.target.value)}
+          rows={14}
+          spellCheck={false}
+        />
+        {error !== null ? <Alert><Icon name="alert" /><AlertDescription>{error}</AlertDescription></Alert> : null}
+        <Button variant="outline" onClick={() => void createRun()}>{props.t("createConductorRun")}</Button>
+      </InspectorSection>
+    </div>
+  );
+}
+
+function ConductorNodeCard(props: { run: ConductorRun; state: ConductorNodeState }) {
+  const node = props.run.spec.nodes.find(({ id }) => id === props.state.nodeId);
+  return (
+    <article className="conductor-node-card">
+      <header><strong>{node?.title ?? props.state.nodeId}</strong><Badge>{props.state.status}</Badge></header>
+      <small>Attempt {props.state.attempt}/{node?.maxAttempts ?? 1}</small>
+      {props.state.output !== null ? <pre>{props.state.output}</pre> : null}
+      {props.state.error !== null ? <Alert><AlertDescription>{props.state.error}</AlertDescription></Alert> : null}
+    </article>
   );
 }
 

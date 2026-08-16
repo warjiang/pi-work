@@ -70,6 +70,7 @@ export function App() {
     }
   });
   const [consoleCommandRequest, setConsoleCommandRequest] = useState<{ id: number; value: string } | null>(null);
+  const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>(undefined);
   const consoleCommandIdRef = useRef(0);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarAnimationReadyRef = useRef(false);
@@ -130,6 +131,22 @@ export function App() {
     queryFn: () => window.piWork.label.list(workflowWorkspaceId!),
     enabled: workflowWorkspaceId !== null,
   });
+  const boards = useQuery({
+    queryKey: ["boards", workflowWorkspaceId],
+    queryFn: () => window.piWork.board.list(workflowWorkspaceId!),
+    enabled: workflowWorkspaceId !== null,
+  });
+  const boardSnapshot = useQuery({
+    queryKey: ["board-snapshot", workflowWorkspaceId, selectedBoardId],
+    queryFn: () => window.piWork.board.snapshot({ workspaceId: workflowWorkspaceId, boardId: selectedBoardId }),
+    enabled: workflowWorkspaceId !== null,
+  });
+  const projects = useQuery({
+    queryKey: ["projects", workflowWorkspaceId],
+    queryFn: () => window.piWork.project.list(workflowWorkspaceId!),
+    enabled: workflowWorkspaceId !== null,
+  });
+  useEffect(() => setSelectedBoardId(undefined), [workflowWorkspaceId]);
   const folderSessions = scopedSessions.filter((session) => (
     session.kind === "task" && workspaceById.get(session.workspaceId)?.kind === "folder"
   ));
@@ -264,6 +281,10 @@ export function App() {
       queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
       queryClient.invalidateQueries({ queryKey: ["statuses"] }),
       queryClient.invalidateQueries({ queryKey: ["labels"] }),
+      queryClient.invalidateQueries({ queryKey: ["board-snapshot"] }),
+      queryClient.invalidateQueries({ queryKey: ["boards"] }),
+      queryClient.invalidateQueries({ queryKey: ["projects"] }),
+      queryClient.invalidateQueries({ queryKey: ["workspace-directories"] }),
       queryClient.invalidateQueries({ queryKey: ["artifacts"] }),
     ]);
   }
@@ -624,11 +645,14 @@ export function App() {
         {ui.view === "board" && boardWorkspace !== null ? (
             <BoardPage
               sessions={sessions.data ?? []}
+              snapshot={boardSnapshot.data}
+              boards={boards.data ?? []}
               statuses={statuses.data ?? []}
               labels={labels.data ?? []}
               workspace={boardWorkspace}
               t={t}
               onOpenTask={openSession}
+              onSelectBoard={setSelectedBoardId}
               onRefresh={refresh}
             />
         ) : null}
@@ -688,6 +712,7 @@ export function App() {
           workspaces={workspaces.data ?? []}
           providers={providers.data ?? []}
           models={models.data}
+          projects={projects.data ?? []}
           settings={appSettings}
           t={t}
           onOpenChange={ui.setNewTaskOpen}

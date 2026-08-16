@@ -3,6 +3,7 @@ import {
   agentRequestSchema,
   agentMessageSchema,
   cancelRemoteSkillPreviewInputSchema,
+  conductorSpecSchema,
   createDomainEntityInputSchema,
   createArtifactInputSchema,
   createSkillInputSchema,
@@ -40,13 +41,14 @@ describe("protocol schemas", () => {
     }).success).toBe(true);
   });
 
-  it("does not expose legacy project IDs in session schemas", () => {
-    expect(taskSchema.shape).not.toHaveProperty("projectId");
+  it("exposes task projects without accepting workspace identity mutations", () => {
+    expect(taskSchema.shape).toHaveProperty("projectId");
+    expect(taskSchema.shape.projectId.parse(null)).toBeNull();
     expect(sessionSearchInputSchema.parse({ projectId: null })).not.toHaveProperty("projectId");
     expect(updateSessionInputSchema.parse({
       sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
       projectId: "018f88d1-1eb5-709a-90ef-4325747e294d",
-    })).not.toHaveProperty("projectId");
+    })).toHaveProperty("projectId", "018f88d1-1eb5-709a-90ef-4325747e294d");
     expect(updateSessionInputSchema.parse({
       sessionId: "018f88d1-1eb5-709a-90ef-4325747e294c",
       workspaceId: "018f88d1-1eb5-709a-90ef-4325747e294d",
@@ -80,6 +82,17 @@ describe("protocol schemas", () => {
       runtime: { cwd: "/workspace", agentDir: "/user/pi-agent" },
     }).success).toBe(true);
     expect(extensionSourceSchema.safeParse("  ").success).toBe(false);
+  });
+
+  it("rejects cyclic conductor graphs", () => {
+    const first = "018f88d1-1eb5-709a-90ef-4325747e294c";
+    const second = "018f88d1-1eb5-709a-90ef-4325747e294d";
+    expect(conductorSpecSchema.safeParse({
+      nodes: [
+        { id: first, title: "First", prompt: "First", dependsOn: [second] },
+        { id: second, title: "Second", prompt: "Second", dependsOn: [first] },
+      ],
+    }).success).toBe(false);
   });
 
   it("validates local and remote MCP configurations", () => {

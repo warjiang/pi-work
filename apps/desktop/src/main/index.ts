@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, screen, shell, utilityProcess, WebContentsView } from "electron";
 import type { OpenDialogOptions, Rectangle, UtilityProcess } from "electron";
@@ -23,6 +23,9 @@ import type {
   Automation,
   PermissionMode,
   McpRuntimeServer,
+  BoardSnapshot,
+  ConductorRun,
+  Project,
 } from "@pi-work/protocol";
 import {
   agentResponseSchema,
@@ -37,6 +40,18 @@ import {
   createTaskInputSchema,
   createWorkspaceInputSchema,
   addWorkspaceDirectoryInputSchema,
+  removeWorkspaceDirectoryInputSchema,
+  updateWorkspaceInputSchema,
+  createProjectInputSchema,
+  updateProjectInputSchema,
+  removeProjectInputSchema,
+  createBoardInputSchema,
+  createBoardColumnInputSchema,
+  updateBoardColumnInputSchema,
+  removeBoardColumnInputSchema,
+  moveBoardCardInputSchema,
+  createConductorRunInputSchema,
+  conductorRunCommandInputSchema,
   automationSchema,
   browserBoundsInputSchema,
   browserNavigateInputSchema,
@@ -112,6 +127,7 @@ import {
 import { loadWindowBounds, saveWindowBounds } from "./window-state.js";
 import { SecretsBroker, maskSecret } from "./secrets-broker.js";
 import { LangfuseExporter, type LangfuseConfig, type RunContext } from "./observability.js";
+import { DurableConductor } from "./conductor.js";
 
 let mainWindow: BrowserWindow | null = null;
 let windowStateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +141,7 @@ let managedCliRuntime: ManagedCliRuntime | null = null;
 let browserView: WebContentsView | null = null;
 let skillManager: SkillManager | null = null;
 let mcpOAuthManager: McpOAuthManager | null = null;
+let durableConductor: DurableConductor | null = null;
 const sessionEnvironments = new SessionEnvironmentStore();
 const pendingAgentRequests = new Map<string, {
   resolve: (response: AgentResponse) => void;
@@ -844,7 +861,7 @@ async function generatePlan(
 
 async function generateChat(
   sessionId: string,
-  messages: ChatMessage[],
+  messages: Array<Pick<ChatMessage, "role" | "content">>,
   provider: SetProviderCredentialInput | null,
   modelId: string,
   thinkingLevel: ThinkingLevel,
@@ -872,6 +889,43 @@ async function generateChat(
     throw new AgentRequestError("Pi chat service returned an unexpected response.", response.requestId);
   }
   return { content: response.content, cancelled: response.cancelled, requestId: response.requestId };
+}
+
+function getDurableConductor(): DurableConductor {
+  durableConductor ??= new DurableConductor(getStore(), async (run, node, dependencies, executionId) => {
+    const task = getStore().getTask(run.taskId);
+    const workspace = getStore().getWorkspace(run.workspaceId);
+    if (task === null || workspace === null || task.workspaceId !== workspace.id) {
+      throw new Error("Conductor task is no longer available.");
+    }
+    if (task.providerId === null || task.modelId === null) {
+      throw new Error("Choose a model for the task before starting its conductor run.");
+    }
+    const dependencyContext = dependencies.length === 0
+      ? ""
+      : `\n\nDependency results:\n${dependencies.map((dependency) => (
+        `## ${dependency.nodeId}\n${dependency.output ?? "(no output)"}`
+      )).join("\n\n")}`;
+    const response = await generateChat(
+      executionId,
+      [{
+        role: "user",
+        content: `Parent task: ${task.title}\nGoal: ${task.goal}\n\nNode: ${node.title}\n${node.prompt}${dependencyContext}`,
+      }],
+      await providerCredential(task.providerId),
+      task.modelId,
+      task.thinkingLevel,
+      agentRuntime(task.workingDirectory ?? workspace.rootPath, executionId),
+      task.permissionMode,
+      [],
+      await runtimeMcpServers(),
+    );
+    if (response.cancelled) throw new Error("Node execution was cancelled.");
+    return response.content;
+  }, async (executionId) => {
+    await sendAgentRequest({ type: "cancel", sessionId: executionId });
+  });
+  return durableConductor;
 }
 
 async function generateConversationTitle(
@@ -1238,10 +1292,11 @@ function registerIpc(): void {
       return null;
     }
 
-    const rootPath = result.filePaths[0];
-    if (rootPath === undefined) {
+    const selectedPath = result.filePaths[0];
+    if (selectedPath === undefined) {
       return null;
     }
+    const rootPath = await realpath(selectedPath);
     const existing = getStore().listWorkspaces().find((workspace) => (
       workspace.kind === "folder" && workspace.directories.includes(rootPath)
     ));
@@ -1265,8 +1320,9 @@ function registerIpc(): void {
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled) return null;
-    const directory = result.filePaths[0];
-    if (directory === undefined) return null;
+    const selectedDirectory = result.filePaths[0];
+    if (selectedDirectory === undefined) return null;
+    const directory = await realpath(selectedDirectory);
     const owner = getStore().listWorkspaces().find((candidate) => (
       candidate.kind === "folder" && candidate.directories.includes(directory)
     ));
@@ -1277,6 +1333,110 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("workspace:list", () => getStore().listWorkspaces().map((workspace) => workspaceSchema.parse(workspace)));
+  ipcMain.handle("workspace:get", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    const workspace = getStore().getWorkspace(id);
+    return workspace === null ? null : workspaceSchema.parse(workspace);
+  });
+  ipcMain.handle("workspace:update", (_event, input: unknown) => {
+    const { workspaceId, ...changes } = updateWorkspaceInputSchema.parse(input);
+    requireFolderWorkspace(workspaceId);
+    return workspaceSchema.parse(getStore().updateWorkspace(workspaceId, withoutUndefined(changes)));
+  });
+  ipcMain.handle("workspace:directories", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    requireFolderWorkspace(id);
+    return getStore().listWorkspaceDirectories(id);
+  });
+  ipcMain.handle("workspace:remove-directory", (_event, input: unknown) => {
+    const { workspaceId, directoryId } = removeWorkspaceDirectoryInputSchema.parse(input);
+    requireFolderWorkspace(workspaceId);
+    return workspaceSchema.parse(getStore().removeWorkspaceDirectory(workspaceId, directoryId));
+  });
+
+  ipcMain.handle("project:list", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    return getStore().listProjects(id);
+  });
+  ipcMain.handle("project:create", (_event, input: unknown) => {
+    const { workspaceId, name, ...details } = createProjectInputSchema.parse(input);
+    return getStore().createProject({ workspaceId, name, ...withoutUndefined(details) });
+  });
+  ipcMain.handle("project:update", (_event, input: unknown) => {
+    const { workspaceId, projectId, ...changes } = updateProjectInputSchema.parse(input);
+    return getStore().updateProject(workspaceId, projectId, withoutUndefined(changes));
+  });
+  ipcMain.handle("project:remove", (_event, input: unknown) => {
+    const { workspaceId, projectId } = removeProjectInputSchema.parse(input);
+    getStore().removeProject(workspaceId, projectId);
+  });
+
+  ipcMain.handle("board:list", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    return getStore().listBoards(id);
+  });
+  ipcMain.handle("board:snapshot", (_event, input: unknown) => {
+    const value = input as { workspaceId?: unknown; boardId?: unknown };
+    const workspaceId = workspaceSchema.shape.id.parse(value.workspaceId);
+    const boardId = value.boardId === undefined ? undefined : workspaceSchema.shape.id.parse(value.boardId);
+    return getStore().getBoardSnapshot(workspaceId, boardId);
+  });
+  ipcMain.handle("board:create", (_event, input: unknown) => (
+    getStore().createBoard(createBoardInputSchema.parse(input))
+  ));
+  ipcMain.handle("board:column-create", (_event, input: unknown) => (
+    getStore().createBoardColumn(createBoardColumnInputSchema.parse(input))
+  ));
+  ipcMain.handle("board:column-update", (_event, input: unknown) => {
+    const { workspaceId, boardId, columnId, ...changes } = updateBoardColumnInputSchema.parse(input);
+    return getStore().updateBoardColumn(workspaceId, boardId, columnId, withoutUndefined(changes));
+  });
+  ipcMain.handle("board:column-remove", (_event, input: unknown) => {
+    const parsed = removeBoardColumnInputSchema.parse(input);
+    getStore().removeBoardColumn(
+      parsed.workspaceId,
+      parsed.boardId,
+      parsed.columnId,
+      parsed.migrateToColumnId,
+    );
+  });
+  ipcMain.handle("board:move-card", (_event, input: unknown) => (
+    getStore().moveBoardCard(moveBoardCardInputSchema.parse(input))
+  ));
+
+  ipcMain.handle("conductor:list", (_event, input: unknown) => {
+    const value = input as { workspaceId?: unknown; taskId?: unknown };
+    const workspaceId = workspaceSchema.shape.id.parse(value.workspaceId);
+    const taskId = value.taskId === undefined ? undefined : workspaceSchema.shape.id.parse(value.taskId);
+    return getStore().listConductorRuns(workspaceId, taskId);
+  });
+  ipcMain.handle("conductor:get", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getStore().getConductorRun(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:create", (_event, input: unknown) => (
+    getStore().createConductorRun(createConductorRunInputSchema.parse(input))
+  ));
+  ipcMain.handle("conductor:nodes", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getStore().listConductorNodeStates(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:start", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().start(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:pause", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().pause(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:resume", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().resume(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:stop", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().stop(workspaceId, runId);
+  });
   ipcMain.handle("provider:list", () => getCredentialBroker().list());
   ipcMain.handle("provider:save", (_event, input: unknown) => {
     const parsed = setProviderCredentialInputSchema.parse(input);
@@ -1952,6 +2112,10 @@ function registerIpc(): void {
     });
     ipcMain.handle(`${name}:update`, (_event, input: unknown) => {
       const parsed = updateDomainEntityInputSchema.parse(input);
+      if (parsed.workspaceId !== undefined) {
+        const current = definition.list(parsed.workspaceId).find(({ id }) => id === parsed.id);
+        if (current === undefined) throw new Error(`${name} belongs to a different workspace.`);
+      }
       if (domainName === "source") {
         const current = findSource(parsed.id);
         if (current === undefined) throw new Error("Unknown source.");
@@ -1960,7 +2124,11 @@ function registerIpc(): void {
       return getStore().updateDomainEntity(domainName, schema, parsed.id, parsed.value);
     });
     ipcMain.handle(`${name}:remove`, (_event, input: unknown) => {
-      const { id } = removeDomainEntityInputSchema.parse(input);
+      const { id, workspaceId } = removeDomainEntityInputSchema.parse(input);
+      if (workspaceId !== undefined) {
+        const current = definition.list(workspaceId).find((entity) => entity.id === id);
+        if (current === undefined) throw new Error(`${name} belongs to a different workspace.`);
+      }
       if (domainName === "status") getStore().removeStatus(id);
       else if (domainName === "label") getStore().removeLabel(id);
       else {
@@ -2053,10 +2221,10 @@ function ensureDefaultStatuses(workspaceId: string): void {
   if (getStore().listStatuses(workspaceId).length > 0) return;
   const english = getStore().getAppSettings().language === "en";
   [
-    { name: english ? "To do" : "待处理", color: "#8a8275", position: 0 },
-    { name: english ? "In progress" : "进行中", color: "#a66f2b", position: 1 },
-    { name: english ? "Waiting" : "等待", color: "#967448", position: 2 },
-    { name: english ? "Completed" : "已完成", color: "#58745d", position: 3 },
+    { name: english ? "To do" : "待处理", color: "#8a8275", position: 0, category: "open" as const },
+    { name: english ? "In progress" : "进行中", color: "#a66f2b", position: 1, category: "active" as const },
+    { name: english ? "Waiting" : "等待", color: "#967448", position: 2, category: "review" as const },
+    { name: english ? "Completed" : "已完成", color: "#58745d", position: 3, category: "closed" as const },
   ].forEach((value) => getStore().createDomainEntity("status", statusDefinitionSchema, {
     workspaceId,
     ...value,
@@ -2070,6 +2238,7 @@ app.whenReady().then(async () => {
     getStore().updateAppSettings(legacyDefault);
   }
   registerIpc();
+  getDurableConductor().recover();
   getObservabilityExporter();
   createWindow();
   app.on("activate", () => {
@@ -2087,6 +2256,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   closeBrowserView();
+  durableConductor?.dispose();
   void skillManager?.dispose();
   observabilityExporter?.persistPendingSync();
   store?.close();

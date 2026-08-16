@@ -8,6 +8,7 @@ import type {
   ModelOption,
   PermissionMode,
   ProviderConfig,
+  Project,
   Session,
   Skill,
   Source,
@@ -549,6 +550,7 @@ export function NewTaskDialog(props: {
   workspaces: Workspace[];
   providers: ProviderConfig[];
   models: ModelCatalog | undefined;
+  projects: Project[];
   settings: AppSettings | undefined;
   t: T;
   onOpenChange(open: boolean): void;
@@ -565,6 +567,7 @@ export function NewTaskDialog(props: {
   const [modelKey, setModelKey] = useState(defaultModel ? `${defaultModel.providerId}/${defaultModel.modelId}` : "");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.settings?.thinkingLevel ?? "off");
   const [workingDirectory, setWorkingDirectory] = useState(workspace?.rootPath ?? "");
+  const [projectId, setProjectId] = useState("__none");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -575,7 +578,10 @@ export function NewTaskDialog(props: {
         : (defaultModel.thinkingLevels[0] ?? "off"));
     }
   }, [defaultModel, modelKey, props.settings?.thinkingLevel]);
-  useEffect(() => setWorkingDirectory(workspace?.rootPath ?? ""), [workspace?.id, workspace?.rootPath]);
+  useEffect(() => {
+    setWorkingDirectory(workspace?.rootPath ?? "");
+    setProjectId("__none");
+  }, [workspace?.id, workspace?.rootPath]);
 
   const selectedModel = availableModels.find((model) => `${model.providerId}/${model.modelId}` === modelKey);
   const create = useMutation({
@@ -586,6 +592,7 @@ export function NewTaskDialog(props: {
       if (workspace === null) throw new Error(props.t("chooseFolder"));
       return window.piWork.task.create({
         workspaceId: workspace.id,
+        projectId: projectId === "__none" ? null : projectId,
         title: title.trim() || cleanGoal.slice(0, 80),
         goal: cleanGoal,
         kind: "task",
@@ -622,6 +629,16 @@ export function NewTaskDialog(props: {
           <Field>
             <FieldLabel>{props.t("taskDescription")}</FieldLabel>
             <Textarea autoFocus value={goal} onChange={(event) => setGoal(event.target.value)} rows={5} placeholder={props.t("goal")} />
+          </Field>
+          <Field>
+            <FieldLabel>{props.t("project")}</FieldLabel>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value="__none">{props.t("noProject")}</SelectItem>
+                {props.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
+              </SelectGroup></SelectContent>
+            </Select>
           </Field>
           <Field>
             <FieldLabel>{props.t("confirmation")}</FieldLabel>

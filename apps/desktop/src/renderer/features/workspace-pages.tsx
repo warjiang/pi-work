@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Automation,
+  Board,
+  BoardColumn,
+  BoardSnapshot,
   Label,
   MarketplaceSkill,
   RemoteSkillPreview,
@@ -58,7 +61,7 @@ import { Textarea } from "@/components/ui/textarea.js";
 import { Switch } from "@/components/ui/switch.js";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group.js";
-import { sessionsByStage, sessionsForBoard } from "@/board.js";
+import { sessionsForBoard } from "@/board.js";
 import type { MessageKey } from "@/i18n.js";
 
 type T = (key: MessageKey) => string;
@@ -82,14 +85,99 @@ export function PageHeader(props: { eyebrow?: string; title: string; detail?: st
 }
 
 export function FolderSettingsPage({ workspace, t }: { workspace: Workspace; t: T }) {
+  const queryClient = useQueryClient();
+  const workspaceQuery = useQuery({
+    queryKey: ["workspace", workspace.id],
+    queryFn: () => window.piWork.workspace.get(workspace.id),
+    initialData: workspace,
+  });
+  const directories = useQuery({
+    queryKey: ["workspace-directories", workspace.id],
+    queryFn: () => window.piWork.workspace.directories(workspace.id),
+  });
+  const projects = useQuery({
+    queryKey: ["projects", workspace.id],
+    queryFn: () => window.piWork.project.list(workspace.id),
+  });
+  const current = workspaceQuery.data ?? workspace;
+  const [name, setName] = useState(current.name);
+  const [outputPath, setOutputPath] = useState(current.outputPath);
+  const [projectName, setProjectName] = useState("");
+  useEffect(() => {
+    setName(current.name);
+    setOutputPath(current.outputPath);
+  }, [current.name, current.outputPath]);
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["workspace", workspace.id] }),
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+      queryClient.invalidateQueries({ queryKey: ["workspace-directories", workspace.id] }),
+      queryClient.invalidateQueries({ queryKey: ["projects", workspace.id] }),
+      queryClient.invalidateQueries({ queryKey: ["board-snapshot", workspace.id] }),
+    ]);
+  };
+  const save = useMutation({
+    mutationFn: () => window.piWork.workspace.update({
+      workspaceId: workspace.id,
+      name: name.trim(),
+      outputPath: outputPath.trim(),
+      expectedVersion: current.version,
+    }),
+    onSuccess: refresh,
+  });
+  const createProject = useMutation({
+    mutationFn: () => window.piWork.project.create({
+      workspaceId: workspace.id,
+      name: projectName.trim(),
+    }),
+    onSuccess: async () => {
+      setProjectName("");
+      await refresh();
+    },
+  });
   return (
     <section className="page">
-      <PageHeader eyebrow={workspace.name} title={t("folderSettings")} detail={t("folderSettingsDetail")} />
+      <PageHeader eyebrow={current.name} title={t("folderSettings")} detail={t("folderSettingsDetail")} />
       <div className="page-body">
         <section className="settings-section">
+          <FieldGroup>
+            <Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field>
+            <Field><FieldLabel>{t("artifactRoot")}</FieldLabel><Input value={outputPath} onChange={(event) => setOutputPath(event.target.value)} /></Field>
+            <Button disabled={save.isPending || name.trim() === "" || outputPath.trim() === ""} onClick={() => save.mutate()}>{t("save")}</Button>
+          </FieldGroup>
+        </section>
+        <section className="settings-section">
+          <PageHeader title={t("authorizedFolders")} action={<Button variant="outline" onClick={() => void window.piWork.workspace.addDirectory(workspace.id).then(refresh)}><Icon name="plus" />{t("addDirectory")}</Button>} />
           <div className="folder-settings-list">
-            <div><Icon name="workspace" /><span><strong>{t("folderRoot")}</strong><code>{workspace.rootPath}</code></span></div>
-            <div><Icon name="file-output" /><span><strong>{t("artifactRoot")}</strong><code>{workspace.outputPath}</code></span></div>
+            {(directories.data ?? []).map((directory) => (
+              <div key={directory.id}>
+                <Icon name="workspace" />
+                <span><strong>{directory.isRoot ? t("folderRoot") : t("authorizedFolders")}</strong><code>{directory.path}</code></span>
+                {!directory.isRoot ? <Button variant="ghost" size="icon" aria-label={t("delete")} onClick={() => void window.piWork.workspace.removeDirectory({ workspaceId: workspace.id, directoryId: directory.id }).then(refresh)}><Icon name="trash" /></Button> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="settings-section">
+          <PageHeader title={t("projects")} detail={t("projectsDetail")} />
+          <div className="workflow-list">
+            {(projects.data ?? []).map((project) => (
+              <div className="workflow-row" key={project.id}>
+                <span className="color-preview" style={{ background: project.color }} />
+                <Input
+                  defaultValue={project.name}
+                  onBlur={(event) => {
+                    const next = event.target.value.trim();
+                    if (next !== "" && next !== project.name) void window.piWork.project.update({ workspaceId: workspace.id, projectId: project.id, name: next }).then(refresh);
+                  }}
+                />
+                <Button variant="ghost" size="icon" aria-label={t("delete")} onClick={() => void window.piWork.project.remove({ workspaceId: workspace.id, projectId: project.id }).then(refresh)}><Icon name="trash" /></Button>
+              </div>
+            ))}
+            <div className="workflow-create">
+              <Input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder={t("projectName")} />
+              <Button disabled={projectName.trim() === "" || createProject.isPending} onClick={() => createProject.mutate()}><Icon name="plus" />{t("add")}</Button>
+            </div>
           </div>
         </section>
       </div>
@@ -99,22 +187,38 @@ export function FolderSettingsPage({ workspace, t }: { workspace: Workspace; t: 
 
 export function BoardPage(props: {
   sessions: Session[];
+  snapshot: BoardSnapshot | undefined;
+  boards: Board[];
   statuses: StatusDefinition[];
   labels: Label[];
   workspace: Workspace;
   t: T;
   onOpenTask(taskId: string): void;
+  onSelectBoard(boardId: string | undefined): void;
   onRefresh(): Promise<void>;
 }) {
   const [mode, setMode] = useState<"board" | "list">("board");
   const [manageOpen, setManageOpen] = useState(false);
   const visible = sessionsForBoard(props.sessions, props.workspace.id);
-  const columns: Array<StatusDefinition | null> = [
-    ...[...props.statuses].sort((a, b) => a.position - b.position),
-    null,
-  ];
-  async function moveSession(sessionId: string, statusId: string | null) {
-    await window.piWork.session.update({ sessionId, statusId });
+  const columns = props.snapshot?.columns ?? [];
+  const stateByTaskId = new Map((props.snapshot?.states ?? []).map((state) => [state.taskId, state]));
+  async function moveSession(
+    sessionId: string,
+    columnId: string,
+    position: { beforeTaskId?: string; afterTaskId?: string } = {},
+  ) {
+    const state = stateByTaskId.get(sessionId);
+    if (state === undefined || props.snapshot === undefined) return;
+    await window.piWork.board.moveCard({
+      commandId: crypto.randomUUID(),
+      workspaceId: props.workspace.id,
+      boardId: props.snapshot.board.id,
+      taskId: sessionId,
+      toColumnId: columnId,
+      beforeTaskId: position.beforeTaskId ?? null,
+      afterTaskId: position.afterTaskId ?? null,
+      expectedVersion: state.version,
+    });
     await props.onRefresh();
   }
   return (
@@ -123,24 +227,38 @@ export function BoardPage(props: {
         eyebrow={props.workspace.name}
         title={props.t("board")}
         detail={props.t("boardDetail")}
-        action={<div className="page-header-actions"><ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup><Button variant="outline" onClick={() => setManageOpen(true)}><Icon name="sliders" />{props.t("manage")}</Button></div>}
+        action={<div className="page-header-actions">
+          <Select value={props.snapshot?.board.id ?? ""} onValueChange={(value) => props.onSelectBoard(value)}>
+            <SelectTrigger aria-label={props.t("board")}><SelectValue placeholder={props.t("board")} /></SelectTrigger>
+            <SelectContent><SelectGroup>{props.boards.map((board) => <SelectItem key={board.id} value={board.id}>{board.name}</SelectItem>)}</SelectGroup></SelectContent>
+          </Select>
+          <ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup>
+          <Button variant="outline" onClick={() => setManageOpen(true)}><Icon name="sliders" />{props.t("manage")}</Button>
+        </div>}
       />
       <div className="page-body board-body">
         {mode === "board" ? (
           <div className="kanban">
-            {columns.map((status) => {
-              const columnSessions = sessionsByStage(visible, status, props.statuses);
+            {columns.map((column) => {
+              const taskOrder = new Map(
+                (props.snapshot?.states ?? [])
+                  .filter((state) => state.columnId === column.id)
+                  .map((state, index) => [state.taskId, index]),
+              );
+              const columnSessions = visible
+                .filter((session) => stateByTaskId.get(session.id)?.columnId === column.id)
+                .sort((left, right) => (taskOrder.get(left.id) ?? 0) - (taskOrder.get(right.id) ?? 0));
               return (
                 <section
                   className="kanban-column"
-                  key={status?.id ?? "uncategorized"}
+                  key={column.id}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => {
                     const sessionId = event.dataTransfer.getData("application/x-pi-work-session");
-                    if (sessionId !== "") void moveSession(sessionId, status?.id ?? null);
+                    if (sessionId !== "") void moveSession(sessionId, column.id);
                   }}
                 >
-                  <header><span>{status ? <i style={{ background: status.color }} /> : <i className="uncategorized-dot" />}<strong>{status?.name ?? props.t("uncategorized")}</strong></span><small>{columnSessions.length}</small></header>
+                  <header><span><i style={{ background: column.color }} /><strong>{column.name}</strong></span><small>{columnSessions.length}</small></header>
                   <div className="kanban-cards">
                     {columnSessions.map((session) => (
                       <Button
@@ -151,6 +269,21 @@ export function BoardPage(props: {
                         onDragStart={(event) => {
                           event.dataTransfer.effectAllowed = "move";
                           event.dataTransfer.setData("application/x-pi-work-session", session.id);
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const sessionId = event.dataTransfer.getData("application/x-pi-work-session");
+                          if (sessionId === "" || sessionId === session.id) return;
+                          const bounds = event.currentTarget.getBoundingClientRect();
+                          const after = event.clientY >= bounds.top + bounds.height / 2;
+                          void moveSession(sessionId, column.id, after
+                            ? { afterTaskId: session.id }
+                            : { beforeTaskId: session.id });
                         }}
                         onClick={() => props.onOpenTask(session.id)}
                       >
@@ -179,7 +312,7 @@ export function BoardPage(props: {
           </div>
         )}
       </div>
-      <WorkflowManager open={manageOpen} workspaceId={props.workspace.id} statuses={props.statuses} labels={props.labels} t={props.t} onOpenChange={setManageOpen} onRefresh={props.onRefresh} />
+      <WorkflowManager open={manageOpen} workspaceId={props.workspace.id} snapshot={props.snapshot} statuses={props.statuses} labels={props.labels} t={props.t} onOpenChange={setManageOpen} onRefresh={props.onRefresh} />
     </section>
   );
 }
@@ -187,19 +320,31 @@ export function BoardPage(props: {
 function WorkflowManager(props: {
   open: boolean;
   workspaceId: string;
+  snapshot: BoardSnapshot | undefined;
   statuses: StatusDefinition[];
   labels: Label[];
   t: T;
   onOpenChange(open: boolean): void;
   onRefresh(): Promise<void>;
 }) {
-  const [tab, setTab] = useState<"statuses" | "labels">("statuses");
+  const [tab, setTab] = useState<"statuses" | "labels" | "columns">("statuses");
   const [name, setName] = useState("");
   const [color, setColor] = useState("#8a8275");
   const [removeTarget, setRemoveTarget] = useState<{ id: string; name: string; kind: "status" | "label" } | null>(null);
   const create = useMutation({
     mutationFn: async () => {
-      if (tab === "statuses") return window.piWork.status.create({ workspaceId: props.workspaceId, value: { name, color, position: props.statuses.length } });
+      if (tab === "columns") {
+        if (props.snapshot === undefined) throw new Error("Board is not ready.");
+        return window.piWork.board.createColumn({
+          workspaceId: props.workspaceId,
+          boardId: props.snapshot.board.id,
+          name,
+          color,
+          statusIds: [],
+          dropStatusId: null,
+        });
+      }
+      if (tab === "statuses") return window.piWork.status.create({ workspaceId: props.workspaceId, value: { name, color, position: props.statuses.length, category: "open" } });
       return window.piWork.label.create({ workspaceId: props.workspaceId, value: { name, color, parentId: null } });
     },
     onSuccess: async () => {
@@ -209,14 +354,14 @@ function WorkflowManager(props: {
   });
   async function updateName(kind: "status" | "label", id: string, nextName: string) {
     if (!nextName.trim()) return;
-    if (kind === "status") await window.piWork.status.update({ id, value: { name: nextName.trim() } });
-    else await window.piWork.label.update({ id, value: { name: nextName.trim() } });
+    if (kind === "status") await window.piWork.status.update({ workspaceId: props.workspaceId, id, value: { name: nextName.trim() } });
+    else await window.piWork.label.update({ workspaceId: props.workspaceId, id, value: { name: nextName.trim() } });
     await props.onRefresh();
   }
   async function remove() {
     if (removeTarget === null) return;
-    if (removeTarget.kind === "status") await window.piWork.status.remove(removeTarget.id);
-    else await window.piWork.label.remove(removeTarget.id);
+    if (removeTarget.kind === "status") await window.piWork.status.remove(removeTarget.id, props.workspaceId);
+    else await window.piWork.label.remove(removeTarget.id, props.workspaceId);
     setRemoveTarget(null);
     await props.onRefresh();
   }
@@ -226,9 +371,20 @@ function WorkflowManager(props: {
       <Dialog open={props.open} onOpenChange={props.onOpenChange}>
         <DialogContent className="workflow-dialog">
           <DialogHeader><DialogTitle>{props.t("manageWorkflow")}</DialogTitle><DialogDescription>{props.t("workflowDetail")}</DialogDescription></DialogHeader>
-          <ToggleGroup type="single" value={tab} onValueChange={(value) => value && setTab(value as "statuses" | "labels")}><ToggleGroupItem value="statuses">{props.t("workStage")}</ToggleGroupItem><ToggleGroupItem value="labels">{props.t("labels")}</ToggleGroupItem></ToggleGroup>
+          <ToggleGroup type="single" value={tab} onValueChange={(value) => value && setTab(value as "statuses" | "labels" | "columns")}><ToggleGroupItem value="statuses">{props.t("workStage")}</ToggleGroupItem><ToggleGroupItem value="columns">{props.t("boardColumns")}</ToggleGroupItem><ToggleGroupItem value="labels">{props.t("labels")}</ToggleGroupItem></ToggleGroup>
           <div className="workflow-list">
-            {values.map((value) => <WorkflowRow key={value.id} value={value} onSave={(nextName) => updateName(tab === "statuses" ? "status" : "label", value.id, nextName)} onDelete={() => setRemoveTarget({ id: value.id, name: value.name, kind: tab === "statuses" ? "status" : "label" })} t={props.t} />)}
+            {tab === "columns"
+              ? (props.snapshot?.columns ?? []).map((column) => (
+                <BoardColumnRow
+                  key={column.id}
+                  column={column}
+                  columns={props.snapshot?.columns ?? []}
+                  statuses={props.statuses}
+                  t={props.t}
+                  onRefresh={props.onRefresh}
+                />
+              ))
+              : values.map((value) => <WorkflowRow key={value.id} value={value} onSave={(nextName) => updateName(tab === "statuses" ? "status" : "label", value.id, nextName)} onDelete={() => setRemoveTarget({ id: value.id, name: value.name, kind: tab === "statuses" ? "status" : "label" })} t={props.t} />)}
           </div>
           <div className="workflow-create"><span className="color-preview" style={{ background: color }} /><Input value={name} onChange={(event) => setName(event.target.value)} placeholder={props.t("name")} /><Input className="color-input" value={color} onChange={(event) => setColor(event.target.value)} aria-label={props.t("color")} /><Button disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}><Icon name="plus" />{props.t("add")}</Button></div>
           <DialogFooter><Button variant="ghost" onClick={() => props.onOpenChange(false)}>{props.t("close")}</Button></DialogFooter>
@@ -244,6 +400,62 @@ function WorkflowManager(props: {
 function WorkflowRow(props: { value: StatusDefinition | Label; t: T; onSave(name: string): Promise<void>; onDelete(): void }) {
   const [name, setName] = useState(props.value.name);
   return <div className="workflow-row"><span className="color-preview" style={{ background: props.value.color }} /><Input value={name} onChange={(event) => setName(event.target.value)} onBlur={() => void props.onSave(name)} /><Button variant="ghost" size="icon" aria-label={props.t("delete")} onClick={props.onDelete}><Icon name="trash" /></Button></div>;
+}
+
+function BoardColumnRow(props: {
+  column: BoardColumn;
+  columns: BoardColumn[];
+  statuses: StatusDefinition[];
+  t: T;
+  onRefresh(): Promise<void>;
+}) {
+  const [name, setName] = useState(props.column.name);
+  const update = async (value: Partial<Pick<BoardColumn, "name" | "dropStatusId" | "statusIds">>) => {
+    await window.piWork.board.updateColumn({
+      workspaceId: props.column.workspaceId,
+      boardId: props.column.boardId,
+      columnId: props.column.id,
+      ...value,
+    });
+    await props.onRefresh();
+  };
+  const remove = async () => {
+    const destination = props.columns.find(({ id }) => id !== props.column.id);
+    if (destination === undefined) return;
+    await window.piWork.board.removeColumn({
+      workspaceId: props.column.workspaceId,
+      boardId: props.column.boardId,
+      columnId: props.column.id,
+      migrateToColumnId: destination.id,
+    });
+    await props.onRefresh();
+  };
+  return (
+    <div className="workflow-row">
+      <span className="color-preview" style={{ background: props.column.color }} />
+      <Input
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        onBlur={() => {
+          if (name.trim() !== "" && name.trim() !== props.column.name) void update({ name: name.trim() });
+        }}
+      />
+      <Select
+        value={props.column.dropStatusId ?? "__none"}
+        onValueChange={(value) => void update({
+          dropStatusId: value === "__none" ? null : value,
+          statusIds: value === "__none" ? [] : [value],
+        })}
+      >
+        <SelectTrigger aria-label={props.t("dropStatus")}><SelectValue /></SelectTrigger>
+        <SelectContent><SelectGroup>
+          <SelectItem value="__none">{props.t("noStatusChange")}</SelectItem>
+          {props.statuses.map((status) => <SelectItem key={status.id} value={status.id}>{status.name}</SelectItem>)}
+        </SelectGroup></SelectContent>
+      </Select>
+      <Button variant="ghost" size="icon" disabled={props.columns.length <= 1} aria-label={props.t("delete")} onClick={() => void remove()}><Icon name="trash" /></Button>
+    </div>
+  );
 }
 
 export function SourcesPage({ workspaceId, t }: { workspaceId: string; t: T }) {

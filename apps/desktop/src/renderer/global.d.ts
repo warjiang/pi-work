@@ -29,6 +29,13 @@ import type {
   ToolApproval,
   UsageSummary,
   Workspace,
+  WorkspaceDirectory,
+  Project,
+  Board,
+  BoardColumn,
+  BoardSnapshot,
+  ConductorRun,
+  ConductorNodeState,
 } from "@pi-work/protocol";
 
 declare global {
@@ -37,7 +44,36 @@ declare global {
       workspace: {
         choose(): Promise<Workspace | null>;
         list(): Promise<Workspace[]>;
+        get(workspaceId: string): Promise<Workspace | null>;
+        update(input: unknown): Promise<Workspace>;
+        directories(workspaceId: string): Promise<WorkspaceDirectory[]>;
         addDirectory(workspaceId: string): Promise<Workspace | null>;
+        removeDirectory(input: unknown): Promise<Workspace>;
+      };
+      project: {
+        list(workspaceId: string): Promise<Project[]>;
+        create(input: unknown): Promise<Project>;
+        update(input: unknown): Promise<Project>;
+        remove(input: unknown): Promise<void>;
+      };
+      board: {
+        list(workspaceId: string): Promise<Board[]>;
+        snapshot(input: unknown): Promise<BoardSnapshot>;
+        create(input: unknown): Promise<Board>;
+        createColumn(input: unknown): Promise<BoardColumn>;
+        updateColumn(input: unknown): Promise<BoardColumn>;
+        removeColumn(input: unknown): Promise<void>;
+        moveCard(input: unknown): Promise<BoardSnapshot>;
+      };
+      conductor: {
+        list(input: unknown): Promise<ConductorRun[]>;
+        get(input: unknown): Promise<ConductorRun | null>;
+        create(input: unknown): Promise<ConductorRun>;
+        nodes(input: unknown): Promise<ConductorNodeState[]>;
+        start(input: unknown): Promise<ConductorRun>;
+        pause(input: unknown): Promise<ConductorRun>;
+        resume(input: unknown): Promise<ConductorRun>;
+        stop(input: unknown): Promise<ConductorRun>;
       };
       provider: {
         list(): Promise<ProviderConfig[]>;
@@ -171,7 +207,7 @@ type DomainApi<T> = {
   list(workspaceId: string): Promise<T[]>;
   create(input: unknown): Promise<T>;
   update(input: unknown): Promise<T>;
-  remove(id: string): Promise<void>;
+  remove(id: string, workspaceId?: string): Promise<void>;
 };
 
 type SkillApi = {
