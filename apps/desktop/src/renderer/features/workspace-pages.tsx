@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { MarkdownMessage } from "@/components/markdown-message.js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Automation,
@@ -1336,6 +1337,7 @@ function SkillEditor({ skill, t, onSaved, onDeleted, onDirtyChange, registerSave
   const [name, setName] = useState(skill.name);
   const [description, setDescription] = useState(skill.description);
   const [instructions, setInstructions] = useState(skill.instructions);
+  const [instructionsView, setInstructionsView] = useState<"raw" | "preview">("raw");
   const [enabled, setEnabled] = useState(skill.enabled);
   const [error, setError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -1372,14 +1374,28 @@ function SkillEditor({ skill, t, onSaved, onDeleted, onDirtyChange, registerSave
   return <>
     <header className="skill-editor-header">
       <div><span>{skillSourceLabel(skill, t)}</span><h2>{skill.name}</h2><small>{dirty ? t("unsaved") : t("saved")}</small></div>
-      <div><label className="skill-enabled-control"><span>{t("enabled")}</span><Switch checked={enabled} disabled={save.isPending} onCheckedChange={setEnabled} /></label><Button variant="outline" size="icon" aria-label={t("delete")} onClick={() => setDeleteOpen(true)}><Icon name="trash" /></Button><Button disabled={!dirty || save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></div>
+      <div><label className="skill-enabled-control"><span>{t("enabled")}</span><Switch checked={enabled} disabled={save.isPending} onCheckedChange={setEnabled} /></label><Button variant="outline" size="icon" aria-label={t("delete")} onClick={() => setDeleteOpen(true)}><Icon name="trash" /></Button><Button size="sm" disabled={!dirty || save.isPending || !name.trim() || !description.trim()} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("save")}</Button></div>
     </header>
     <Tabs className="skill-editor-tabs" value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
       <TabsList><TabsTrigger value="overview">{t("overview")}</TabsTrigger><TabsTrigger value="instructions">{t("instructions")}</TabsTrigger><TabsTrigger value="files">{t("files")}</TabsTrigger></TabsList>
     </Tabs>
     <div className={`skill-editor-content skill-editor-content--${tab}`}>
-      {tab === "overview" ? <FieldGroup><Alert className="runtime-boundary"><AlertDescription>{t("skillRuntimeDetail")}</AlertDescription></Alert><div className="skill-source-summary"><span>{t("source")}</span><strong>{skillSourceDetail(skill, t)}</strong></div><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}</FieldGroup> : null}
-      {tab === "instructions" ? <Textarea aria-label={t("instructions")} className="markdown-editor skill-instructions-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} spellCheck={false} /> : null}
+      {tab === "overview" ? <FieldGroup><div className="skill-source-summary"><span>{t("source")}</span><strong>{skillSourceDetail(skill, t)}</strong></div><Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel>{t("description")}</FieldLabel><Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></Field>{error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}</FieldGroup> : null}
+      {tab === "instructions" ? (
+        <div className="skill-instructions-panel">
+          <div className="skill-instructions-toolbar">
+            <ToggleGroup type="single" value={instructionsView} onValueChange={(value) => value && setInstructionsView(value as "raw" | "preview")}>
+              <ToggleGroupItem value="raw">{t("raw")}</ToggleGroupItem>
+              <ToggleGroupItem value="preview">{t("preview")}</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+          {instructionsView === "raw" ? (
+            <Textarea aria-label={t("instructions")} className="markdown-editor skill-instructions-editor" value={instructions} onChange={(event) => setInstructions(event.target.value)} spellCheck={false} />
+          ) : (
+            <div className="skill-instructions-preview"><MarkdownMessage content={instructions} copyLabel={t("copyCode")} copiedLabel={t("copied")} /></div>
+          )}
+        </div>
+      ) : null}
       {tab === "files" ? <SkillFilesPanel skillId={skill.id} entries={files.data} loading={files.isLoading} t={t} /> : null}
     </div>
     <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -1389,6 +1405,13 @@ function SkillEditor({ skill, t, onSaved, onDeleted, onDirtyChange, registerSave
       </AlertDialogContent>
     </AlertDialog>
   </>;
+}
+
+function isBinarySkillFileError(error: unknown): boolean {
+  return error instanceof Error && (
+    error.message === "Binary Skill files cannot be previewed." ||
+    (error as { code?: string }).code === "BINARY_SKILL_FILE"
+  );
 }
 
 function SkillFilesPanel({ skillId, entries, loading, t }: { skillId: string; entries: SkillFolderEntry[] | undefined; loading: boolean; t: T }) {
@@ -1434,8 +1457,8 @@ function SkillFilesPanel({ skillId, entries, loading, t }: { skillId: string; en
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1_500);
           });
-        }} /> : <div className="skill-file-viewer-empty">
-          {file.isLoading ? t("loading") : file.error instanceof Error ? file.error.message : t("selectFileToPreview")}
+        }} /> : <div className={`skill-file-viewer-empty${isBinarySkillFileError(file.error) ? " skill-file-viewer-empty--binary" : ""}`}>
+          {file.isLoading ? t("loading") : isBinarySkillFileError(file.error) ? <><Icon name="file-x" size={14} /><p>{t("binaryFileCannotPreview")}</p></> : file.error instanceof Error ? file.error.message : t("selectFileToPreview")}
         </div>}
       </section>
     </div>

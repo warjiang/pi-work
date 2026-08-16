@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { electronNodeCleanupScript } from "./electron-node-cleanup.js";
 
 export type ManagedCliPackage = {
   name: string;
@@ -446,15 +447,7 @@ export class ManagedCliRuntime {
     const cleanupPath = join(this.runtimeBinDirectory, "cleanup-electron-node.cjs");
     const launcherPath = join(this.runtimeBinDirectory, "npm-launcher.cjs");
     const reconcilePath = join(this.runtimeBinDirectory, "reconcile-manifest.cjs");
-    writeFileSync(cleanupPath, [
-      "delete process.env.ELECTRON_RUN_AS_NODE;",
-      "const originalNodeOptions = process.env.PI_WORK_ORIGINAL_NODE_OPTIONS;",
-      "delete process.env.PI_WORK_ORIGINAL_NODE_OPTIONS;",
-      "delete process.env.PI_WORK_NODE_CLEANUP;",
-      "if (originalNodeOptions) process.env.NODE_OPTIONS = originalNodeOptions;",
-      "else delete process.env.NODE_OPTIONS;",
-      "",
-    ].join("\n"));
+    writeFileSync(cleanupPath, electronNodeCleanupScript());
     writeFileSync(launcherPath, [
       "delete process.env.ELECTRON_RUN_AS_NODE;",
       "for (const key of Object.keys(process.env)) {",

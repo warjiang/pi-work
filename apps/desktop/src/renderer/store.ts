@@ -13,6 +13,7 @@ export type InspectorTab = "task" | "plan" | "orchestration" | "activity" | "out
 export type WorkspaceScope = "personal" | string;
 export type SettingsSection =
   | "general"
+  | "preferences"
   | "appearance"
   | "modelsCredentials"
   | "workFolders"

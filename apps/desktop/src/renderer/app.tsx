@@ -228,8 +228,6 @@ export function App() {
           ui.setCommandOpen(false);
         } else if (consoleOpen) {
           closeConsole();
-        } else if (ui.settingsOpen) {
-          ui.closeSettings();
         }
         ui.setSidebarDrawerOpen(false);
       }

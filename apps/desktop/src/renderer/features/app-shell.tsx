@@ -320,6 +320,7 @@ type SearchItem = {
 
 export const commandSettingItems: ReadonlyArray<{ section: SettingsSection; key: MessageKey }> = [
   { section: "general", key: "general" },
+  { section: "preferences", key: "preferences" },
   { section: "modelsCredentials", key: "modelsCredentials" },
   { section: "permissions", key: "permissions" },
   { section: "skills", key: "skills" },
@@ -561,7 +562,7 @@ export function NewTaskDialog(props: {
   const defaultModel = resolveDefaultModel(props.providers, props.models, props.settings);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("auto");
   const [planMode, setPlanMode] = useState(true);
   const [advanced, setAdvanced] = useState(false);
   const [modelKey, setModelKey] = useState(defaultModel ? `${defaultModel.providerId}/${defaultModel.modelId}` : "");

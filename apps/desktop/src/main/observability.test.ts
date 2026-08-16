@@ -118,7 +118,7 @@ describe("LangfuseExporter", () => {
     const generation = body.batch.find((item) => item.type === "generation-create")!;
     expect(typeof generation.body.id).toBe("string");
     expect((generation.body.id as string).length).toBeGreaterThan(0);
-    expect(generation.body.traceId).toBe("req-1");
+    expect(generation.body.traceId).toBe("task-1");
     expect(generation.body.model).toBe("claude");
     expect(generation.body.usageDetails).toMatchObject({ input: 100, output: 50, total: 150 });
     expect(generation.body.costDetails).toMatchObject({ input: 0.1, output: 0.2, total: 0.3 });
@@ -145,6 +145,75 @@ describe("LangfuseExporter", () => {
     const finished = traces.find((item) => (item.body.metadata as Record<string, unknown>)?.status === "completed");
     expect(finished).toBeDefined();
     expect(finished!.body.output).toBe("streamed reply");
+  });
+
+  it("keeps a single trace across multiple turns of one conversation", async () => {
+    const { exporter, fetchMock } = makeExporter(enabledConfig);
+    // Two user turns share the same taskId but arrive with different requestIds.
+    exporter.handleEvent(usageEvent("turn-1", "2024-01-01T00:00:01.000Z"));
+    exporter.handleEvent(completedEvent("turn-1", "2024-01-01T00:00:02.000Z"));
+    exporter.handleEvent(usageEvent("turn-2", "2024-01-01T00:00:03.000Z"));
+    exporter.handleEvent(completedEvent("turn-2", "2024-01-01T00:00:04.000Z"));
+    await exporter.flush();
+
+    const batch = fetchMock.mock.calls
+      .flatMap((call) => (JSON.parse((call[1] as RequestInit).body as string) as { batch: Array<{ type: string; body: Record<string, unknown> }> }).batch);
+    const traceIds = new Set(batch.filter((item) => item.type === "trace-create").map((item) => item.body.id));
+    expect(traceIds).toEqual(new Set(["task-1"]));
+    // Only one trace is *opened* even though there are two turns.
+    const opened = batch.filter((item) => item.type === "trace-create" && typeof item.body.input === "string");
+    expect(opened).toHaveLength(1);
+    const generations = batch.filter((item) => item.type === "generation-create");
+    expect(generations).toHaveLength(2);
+    expect(generations.every((item) => item.body.traceId === "task-1")).toBe(true);
+  });
+
+  it("records a thinking span with the reasoning content", async () => {
+    const { exporter, fetchMock } = makeExporter(enabledConfig);
+    exporter.handleEvent({
+      requestId: "req-think",
+      sessionId: "task-1",
+      event: { kind: "thinking", timestamp: "2024-01-01T00:00:00.100Z", payload: { phase: "start", contentIndex: 0 } },
+    });
+    exporter.handleEvent({
+      requestId: "req-think",
+      sessionId: "task-1",
+      event: { kind: "thinking", timestamp: "2024-01-01T00:00:00.200Z", payload: { phase: "delta", contentIndex: 0, delta: "Let me " } },
+    });
+    exporter.handleEvent({
+      requestId: "req-think",
+      sessionId: "task-1",
+      event: { kind: "thinking", timestamp: "2024-01-01T00:00:00.400Z", payload: { phase: "end", contentIndex: 0, delta: "reason." } },
+    });
+    await exporter.flush();
+
+    const batch = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { batch: Array<{ type: string; body: Record<string, unknown> }> };
+    const span = batch.batch.find((item) => item.type === "span-create" && item.body.name === "thinking")!;
+    expect(span).toBeDefined();
+    expect(span.body.traceId).toBe("task-1");
+    expect(span.body.startTime).toBe("2024-01-01T00:00:00.100Z");
+    expect(span.body.output).toBe("Let me ");
+  });
+
+  it("omits thinking content when captureContent is disabled", async () => {
+    const { exporter, fetchMock } = makeExporter({ ...enabledConfig, captureContent: false });
+    await exporter.refresh();
+    exporter.handleEvent({
+      requestId: "req-think2",
+      sessionId: "task-1",
+      event: { kind: "thinking", timestamp: "2024-01-01T00:00:00.100Z", payload: { phase: "start", contentIndex: 0 } },
+    });
+    exporter.handleEvent({
+      requestId: "req-think2",
+      sessionId: "task-1",
+      event: { kind: "thinking", timestamp: "2024-01-01T00:00:00.400Z", payload: { phase: "end", contentIndex: 0, content: "secret reasoning" } },
+    });
+    await exporter.flush();
+
+    const batch = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { batch: Array<{ type: string; body: Record<string, unknown> }> };
+    const span = batch.batch.find((item) => item.type === "span-create" && item.body.name === "thinking")!;
+    expect(span).toBeDefined();
+    expect(span.body.output).toBeUndefined();
   });
 
   it("omits content fields when captureContent is disabled", async () => {
@@ -179,7 +248,7 @@ describe("LangfuseExporter", () => {
     const span = body.batch.find((item) => item.type === "span-create")!;
     expect(typeof span.body.id).toBe("string");
     expect((span.body.id as string).length).toBeGreaterThan(0);
-    expect(span.body.traceId).toBe("req-3");
+    expect(span.body.traceId).toBe("task-1");
     expect(span.body.startTime).toBe("2024-01-01T00:00:00.500Z");
     expect(span.body.name).toBe("shell");
     expect(span.body.level).toBe("ERROR");
