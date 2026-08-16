@@ -2,13 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useGSAP } from "@gsap/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { gsap } from "gsap";
+import type { DateRange } from "react-day-picker";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type {
   AppSettings,
   BuildInfo,
   ModelCatalog,
   ObservabilitySettings,
   ProviderConfig,
+  UsageByDay,
+  UsageByHour,
   UsageSummary,
   Workspace,
 } from "@pi-work/protocol";
@@ -25,6 +31,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Button } from "@/components/ui/button.js";
+import { Calendar } from "@/components/ui/calendar.js";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
 import { Icon } from "@/components/ui/icon.js";
@@ -80,6 +87,7 @@ export const settingsNavigationGroups = [
     label: "settingsGroupGeneral",
     sections: [
       { id: "general", icon: "sliders" },
+      { id: "preferences", icon: "appearance" },
     ],
   },
   {
@@ -100,7 +108,6 @@ export const settingsNavigationGroups = [
   {
     label: "settingsGroupInfo",
     sections: [
-      { id: "observability", icon: "eye" },
       { id: "about", icon: "info" },
     ],
   },
@@ -131,7 +138,7 @@ export function SettingsPage(props: {
   onToggleConsole?(): void;
 }) {
   const consoleOpen = props.consoleOpen ?? false;
-  const activeSection = props.section === "appearance" || props.section === "shortcuts" ? "general" : props.section;
+  const activeSection = props.section === "appearance" || props.section === "shortcuts" ? "preferences" : props.section;
   const sectionTitle = props.t(activeSection);
   const [navWidth, setNavWidth] = useState(() => {
     if (typeof window === "undefined") return defaultSettingsNavWidth;
@@ -247,13 +254,13 @@ export function SettingsPage(props: {
                 {activeSection === "mcp" ? <p>{props.t("mcpSettingsDetail")}</p> : null}
               </header>
               {activeSection === "general" ? <GeneralSettings {...props} /> : null}
+              {activeSection === "preferences" ? <PreferencesSettings {...props} /> : null}
               {activeSection === "modelsCredentials" ? <ModelSettings {...props} /> : null}
               {activeSection === "workFolders" ? <FolderSettings {...props} /> : null}
               {activeSection === "permissions" ? <PermissionSettings {...props} /> : null}
               {activeSection === "skills" ? <SkillsPage embedded t={props.t} /> : null}
               {activeSection === "mcp" ? <McpSettingsPage t={props.t} /> : null}
               {activeSection === "extensions" ? <ExtensionSettings language={props.settings.language} t={props.t} onOpenConsole={(command) => props.onOpenConsole?.(command)} /> : null}
-              {activeSection === "observability" ? <ObservabilitySettingsPage t={props.t} /> : null}
               {activeSection === "about" ? <AboutSettings buildInfo={props.buildInfo} t={props.t} /> : null}
             </div>
           )}
@@ -287,29 +294,122 @@ function SettingsSubsection(props: { className?: string; title?: string; detail?
   return <section className={`settings-subsection${props.className ? ` ${props.className}` : ""}`}>{props.title || props.detail ? <header>{props.title ? <h2>{props.title}</h2> : null}{props.detail ? <p>{props.detail}</p> : null}</header> : null}{props.children}</section>;
 }
 
+type UsageRangeKey = "24h" | "7" | "30" | "custom";
+
+interface UsageWindow {
+  since: string | null;
+  until: string | null;
+  startDay: string | null;
+  endDay: string | null;
+  hourly: boolean;
+}
+
+function localDayKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function resolveUsageWindow(range: UsageRangeKey, customStart: string, customEnd: string): UsageWindow {
+  if (range === "custom") {
+    const startValid = /^\d{4}-\d{2}-\d{2}$/.test(customStart);
+    const endValid = /^\d{4}-\d{2}-\d{2}$/.test(customEnd);
+    return {
+      since: startValid ? new Date(`${customStart}T00:00:00`).toISOString() : null,
+      until: endValid ? new Date(`${customEnd}T23:59:59.999`).toISOString() : null,
+      startDay: startValid ? customStart : null,
+      endDay: endValid ? customEnd : null,
+      hourly: false,
+    };
+  }
+  const now = new Date();
+  const days = range === "24h" ? 1 : Number(range);
+  const start = new Date(now);
+  // 24h window reaches into yesterday, so pad the daily chart from yesterday.
+  start.setDate(start.getDate() - (range === "24h" ? 1 : days - 1));
+  const since = new Date(now.getTime() - (range === "24h" ? 24 : days * 24) * 3_600_000);
+  return { since: since.toISOString(), until: null, startDay: localDayKey(start), endDay: localDayKey(now), hourly: range === "24h" };
+}
+
 function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
-  return <SettingsSectionBlock className="settings-general" title={props.t("general")} showTitle={false}>
-    <div className="settings-general-layout">
-      <section className="settings-general-preferences">
-        <div className="settings-language-row">
-          <div>
-            <strong>{props.t("language")}</strong>
-            <small>English · 简体中文</small>
-          </div>
-          <div className="settings-choice-group" role="group" aria-label={props.t("language")}>
-            <Button type="button" variant="ghost" size="sm" className={props.settings.language === "en" ? "is-selected" : ""} aria-pressed={props.settings.language === "en"} onClick={() => void props.onUpdate({ language: "en" })}>English</Button>
-            <Button type="button" variant="ghost" size="sm" className={props.settings.language === "zh-CN" ? "is-selected" : ""} aria-pressed={props.settings.language === "zh-CN"} onClick={() => void props.onUpdate({ language: "zh-CN" })}>简体中文</Button>
-          </div>
-        </div>
-        <AppearanceSettings {...props} />
-      </section>
-      <aside className="settings-general-utilities">
-        <SettingsSubsection className="settings-utility-onboarding" title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
-          <Button variant="outline" size="sm" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
-        </SettingsSubsection>
-        <ShortcutSettings t={props.t} />
-      </aside>
+  const { t } = props;
+  const [range, setRange] = useState<UsageRangeKey>("7");
+  const [customRange, setCustomRange] = useState({ start: "", end: "" });
+  const [customPickerOpen, setCustomPickerOpen] = useState(false);
+  const window = useMemo(() => resolveUsageWindow(range, customRange.start, customRange.end), [range, customRange]);
+  const dateLocale = props.settings.language === "zh-CN" ? zhCN : undefined;
+  const customSelection: DateRange | undefined = customRange.start
+    ? { from: new Date(`${customRange.start}T00:00:00`), to: customRange.end ? new Date(`${customRange.end}T00:00:00`) : undefined }
+    : undefined;
+  const customLabel = customSelection?.from
+    ? `${format(customSelection.from, "PP", dateLocale ? { locale: dateLocale } : undefined)}${customSelection.to ? ` – ${format(customSelection.to, "PP", dateLocale ? { locale: dateLocale } : undefined)}` : ""}`
+    : t("usageRangeCustom");
+  return <SettingsSectionBlock className="settings-general" title={t("general")} showTitle={false}>
+    <div className="settings-general-toolbar">
+      <div className="settings-usage-range" role="group" aria-label={t("usageRange")}>
+        {(["24h", "7", "30"] as const).map((value) => (
+          <Button key={value} type="button" variant="ghost" size="sm" className={range === value ? "is-selected" : ""} aria-pressed={range === value} onClick={() => setRange(value)}>
+            {t(value === "24h" ? "usageRange24h" : value === "7" ? "usageRange7" : "usageRange30")}
+          </Button>
+        ))}
+        <Popover open={customPickerOpen} onOpenChange={setCustomPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button type="button" variant="ghost" size="sm" className={range === "custom" || customPickerOpen ? "is-selected" : ""} aria-pressed={range === "custom" || customPickerOpen}>
+              <Icon name="calendar" data-icon="inline-start" />
+              {customLabel}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="end">
+            <Calendar
+              mode="range"
+              numberOfMonths={2}
+              showOutsideDays={false}
+              className="[--cell-size:2.6rem] p-4"
+              classNames={{
+                months: "relative flex flex-col gap-4 md:flex-row md:gap-6",
+                month_caption: "flex h-[--cell-size] w-full items-center justify-center whitespace-nowrap px-[calc(var(--cell-size)+0.25rem)] text-sm font-medium",
+              }}
+              selected={customSelection}
+              disabled={{ after: new Date() }}
+              defaultMonth={customSelection?.from ?? new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1)}
+              locale={dateLocale}
+              onSelect={(_next, selectedDate) => {
+                if (!selectedDate) return;
+                setRange("custom");
+                setCustomRange((prev) => {
+                  // No start yet, or a full range already picked -> begin a fresh range.
+                  if (!prev.start || (prev.start && prev.end)) {
+                    return { start: localDayKey(selectedDate), end: "" };
+                  }
+                  // Start already picked -> this click sets the end (or restarts if earlier).
+                  const startDate = new Date(`${prev.start}T00:00:00`);
+                  if (selectedDate < startDate) {
+                    return { start: localDayKey(selectedDate), end: "" };
+                  }
+                  return { start: prev.start, end: localDayKey(selectedDate) };
+                });
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      </div>
     </div>
+    <UsageSettings t={t} window={window} />
+    <UsageTrendSettings t={t} window={window} />
+    <ModelCallAnalytics t={t} window={window} />
+    <section className="settings-general-onboarding">
+      <SettingsSubsection className="settings-utility-onboarding" title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
+        <Button variant="outline" size="sm" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
+      </SettingsSubsection>
+    </section>
+  </SettingsSectionBlock>;
+}
+
+function PreferencesSettings(props: BaseProps) {
+  return <SettingsSectionBlock className="settings-preferences" title={props.t("preferences")} showTitle={false}>
+    <div className="settings-preferences-card"><AppearanceSettings {...props} /></div>
+    <div className="settings-preferences-card"><ObservabilitySettings t={props.t} /></div>
+    <div className="settings-preferences-card"><ShortcutSettings t={props.t} /></div>
   </SettingsSectionBlock>;
 }
 
@@ -798,31 +898,38 @@ function PermissionSettings(props: BaseProps) {
 
 function AppearanceSettings(props: BaseProps) {
   return <SettingsSubsection title={props.t("appearance")}>
+    <div className="settings-language-row">
+      <div>
+        <strong>{props.t("language")}</strong>
+      </div>
+      <div className="settings-choice-group" role="group" aria-label={props.t("language")}>
+        <Button type="button" variant="ghost" size="sm" className={props.settings.language === "en" ? "is-selected" : ""} aria-pressed={props.settings.language === "en"} onClick={() => void props.onUpdate({ language: "en" })}>English</Button>
+        <Button type="button" variant="ghost" size="sm" className={props.settings.language === "zh-CN" ? "is-selected" : ""} aria-pressed={props.settings.language === "zh-CN"} onClick={() => void props.onUpdate({ language: "zh-CN" })}>简体中文</Button>
+      </div>
+    </div>
     <div className="settings-theme-row">
       <div><strong>{props.t("theme")}</strong></div>
-      <div className="settings-theme-picker" role="group" aria-label={props.t("theme")}>
+      <div className="settings-theme-toggle" role="group" aria-label={props.t("theme")}>
         {([
-          ["system", props.t("systemTheme"), "system"],
-          ["light", props.t("light"), "light"],
-          ["dark", props.t("dark"), "dark"],
-        ] as const).map(([value, label, preview]) => (
+          ["system", "monitor", props.t("systemTheme")],
+          ["light", "sun", props.t("light")],
+          ["dark", "moon", props.t("dark")],
+        ] as const).map(([value, icon, label]) => (
           <Button
             type="button"
             variant="ghost"
-            className={`settings-theme-choice${props.settings.theme === value ? " is-selected" : ""}`}
+            size="sm"
+            className={`settings-theme-icon${props.settings.theme === value ? " is-selected" : ""}`}
             key={value}
             aria-pressed={props.settings.theme === value}
+            aria-label={label}
+            title={label}
             onClick={() => void props.onUpdate({ theme: value })}
           >
-            <span className={`settings-theme-preview is-${preview}`} aria-hidden="true"><i /><i /></span>
-            <span>{label}</span>
+            <Icon name={icon} />
           </Button>
         ))}
       </div>
-    </div>
-    <div className="settings-toggle-list">
-      <label className="switch-row setting-switch"><span><strong>{props.t("focusMode")}</strong><small>{props.t("focusModeDetail")}</small></span><Switch checked={props.settings.focusMode} onCheckedChange={(focusMode) => void props.onUpdate({ focusMode })} /></label>
-      <label className="switch-row setting-switch"><span><strong>{props.t("compactMode")}</strong><small>{props.t("compactModeDetail")}</small></span><Switch checked={props.settings.compactMode} onCheckedChange={(compactMode) => void props.onUpdate({ compactMode })} /></label>
     </div>
   </SettingsSubsection>;
 }
@@ -1182,24 +1289,17 @@ function formatCost(value: number): string {
   return `$${new Intl.NumberFormat(undefined, { minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }).format(value)}`;
 }
 
-const usageRangeDays: Record<"7" | "30" | "all", number | null> = { "7": 7, "30": 30, all: null };
+function useUsageSummary(rangeWindow: UsageWindow) {
+  return useQuery({
+    queryKey: ["usage-summary", rangeWindow.since, rangeWindow.until],
+    queryFn: () => window.piWork.observability.usage({ since: rangeWindow.since, until: rangeWindow.until, workspaceId: null }),
+  });
+}
 
-function ObservabilitySettingsPage(props: { t: T }) {
+function ObservabilitySettings(props: { t: T }) {
   const { t } = props;
   const queryClient = useQueryClient();
   const observability = useQuery({ queryKey: ["observability"], queryFn: () => window.piWork.observability.get() });
-  const [range, setRange] = useState<"7" | "30" | "all">("30");
-  const since = useMemo(() => {
-    const days = usageRangeDays[range];
-    if (days === null) return null;
-    const date = new Date();
-    date.setDate(date.getDate() - days);
-    return date.toISOString();
-  }, [range]);
-  const usage = useQuery({
-    queryKey: ["usage-summary", since],
-    queryFn: () => window.piWork.observability.usage({ since, until: null, workspaceId: null }),
-  });
 
   const [draft, setDraft] = useState<{ enabled: boolean; host: string; publicKey: string; captureContent: boolean } | null>(null);
   const [secretKey, setSecretKey] = useState("");
@@ -1227,14 +1327,13 @@ function ObservabilitySettingsPage(props: { t: T }) {
 
   if (observability.data === undefined || draft === null) {
     return (
-      <SettingsSectionBlock className="settings-observability" title={t("observability")} detail={t("observabilityDetail")} showTitle={false}>
+      <SettingsSubsection className="settings-observability-config" title={t("observability")}>
         <div className="settings-observability-loading"><Spinner /></div>
-      </SettingsSectionBlock>
+      </SettingsSubsection>
     );
   }
 
   const settings: ObservabilitySettings = observability.data;
-  const totals = usage.data?.totals;
 
   const save = () => {
     const input: Record<string, unknown> = {
@@ -1248,104 +1347,353 @@ function ObservabilitySettingsPage(props: { t: T }) {
   };
 
   return (
-    <SettingsSectionBlock className="settings-observability" title={t("observability")} detail={t("observabilityDetail")} showTitle={false}>
-      <SettingsSubsection className="settings-observability-config" title={t("observabilityLangfuse")} detail={t("observabilityConfigDetail")}>
-        {settings.envOverride ? (
-          <Alert>
-            <AlertDescription>{t("observabilityEnvOverride")}</AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="settings-observability-toggle">
-          <div>
-            <strong>{t("observabilityEnable")}</strong>
-            <small>{t("observabilityEnableDetail")}</small>
-          </div>
-          <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked })} aria-label={t("observabilityEnable")} />
+    <SettingsSubsection className="settings-observability-config" title={t("observability")} detail={t("observabilityDetail")}>
+      {settings.envOverride ? (
+        <Alert>
+          <AlertDescription>{t("observabilityEnvOverride")}</AlertDescription>
+        </Alert>
+      ) : null}
+      <div className="settings-observability-toggle">
+        <div>
+          <strong>{t("observabilityEnable")}</strong>
+          <small>{t("observabilityEnableDetail")}</small>
         </div>
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="langfuse-host">{t("observabilityHost")}</FieldLabel>
-            <Input id="langfuse-host" value={draft.host} placeholder="https://langfuse.example.com" onChange={(event) => setDraft({ ...draft, host: event.target.value })} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="langfuse-public-key">{t("observabilityPublicKey")}</FieldLabel>
-            <Input id="langfuse-public-key" value={draft.publicKey} placeholder="pk-lf-..." onChange={(event) => setDraft({ ...draft, publicKey: event.target.value })} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="langfuse-secret-key">{t("observabilitySecretKey")}</FieldLabel>
-            <Input
-              id="langfuse-secret-key"
-              type="password"
-              value={secretKey}
-              placeholder={settings.hasSecretKey ? settings.secretKeyMasked : "sk-lf-..."}
-              onChange={(event) => setSecretKey(event.target.value)}
-            />
-            <small>{settings.hasSecretKey ? t("observabilitySecretStored") : t("observabilitySecretDetail")}</small>
-          </Field>
-        </FieldGroup>
-        <div className="settings-observability-toggle">
-          <div>
-            <strong>{t("observabilityCaptureContent")}</strong>
-            <small>{t("observabilityCaptureContentDetail")}</small>
-          </div>
-          <Switch checked={draft.captureContent} onCheckedChange={(checked) => setDraft({ ...draft, captureContent: checked })} aria-label={t("observabilityCaptureContent")} />
+        <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked })} aria-label={t("observabilityEnable")} />
+      </div>
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="langfuse-host">{t("observabilityHost")}</FieldLabel>
+          <Input id="langfuse-host" value={draft.host} placeholder="https://langfuse.example.com" onChange={(event) => setDraft({ ...draft, host: event.target.value })} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="langfuse-public-key">{t("observabilityPublicKey")}</FieldLabel>
+          <Input id="langfuse-public-key" value={draft.publicKey} placeholder="pk-lf-..." onChange={(event) => setDraft({ ...draft, publicKey: event.target.value })} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="langfuse-secret-key">{t("observabilitySecretKey")}</FieldLabel>
+          <Input
+            id="langfuse-secret-key"
+            type="password"
+            value={secretKey}
+            placeholder={settings.hasSecretKey ? settings.secretKeyMasked : "sk-lf-..."}
+            onChange={(event) => setSecretKey(event.target.value)}
+          />
+          <small>{settings.hasSecretKey ? t("observabilitySecretStored") : t("observabilitySecretDetail")}</small>
+        </Field>
+      </FieldGroup>
+      <div className="settings-observability-toggle">
+        <div>
+          <strong>{t("observabilityCaptureContent")}</strong>
+          <small>{t("observabilityCaptureContentDetail")}</small>
         </div>
-        <div className="settings-observability-actions">
-          <Button type="button" size="sm" onClick={save} disabled={update.isPending}>
-            {update.isPending ? <Spinner /> : null}{t("save")}
-          </Button>
-          {saved ? <span className="settings-observability-saved">{t("observabilitySaved")}</span> : null}
-          {update.isError ? <span className="settings-observability-error">{t("observabilitySaveFailed")}</span> : null}
-        </div>
-      </SettingsSubsection>
-
-      <SettingsSubsection className="settings-observability-usage" title={t("observabilityUsage")} detail={t("observabilityUsageDetail")}>
-        <div className="settings-observability-range" role="group" aria-label={t("observabilityRange")}>
-          {(["7", "30", "all"] as const).map((value) => (
-            <Button key={value} type="button" variant="ghost" size="sm" className={range === value ? "is-selected" : ""} aria-pressed={range === value} onClick={() => setRange(value)}>
-              {value === "all" ? t("observabilityRangeAll") : t(value === "7" ? "observabilityRange7" : "observabilityRange30")}
-            </Button>
-          ))}
-        </div>
-        {usage.data === undefined ? (
-          <div className="settings-observability-loading"><Spinner /></div>
-        ) : (
-          <>
-            <dl className="settings-observability-totals">
-              <div><dt>{t("observabilityRequests")}</dt><dd>{formatTokens(totals?.requests ?? 0)}</dd></div>
-              <div><dt>{t("observabilityTotalTokens")}</dt><dd>{formatTokens(totals?.totalTokens ?? 0)}</dd></div>
-              <div><dt>{t("observabilityInputTokens")}</dt><dd>{formatTokens(totals?.inputTokens ?? 0)}</dd></div>
-              <div><dt>{t("observabilityOutputTokens")}</dt><dd>{formatTokens(totals?.outputTokens ?? 0)}</dd></div>
-              <div><dt>{t("observabilityTotalCost")}</dt><dd>{formatCost(totals?.totalCost ?? 0)}</dd></div>
-            </dl>
-            <UsageByModelTable summary={usage.data} t={t} />
-          </>
-        )}
-      </SettingsSubsection>
-    </SettingsSectionBlock>
+        <Switch checked={draft.captureContent} onCheckedChange={(checked) => setDraft({ ...draft, captureContent: checked })} aria-label={t("observabilityCaptureContent")} />
+      </div>
+      <div className="settings-observability-actions">
+        <Button type="button" size="sm" onClick={save} disabled={update.isPending}>
+          {update.isPending ? <Spinner /> : null}{t("save")}
+        </Button>
+        {saved ? <span className="settings-observability-saved">{t("observabilitySaved")}</span> : null}
+        {update.isError ? <span className="settings-observability-error">{t("observabilitySaveFailed")}</span> : null}
+      </div>
+    </SettingsSubsection>
   );
+}
+
+function UsageSettings(props: { t: T; window: UsageWindow }) {
+  const { t } = props;
+  const usage = useUsageSummary(props.window);
+  const totals = usage.data?.totals;
+
+  return (
+    <SettingsSubsection className="settings-usage" title={t("usageOverview")} detail={t("usageDetail")}>
+      {usage.data === undefined ? (
+        <div className="settings-observability-loading"><Spinner /></div>
+      ) : (
+        <>
+          <dl className="settings-usage-totals">
+            <div><dt>{t("usageRequests")}</dt><dd>{formatTokens(totals?.requests ?? 0)}</dd></div>
+            <div><dt>{t("usageTotalTokens")}</dt><dd>{formatTokens(totals?.totalTokens ?? 0)}</dd></div>
+            <div><dt>{t("usageInputTokens")}</dt><dd>{formatTokens(totals?.inputTokens ?? 0)}</dd></div>
+            <div><dt>{t("usageOutputTokens")}</dt><dd>{formatTokens(totals?.outputTokens ?? 0)}</dd></div>
+            <div><dt>{t("usageTotalCost")}</dt><dd>{formatCost(totals?.totalCost ?? 0)}</dd></div>
+          </dl>
+          <UsageByModelTable summary={usage.data} t={t} />
+        </>
+      )}
+    </SettingsSubsection>
+  );
+}
+
+function UsageTrendSettings(props: { t: T; window: UsageWindow }) {
+  const { t } = props;
+  const usage = useUsageSummary(props.window);
+  return (
+    <section className="settings-usage-trend">
+      <header className="settings-model-calls-head">
+        <div className="settings-model-calls-title">
+          <span className="settings-model-calls-icon"><Icon name="chart" /></span>
+          <h2>{t(props.window.hourly ? "usageTokensByHour" : "usageTokensByDay")}</h2>
+        </div>
+      </header>
+      <p className="settings-model-calls-detail">{t(props.window.hourly ? "usageTokensByHourDetail" : "usageTokensByDayDetail")}</p>
+      {usage.data === undefined ? (
+        <div className="settings-observability-loading"><Spinner /></div>
+      ) : (
+        <UsageByDayChart summary={usage.data} window={props.window} t={t} />
+      )}
+    </section>
+  );
+}
+
+const MODEL_BAR_COLORS = [
+  "#4f46e5",
+  "#0ea5e9",
+  "#10b981",
+  "#f59e0b",
+  "#f43f5e",
+  "#8b5cf6",
+  "#14b8a6",
+  "#f97316",
+  "#64748b",
+];
+
+interface UsageChartRow {
+  day: string;
+  label: string;
+  [modelKey: string]: string | number;
+}
+
+function UsageByDayChart(props: { summary: UsageSummary; window: UsageWindow; t: T }) {
+  const { summary, window, t } = props;
+  const hourly = window.hourly;
+  const series = hourly ? summary.byHour : summary.byDay;
+  if (series.length === 0) {
+    return <p className="settings-observability-empty">{t("usageNoUsage")}</p>;
+  }
+  const MAX_BARS = 90;
+  const padded = hourly
+    ? padUsageHours(summary.byHour, window).map((row) => ({ key: row.hour }))
+    : padUsageDays(summary.byDay, window).map((row) => ({ key: row.day }));
+  const bucketSize = Math.max(Math.ceil(padded.length / MAX_BARS), 1);
+  const models = summary.byModel.map((row, index) => ({
+    key: `${row.provider}:${row.model || "unknown"}`,
+    label: row.model || t("unavailable"),
+    color: summary.byModel.length === 1 ? "var(--accent)" : (MODEL_BAR_COLORS[index % MODEL_BAR_COLORS.length] ?? "#64748b"),
+  }));
+  const tokensByBucketModel = new Map<string, number>();
+  for (const row of hourly ? summary.byModelHour : summary.byModelDay) {
+    const bucketKey = "hour" in row ? row.hour : row.day;
+    tokensByBucketModel.set(`${bucketKey}${row.provider}:${row.model || "unknown"}`, row.totalTokens);
+  }
+  const data: UsageChartRow[] = [];
+  for (let i = 0; i < padded.length; i += bucketSize) {
+    const slice = padded.slice(i, i + bucketSize);
+    const first = slice[0];
+    if (first === undefined) continue;
+    const row: UsageChartRow = { day: first.key, label: hourly ? formatHourLabel(first.key) : formatDayLabel(first.key) };
+    for (const model of models) {
+      let tokens = 0;
+      for (const bucket of slice) {
+        tokens += tokensByBucketModel.get(`${bucket.key}${model.key}`) ?? 0;
+      }
+      row[model.key] = tokens;
+    }
+    data.push(row);
+  }
+  const tickInterval = Math.max(Math.ceil(data.length / 8) - 1, 0);
+  const stacked = models.length > 1;
+  return (
+    <div className="settings-usage-chart">
+      <div className="settings-usage-chart-figure">
+        <ResponsiveContainer width="100%" height={stacked ? 220 : 180}>
+          <BarChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }} barCategoryGap="30%">
+            <CartesianGrid vertical={false} stroke="var(--border)" strokeOpacity={0.55} />
+            <XAxis
+              dataKey="label"
+              interval={tickInterval}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: "var(--muted)", fontSize: 11 }}
+              tickMargin={8}
+              minTickGap={24}
+            />
+            <YAxis
+              width={44}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: "var(--muted)", fontSize: 10 }}
+              tickFormatter={(value: number) => formatCompactTokens(value)}
+            />
+            <Tooltip
+              cursor={{ fill: "var(--text)", fillOpacity: 0.04 }}
+              content={<UsageChartTooltip />}
+            />
+            {models.map((model, index) => (
+              <Bar
+                key={model.key}
+                dataKey={model.key}
+                name={model.label}
+                stackId="tokens"
+                fill={model.color}
+                fillOpacity={0.85}
+                radius={index === models.length - 1 ? [3, 3, 0, 0] : 0}
+                maxBarSize={46}
+              />
+            ))}
+            {stacked ? (
+              <Legend
+                iconType="circle"
+                iconSize={7}
+                wrapperStyle={{ fontSize: 11, color: "var(--muted)", paddingTop: 10 }}
+              />
+            ) : null}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+interface UsageTooltipEntry {
+  name?: string;
+  value?: number;
+  color?: string;
+  payload?: { day?: string };
+}
+
+function UsageChartTooltip(props: { active?: boolean; payload?: UsageTooltipEntry[] }) {
+  const { active, payload } = props;
+  if (!active || payload === undefined || payload.length === 0) return null;
+  const day = payload[0]?.payload?.day;
+  const rows = payload.filter((entry) => (entry.value ?? 0) > 0);
+  if (rows.length === 0) return null;
+  const total = rows.reduce((sum, entry) => sum + (entry.value ?? 0), 0);
+  return (
+    <div className="settings-usage-chart-tooltip">
+      {day ? <span>{day}</span> : null}
+      {rows.map((entry) => (
+        <div key={entry.name} className="settings-usage-chart-tooltip-row">
+          <i style={{ background: entry.color }} />
+          <em>{entry.name}</em>
+          <strong>{formatTokens(entry.value ?? 0)}</strong>
+        </div>
+      ))}
+      {rows.length > 1 ? (
+        <div className="settings-usage-chart-tooltip-row settings-usage-chart-tooltip-total">
+          <em>Total</em>
+          <strong>{formatTokens(total)}</strong>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatCompactTokens(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+function formatDayLabel(day: string): string {
+  const date = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return day;
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
+
+function padUsageDays(days: UsageByDay[], window: UsageWindow): UsageByDay[] {
+  const byDate = new Map(days.map((day) => [day.day, day]));
+  const endKey = window.endDay ?? localDayKey(new Date());
+  let startKey = window.startDay;
+  if (startKey === null) {
+    startKey = days.map((day) => day.day).sort()[0] ?? endKey;
+  }
+  if (startKey > endKey) return days;
+  const padded: UsageByDay[] = [];
+  for (const date = new Date(`${startKey}T00:00:00`); localDayKey(date) <= endKey; date.setDate(date.getDate() + 1)) {
+    const key = localDayKey(date);
+    padded.push(byDate.get(key) ?? emptyUsageDay(key));
+  }
+  return padded;
+}
+
+function emptyUsageDay(day: string): UsageByDay {
+  return {
+    day,
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    totalCost: 0,
+  };
+}
+
+function localHourKey(date: Date): string {
+  return `${localDayKey(date)}T${String(date.getHours()).padStart(2, "0")}`;
+}
+
+function formatHourLabel(hour: string): string {
+  const date = new Date(`${hour}:00:00`);
+  if (Number.isNaN(date.getTime())) return hour;
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+}
+
+function padUsageHours(hours: UsageByHour[], window: UsageWindow): UsageByHour[] {
+  const byHour = new Map(hours.map((row) => [row.hour, row]));
+  const endKey = localHourKey(new Date());
+  let startKey: string | null = null;
+  if (window.since !== null) {
+    const since = new Date(window.since);
+    if (!Number.isNaN(since.getTime())) startKey = localHourKey(since);
+  }
+  if (startKey === null) {
+    startKey = hours.map((row) => row.hour).sort()[0] ?? endKey;
+  }
+  if (startKey > endKey) return hours;
+  const padded: UsageByHour[] = [];
+  for (const cursor = new Date(`${startKey}:00:00`); localHourKey(cursor) <= endKey; cursor.setHours(cursor.getHours() + 1)) {
+    const key = localHourKey(cursor);
+    padded.push(byHour.get(key) ?? emptyUsageHour(key));
+  }
+  return padded;
+}
+
+function emptyUsageHour(hour: string): UsageByHour {
+  return {
+    hour,
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    totalCost: 0,
+  };
 }
 
 function UsageByModelTable(props: { summary: UsageSummary; t: T }) {
   const { summary, t } = props;
   if (summary.byModel.length === 0) {
-    return <p className="settings-observability-empty">{t("observabilityNoUsage")}</p>;
+    return <p className="settings-observability-empty">{t("usageNoUsage")}</p>;
   }
   return (
     <table className="settings-observability-table">
       <thead>
         <tr>
-          <th>{t("observabilityModel")}</th>
-          <th>{t("observabilityRequests")}</th>
-          <th>{t("observabilityInputTokens")}</th>
-          <th>{t("observabilityOutputTokens")}</th>
-          <th>{t("observabilityTotalCost")}</th>
+          <th>{t("usageModel")}</th>
+          <th className="settings-observability-provider-col">{t("provider")}</th>
+          <th>{t("usageRequests")}</th>
+          <th>{t("usageInputTokens")}</th>
+          <th>{t("usageOutputTokens")}</th>
+          <th>{t("usageTotalCost")}</th>
         </tr>
       </thead>
       <tbody>
         {summary.byModel.map((row) => (
           <tr key={`${row.provider}:${row.model}`}>
-            <td><span className="settings-observability-model">{row.model || t("unavailable")}</span><small>{row.provider}</small></td>
+            <td><span className="settings-observability-model">{row.model || t("unavailable")}</span></td>
+            <td className="settings-observability-provider-col"><small className="settings-observability-provider">{row.provider}</small></td>
             <td>{formatTokens(row.requests)}</td>
             <td>{formatTokens(row.inputTokens)}</td>
             <td>{formatTokens(row.outputTokens)}</td>
@@ -1354,5 +1702,226 @@ function UsageByModelTable(props: { summary: UsageSummary; t: T }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+type ModelCallTab = "trend" | "distribution" | "ranking";
+
+interface ModelCallEntry {
+  key: string;
+  label: string;
+  requests: number;
+  color: string;
+}
+
+function ModelCallAnalytics(props: { t: T; window: UsageWindow }) {
+  const { t } = props;
+  const [tab, setTab] = useState<ModelCallTab>("trend");
+  const usage = useUsageSummary(props.window);
+  const summary = usage.data;
+  const models: ModelCallEntry[] = (summary?.byModel ?? []).map((row, index) => ({
+    key: `${row.provider}:${row.model || "unknown"}`,
+    label: row.model || t("unavailable"),
+    requests: row.requests,
+    color: MODEL_BAR_COLORS[index % MODEL_BAR_COLORS.length] ?? "#64748b",
+  }));
+  const totalRequests = summary?.totals.requests ?? 0;
+
+  return (
+    <section className="settings-model-calls">
+      <header className="settings-model-calls-head">
+        <div className="settings-model-calls-title">
+          <span className="settings-model-calls-icon"><Icon name="models" /></span>
+          <h2>{t("usageModelCalls")}</h2>
+          <small>{t("usageTotalPrefix")} · {formatTokens(totalRequests)}</small>
+        </div>
+        <div className="settings-model-calls-controls">
+          <div className="settings-usage-range" role="tablist" aria-label={t("usageModelCalls")}>
+            {(["trend", "distribution", "ranking"] as const).map((value) => (
+              <Button key={value} type="button" variant="ghost" size="sm" role="tab" className={tab === value ? "is-selected" : ""} aria-selected={tab === value} onClick={() => setTab(value)}>
+                {t(value === "trend" ? "usageCallTrend" : value === "distribution" ? "usageCallDistribution" : "usageCallRanking")}
+              </Button>
+            ))}
+          </div>
+        </div>
+      </header>
+      <p className="settings-model-calls-detail">{t("usageModelCallsDetail")}</p>
+      {summary === undefined ? (
+        <div className="settings-observability-loading"><Spinner /></div>
+      ) : models.length === 0 ? (
+        <p className="settings-observability-empty">{t("usageNoUsage")}</p>
+      ) : tab === "trend" ? (
+        <ModelCallTrend summary={summary} window={props.window} models={models} />
+      ) : tab === "distribution" ? (
+        <ModelCallDistribution models={models} totalRequests={totalRequests} />
+      ) : (
+        <ModelCallRanking models={models} />
+      )}
+    </section>
+  );
+}
+
+function ModelCallTrend(props: { summary: UsageSummary; window: UsageWindow; models: ModelCallEntry[] }) {
+  const { summary, window, models } = props;
+  const hourly = window.hourly;
+  const MAX_POINTS = 90;
+  const padded = hourly
+    ? padUsageHours(summary.byHour, window).map((row) => ({ key: row.hour }))
+    : padUsageDays(summary.byDay, window).map((row) => ({ key: row.day }));
+  const bucketSize = Math.max(Math.ceil(padded.length / MAX_POINTS), 1);
+  const requestsByBucketModel = new Map<string, number>();
+  for (const row of hourly ? summary.byModelHour : summary.byModelDay) {
+    const bucketKey = "hour" in row ? row.hour : row.day;
+    requestsByBucketModel.set(`${bucketKey}${row.provider}:${row.model || "unknown"}`, row.requests);
+  }
+  const data: UsageChartRow[] = [];
+  for (let i = 0; i < padded.length; i += bucketSize) {
+    const slice = padded.slice(i, i + bucketSize);
+    const first = slice[0];
+    if (first === undefined) continue;
+    const row: UsageChartRow = { day: first.key, label: hourly ? formatHourLabel(first.key) : formatDayLabel(first.key) };
+    for (const model of models) {
+      let requests = 0;
+      for (const bucket of slice) {
+        requests += requestsByBucketModel.get(`${bucket.key}${model.key}`) ?? 0;
+      }
+      row[model.key] = requests;
+    }
+    data.push(row);
+  }
+  const tickInterval = Math.max(Math.ceil(data.length / 8) - 1, 0);
+  return (
+    <div className="settings-usage-chart-figure">
+      <ResponsiveContainer width="100%" height={240}>
+        <AreaChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 0 }}>
+          <defs>
+            {models.map((model, index) => (
+              <linearGradient key={model.key} id={`model-call-gradient-${index}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={model.color} stopOpacity={0.2} />
+                <stop offset="100%" stopColor={model.color} stopOpacity={0.02} />
+              </linearGradient>
+            ))}
+          </defs>
+          <CartesianGrid vertical={false} stroke="var(--border)" strokeOpacity={0.55} />
+          <XAxis
+            dataKey="label"
+            interval={tickInterval}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: "var(--muted)", fontSize: 11 }}
+            tickMargin={8}
+            minTickGap={24}
+          />
+          <YAxis
+            width={40}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: "var(--muted)", fontSize: 10 }}
+            tickFormatter={(value: number) => formatCompactTokens(value)}
+            allowDecimals={false}
+          />
+          <Tooltip
+            cursor={{ stroke: "var(--border-strong)", strokeOpacity: 0.45 }}
+            content={<UsageChartTooltip />}
+          />
+          {models.map((model, index) => (
+            <Area
+              key={model.key}
+              type="monotone"
+              dataKey={model.key}
+              name={model.label}
+              stroke={model.color}
+              strokeWidth={1.6}
+              fill={`url(#model-call-gradient-${index})`}
+              dot={false}
+              activeDot={{ r: 3 }}
+            />
+          ))}
+          <Legend
+            iconType="circle"
+            iconSize={7}
+            wrapperStyle={{ fontSize: 11, color: "var(--muted)", paddingTop: 10 }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+interface ModelCallShareTooltipEntry {
+  name?: string;
+  value?: number;
+  payload?: { fill?: string };
+}
+
+function ModelCallShareTooltip(props: { active?: boolean; payload?: ModelCallShareTooltipEntry[]; total: number }) {
+  const { active, payload, total } = props;
+  if (!active || payload === undefined || payload.length === 0) return null;
+  const entry = payload[0];
+  if (entry === undefined) return null;
+  const value = entry.value ?? 0;
+  const share = total > 0 ? (value / total) * 100 : 0;
+  return (
+    <div className="settings-usage-chart-tooltip">
+      <div className="settings-usage-chart-tooltip-row">
+        <i style={{ background: entry.payload?.fill }} />
+        <em>{entry.name}</em>
+        <strong>{formatTokens(value)}</strong>
+      </div>
+      <div className="settings-usage-chart-tooltip-row">
+        <em>{share.toFixed(1)}%</em>
+      </div>
+    </div>
+  );
+}
+
+function ModelCallDistribution(props: { models: ModelCallEntry[]; totalRequests: number }) {
+  const { models, totalRequests } = props;
+  const data = models.filter((model) => model.requests > 0);
+  return (
+    <div className="settings-usage-chart-figure">
+      <ResponsiveContainer width="100%" height={240}>
+        <PieChart>
+          <Pie
+            data={data}
+            dataKey="requests"
+            nameKey="label"
+            innerRadius="58%"
+            outerRadius="82%"
+            paddingAngle={2}
+            strokeWidth={0}
+          >
+            {data.map((model) => (
+              <Cell key={model.key} fill={model.color} />
+            ))}
+          </Pie>
+          <Tooltip content={<ModelCallShareTooltip total={totalRequests} />} />
+          <Legend
+            iconType="circle"
+            iconSize={7}
+            wrapperStyle={{ fontSize: 11, color: "var(--muted)", paddingTop: 10 }}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ModelCallRanking(props: { models: ModelCallEntry[] }) {
+  const ranked = [...props.models].sort((a, b) => b.requests - a.requests);
+  const max = ranked[0]?.requests ?? 0;
+  return (
+    <ol className="settings-model-calls-ranking">
+      {ranked.map((model, index) => (
+        <li key={model.key}>
+          <span className="settings-model-calls-rank">{index + 1}</span>
+          <span className="settings-model-calls-name" title={model.label}>{model.label}</span>
+          <span className="settings-model-calls-bar">
+            <i style={{ width: `${max > 0 ? Math.max((model.requests / max) * 100, 1.5) : 0}%`, background: model.color }} />
+          </span>
+          <strong>{formatTokens(model.requests)}</strong>
+        </li>
+      ))}
+    </ol>
   );
 }

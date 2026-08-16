@@ -67,6 +67,7 @@ const MAX_ATTEMPTS = 8;
 export class LangfuseExporter {
   private readonly deps: ExporterDeps;
   private readonly runs = new Map<string, RunState>();
+  private readonly traces = new Set<string>();
   private buffer: IngestionItem[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setInterval> | null = null;
@@ -123,6 +124,10 @@ export class LangfuseExporter {
       if (state !== undefined && typeof event.payload.delta === "string") {
         state.output += event.payload.delta;
       }
+      return;
+    }
+    if (kind === "thinking") {
+      this.recordThinking(requestId, sessionId, event.payload, event.timestamp);
       return;
     }
     if (kind === "usage") {
@@ -188,7 +193,10 @@ export class LangfuseExporter {
     if (existing !== undefined) return existing;
     const context = this.deps.resolveRunContext(taskId, requestId);
     if (context === null) return null;
-    const traceId = requestId;
+    // Keep one Langfuse trace per conversation so multi-turn chats aren't split
+    // into a separate trace per user turn. Each turn's generation/spans nest
+    // under the shared trace; the per-turn lifecycle is still keyed by requestId.
+    const traceId = context.taskId;
     const startTime = new Date().toISOString();
     const state: RunState = {
       traceId,
@@ -196,33 +204,73 @@ export class LangfuseExporter {
       startTime,
       output: "",
       tools: new Map(),
+      thinking: new Map(),
       captureContent: this.captureContent,
     };
     this.runs.set(requestId, state);
-    this.enqueue({
-      id: randomUUID(),
-      type: "trace-create",
-      timestamp: startTime,
-      body: {
-        id: traceId,
-        name: "pi-work.chat",
-        sessionId: context.taskId,
+    if (!this.traces.has(traceId)) {
+      this.traces.add(traceId);
+      this.enqueue({
+        id: randomUUID(),
+        type: "trace-create",
         timestamp: startTime,
-        ...(this.captureContent ? { input: this.cap(context.userMessage) } : {}),
-        metadata: {
-          workspaceId: context.workspaceId,
-          taskId: context.taskId,
-          requestId,
-          provider: context.provider,
-          model: context.model,
-          thinkingLevel: context.thinkingLevel,
-          permissionMode: context.permissionMode,
-          cwd: context.cwd,
-          appVersion: context.appVersion,
+        body: {
+          id: traceId,
+          name: "pi-work.chat",
+          sessionId: context.taskId,
+          timestamp: startTime,
+          ...(this.captureContent ? { input: this.cap(context.userMessage) } : {}),
+          metadata: {
+            workspaceId: context.workspaceId,
+            taskId: context.taskId,
+            requestId,
+            provider: context.provider,
+            model: context.model,
+            thinkingLevel: context.thinkingLevel,
+            permissionMode: context.permissionMode,
+            cwd: context.cwd,
+            appVersion: context.appVersion,
+          },
         },
-      },
-    });
+      });
+    }
     return state;
+  }
+
+  private recordThinking(requestId: string, taskId: string, payload: Record<string, unknown>, timestamp: string): void {
+    const state = this.ensureRun(requestId, taskId);
+    if (state === null) return;
+    const index = typeof payload.contentIndex === "number" ? payload.contentIndex : 0;
+    const phase = payload.phase;
+    if (phase === "start") {
+      state.thinking.set(index, { text: "", start: timestamp });
+      return;
+    }
+    if (phase === "delta" && typeof payload.delta === "string") {
+      const current = state.thinking.get(index) ?? { text: "", start: timestamp };
+      state.thinking.set(index, { text: `${current.text}${payload.delta}`, start: current.start });
+      return;
+    }
+    if (phase === "end") {
+      const current = state.thinking.get(index);
+      state.thinking.delete(index);
+      const content = typeof payload.content === "string" ? payload.content : current?.text ?? "";
+      if (content.trim() === "") return;
+      this.enqueue({
+        id: randomUUID(),
+        type: "span-create",
+        timestamp,
+        body: {
+          id: randomUUID(),
+          traceId: state.traceId,
+          name: "thinking",
+          startTime: current?.start ?? timestamp,
+          endTime: timestamp,
+          ...(this.captureContent ? { output: this.cap(content) } : {}),
+          metadata: { contentIndex: index },
+        },
+      });
+    }
   }
 
   private recordGeneration(requestId: string, taskId: string, payload: UsageEventPayload, timestamp: string): void {
@@ -529,5 +577,6 @@ type RunState = {
   startTime: string;
   output: string;
   tools: Map<string, { toolName: string; args: unknown; startTime: string }>;
+  thinking: Map<number, { text: string; start: string }>;
   captureContent: boolean;
 };

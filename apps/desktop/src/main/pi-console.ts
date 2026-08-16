@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
+import { electronNodeCleanupScript } from "./electron-node-cleanup.js";
 import { ManagedCliRuntime } from "./managed-cli.js";
 
 export type PiConsoleEvent =
@@ -164,18 +165,7 @@ export function createTerminalCommandShims({
 }): void {
   mkdirSync(directory, { recursive: true });
   const cleanupPath = join(directory, "cleanup-electron-node.cjs");
-  writeFileSync(
-    cleanupPath,
-    [
-      "delete process.env.ELECTRON_RUN_AS_NODE;",
-      "const originalNodeOptions = process.env.PI_WORK_ORIGINAL_NODE_OPTIONS;",
-      "delete process.env.PI_WORK_ORIGINAL_NODE_OPTIONS;",
-      "delete process.env.PI_WORK_NODE_CLEANUP;",
-      "if (originalNodeOptions) process.env.NODE_OPTIONS = originalNodeOptions;",
-      "else delete process.env.NODE_OPTIONS;",
-      "",
-    ].join("\n"),
-  );
+  writeFileSync(cleanupPath, electronNodeCleanupScript());
   if (platform === "win32") {
     const environment = [
       "@echo off",

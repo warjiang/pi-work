@@ -21,6 +21,13 @@ const maxSkillFileEntries = 200;
 const maxSkillFileDepth = 6;
 const maxReadableSkillFileBytes = 1_048_576;
 
+export class SkillFileBinaryError extends Error {
+  readonly code = "BINARY_SKILL_FILE" as const;
+  constructor() {
+    super("Binary Skill files cannot be previewed.");
+  }
+}
+
 export type SkillFolderEntry = {
   name: string;
   path: string;
@@ -65,7 +72,7 @@ export class SkillManager {
     const resolvedTarget = await realpath(target);
     assertPathInside(root, resolvedTarget);
     const contents = await readFile(resolvedTarget);
-    if (contents.includes(0)) throw new Error("Binary Skill files cannot be previewed.");
+    if (contents.includes(0)) throw new SkillFileBinaryError();
     return {
       path: value.path,
       content: contents.toString("utf8"),

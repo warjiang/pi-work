@@ -1709,6 +1709,9 @@ function registerIpc(): void {
     if (parsed.taskId !== null && task === null) {
       throw new Error("Task not found.");
     }
+    if (parsed.editMessageId !== undefined && task === null) {
+      throw new Error("Send a message before editing one.");
+    }
     if (command?.[1] === "plan" && task === null) {
       throw new Error("Send a message or set /goal before requesting /plan.");
     }
@@ -1793,6 +1796,13 @@ function registerIpc(): void {
       return taskSchema.parse(getStore().getTask(task.id));
     }
 
+    if (parsed.editMessageId !== undefined && task !== null && task.running) {
+      const cancelResponse = await sendAgentRequest({ type: "cancel", sessionId: task.id });
+      if (cancelResponse.type === "error") throw new Error(cancelResponse.message);
+      clearPendingToolApprovals(task.id);
+      task = getStore().updateSession(task.id, { running: false });
+    }
+
     task ??= getStore().createTask({
       ...(managedSessionId === null ? {} : { id: managedSessionId }),
       workspaceId: workspace.id,
@@ -1813,14 +1823,18 @@ function registerIpc(): void {
       running: true,
       unread: false,
     });
-    const userMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
-    for (const attachment of inspectedAttachments) {
-      getStore().addAttachment({
-        sessionId: task.id,
-        messageId: userMessage.id,
-        ...attachment,
-      });
-      approvedAttachmentPaths.delete(attachment.path);
+    if (parsed.editMessageId !== undefined) {
+      getStore().editMessage(parsed.editMessageId, parsed.content);
+    } else {
+      const userMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
+      for (const attachment of inspectedAttachments) {
+        getStore().addAttachment({
+          sessionId: task.id,
+          messageId: userMessage.id,
+          ...attachment,
+        });
+        approvedAttachmentPaths.delete(attachment.path);
+      }
     }
     void runChatInBackground({
       taskId: task.id,

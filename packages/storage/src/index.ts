@@ -287,6 +287,32 @@ export class PiWorkStore {
       .map((row) => chatMessageSchema.parse(row));
   }
 
+  editMessage(messageId: string, content: string): ChatMessage {
+    const row = this.db.select().from(messages).where(eq(messages.id, messageId)).get();
+    if (row === undefined) throw new Error("Message not found.");
+    const target = chatMessageSchema.parse(row);
+    const anchor = this.sqlite
+      .prepare("SELECT rowid AS rowid FROM messages WHERE id = ?")
+      .get(messageId) as { rowid: number } | undefined;
+    if (anchor === undefined) throw new Error("Message not found.");
+    const later = (this.sqlite
+      .prepare("SELECT id FROM messages WHERE task_id = ? AND rowid > ?")
+      .all(target.taskId, anchor.rowid) as Array<{ id: string }>);
+    const truncate = this.sqlite.transaction(() => {
+      for (const message of later) {
+        this.sqlite.prepare("DELETE FROM activities WHERE message_id = ?").run(message.id);
+        this.sqlite.prepare("DELETE FROM attachments WHERE message_id = ?").run(message.id);
+        this.sqlite.prepare("DELETE FROM messages WHERE id = ?").run(message.id);
+      }
+      this.sqlite
+        .prepare("DELETE FROM activities WHERE task_id = ? AND message_id IS NULL AND created_at > ?")
+        .run(target.taskId, target.createdAt);
+      this.sqlite.prepare("UPDATE messages SET content = ? WHERE id = ?").run(content, messageId);
+    });
+    truncate();
+    return { ...target, content };
+  }
+
   getTask(taskId: string): Task | null {
     const row = this.db.select().from(tasks).where(eq(tasks.id, taskId)).get();
     return row === undefined ? null : parseTask(row);
@@ -751,10 +777,22 @@ export class PiWorkStore {
     const byDay = this.sqlite.prepare(
       `SELECT substr(created_at, 1, 10) AS day, ${totalsExpr} FROM model_usage ${where} GROUP BY day ORDER BY day ASC`,
     ).all(...params) as Array<Record<string, unknown>>;
+    const byModelDay = this.sqlite.prepare(
+      `SELECT substr(created_at, 1, 10) AS day, provider, model, ${totalsExpr} FROM model_usage ${where} GROUP BY day, provider, model ORDER BY day ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    const byHour = this.sqlite.prepare(
+      `SELECT strftime('%Y-%m-%dT%H', created_at, 'localtime') AS hour, ${totalsExpr} FROM model_usage ${where} GROUP BY hour ORDER BY hour ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    const byModelHour = this.sqlite.prepare(
+      `SELECT strftime('%Y-%m-%dT%H', created_at, 'localtime') AS hour, provider, model, ${totalsExpr} FROM model_usage ${where} GROUP BY hour, provider, model ORDER BY hour ASC`,
+    ).all(...params) as Array<Record<string, unknown>>;
     return usageSummarySchema.parse({
       totals: totalsRow,
       byModel,
       byDay,
+      byModelDay,
+      byHour,
+      byModelHour,
     });
   }
 
