@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type {
   Activity,
@@ -16,14 +16,26 @@ import type {
   BrowserTab,
   ChatMessage,
   Conversation,
+  ConductorNodeAttempt,
+  ConductorNodeAttemptDetail,
+  ConductorNodeEvent,
   ConductorNodeState,
   ConductorRun,
   ConductorSpec,
   Label,
   ModelUsage,
   ObservabilityStoredConfig,
+  PlanApprovalAction,
+  PlanExecution,
+  PlanExecutionDetail,
+  PlanExecutionMode,
+  PlanExecutionStep,
   Plan,
-  Project,
+  PlanProposal,
+  PlanRevision,
+  PlanRevisionDiff,
+  PlanRevisionEditInput,
+  PlanStepUpdateInput,
   RecordModelUsageInput,
   Run,
   SavedView,
@@ -56,14 +68,22 @@ import {
   browserTabSchema,
   chatMessageSchema,
   conductorNodeStateSchema,
+  conductorNodeAttemptDetailSchema,
+  conductorNodeAttemptSchema,
+  conductorNodeEventSchema,
   conductorRunSchema,
   conductorSpecSchema,
   eventSchema,
   labelSchema,
   modelUsageSchema,
   observabilityStoredConfigSchema,
+  diffPlanRevisions,
+  planExecutionSchema,
+  planExecutionStepSchema,
+  planRevisionEditInputSchema,
   planSchema,
-  projectSchema,
+  planProposalSchema,
+  planRevisionSchema,
   recordModelUsageInputSchema,
   runSchema,
   savedViewSchema,
@@ -85,14 +105,18 @@ import {
   boardColumns,
   boards,
   commandReceipts,
+  conductorNodeAttempts,
+  conductorNodeEvents,
   conductorNodeStates,
   conductorRuns,
   domainEntities,
   events,
   messages,
   modelUsage,
+  planExecutionSteps,
+  planExecutions,
+  planRevisions,
   plans,
-  projects,
   runs,
   tasks,
   taskBoardState,
@@ -129,10 +153,6 @@ function parseWorkspaceDirectory(row: typeof workspaceDirectories.$inferSelect):
   return workspaceDirectorySchema.parse(row);
 }
 
-function parseProject(row: typeof projects.$inferSelect): Project {
-  return projectSchema.parse(row);
-}
-
 function parseBoard(row: typeof boards.$inferSelect): Board {
   return boardSchema.parse(row);
 }
@@ -157,6 +177,28 @@ function parseConductorRun(row: typeof conductorRuns.$inferSelect): ConductorRun
 
 function parseConductorNodeState(row: typeof conductorNodeStates.$inferSelect): ConductorNodeState {
   return conductorNodeStateSchema.parse(row);
+}
+
+function parseConductorNodeAttempt(row: typeof conductorNodeAttempts.$inferSelect): ConductorNodeAttempt {
+  return conductorNodeAttemptSchema.parse(row);
+}
+
+function parseConductorNodeEvent(row: typeof conductorNodeEvents.$inferSelect): ConductorNodeEvent {
+  return conductorNodeEventSchema.parse({
+    ...row,
+    payload: JSON.parse(row.payload) as unknown,
+  });
+}
+
+function parsePlanExecution(row: typeof planExecutions.$inferSelect): PlanExecution {
+  return planExecutionSchema.parse(row);
+}
+
+function parsePlanExecutionStep(row: typeof planExecutionSteps.$inferSelect): PlanExecutionStep {
+  return planExecutionStepSchema.parse({
+    ...row,
+    verificationResults: JSON.parse(row.verificationResults) as unknown,
+  });
 }
 
 function parseWorkspace(row: typeof workspaces.$inferSelect): Workspace {
@@ -185,6 +227,7 @@ function parseTask(row: typeof tasks.$inferSelect): Task {
     unread: booleanValue(row.unread),
     labelIds: JSON.parse(row.labelIds) as unknown,
     planMode: booleanValue(row.planMode),
+    executionMode: row.executionMode,
     running: booleanValue(row.running),
   });
 }
@@ -197,6 +240,7 @@ function taskValues(task: Task): typeof tasks.$inferInsert {
     unread: task.unread ? "1" : "0",
     labelIds: JSON.stringify(task.labelIds),
     planMode: task.planMode ? "1" : "0",
+    executionMode: task.executionMode,
     running: task.running ? "1" : "0",
   };
 }
@@ -234,6 +278,7 @@ export class PiWorkStore {
     this.sqlite = new Database(filename);
     this.db = drizzle(this.sqlite);
     this.migrate();
+    this.failInterruptedPlanExecutions();
   }
 
   close(): void {
@@ -282,20 +327,47 @@ export class PiWorkStore {
   updateWorkspace(workspaceId: string, input: {
     name?: string;
     outputPath?: string;
+    directories?: string[];
     expectedVersion?: number;
   }): Workspace {
     const workspace = this.requireWorkspace(workspaceId);
     if (input.expectedVersion !== undefined && input.expectedVersion !== workspace.version) {
       throw new Error("Workspace was changed by another command.");
     }
+    const rootPath = canonicalPath(workspace.rootPath);
+    const requestedDirectories = input.directories === undefined
+      ? workspace.directories
+      : [...new Set(input.directories.map(canonicalPath))];
+    if (!requestedDirectories.includes(rootPath)) {
+      throw new Error("The workspace root directory cannot be removed.");
+    }
+    const directories = [rootPath, ...requestedDirectories.filter((directory) => directory !== rootPath)];
     const updatedAt = timestamp();
-    this.db.update(workspaces).set({
-      name: input.name ?? workspace.name,
-      outputPath: input.outputPath === undefined ? workspace.outputPath : canonicalPath(input.outputPath),
-      version: workspace.version + 1,
-      updatedAt,
-    }).where(eq(workspaces.id, workspaceId)).run();
-    this.appendWorkspaceEvent(workspaceId, "workspace.updated", workspaceId, input);
+    const transaction = this.sqlite.transaction(() => {
+      if (input.directories !== undefined) {
+        const currentDirectories = this.listWorkspaceDirectories(workspaceId);
+        for (const directory of currentDirectories) {
+          if (!directory.isRoot && !directories.includes(directory.canonicalPath)) {
+            this.db.delete(workspaceDirectories).where(eq(workspaceDirectories.id, directory.id)).run();
+          }
+        }
+        const existingPaths = new Set(currentDirectories.map(({ canonicalPath: path }) => path));
+        for (const directory of directories) {
+          if (!existingPaths.has(directory)) {
+            this.insertWorkspaceDirectory(workspaceId, directory, false, updatedAt);
+          }
+        }
+      }
+      this.db.update(workspaces).set({
+        name: input.name ?? workspace.name,
+        directories: JSON.stringify(directories),
+        outputPath: input.outputPath === undefined ? workspace.outputPath : canonicalPath(input.outputPath),
+        version: workspace.version + 1,
+        updatedAt,
+      }).where(eq(workspaces.id, workspaceId)).run();
+      this.appendWorkspaceEvent(workspaceId, "workspace.updated", workspaceId, input);
+    });
+    transaction();
     return this.requireWorkspace(workspaceId);
   }
 
@@ -351,7 +423,6 @@ export class PiWorkStore {
 
   createTask(input: {
     workspaceId: string;
-    projectId?: string | null;
     title: string;
     goal: string;
     kind?: Task["kind"];
@@ -360,6 +431,7 @@ export class PiWorkStore {
     thinkingLevel?: ThinkingLevel;
     permissionMode?: Task["permissionMode"];
     planMode?: boolean;
+    executionMode?: Task["executionMode"];
     workingDirectory?: string | null;
     id?: string;
   }): Task {
@@ -372,7 +444,6 @@ export class PiWorkStore {
       id: input.id ?? randomUUID(),
       ...input,
       status: "draft",
-      projectId: input.projectId ?? null,
       providerId: input.providerId ?? null,
       modelId: input.modelId ?? null,
       thinkingLevel: input.thinkingLevel ?? "off",
@@ -384,6 +455,7 @@ export class PiWorkStore {
       labelIds: [],
       permissionMode: input.permissionMode ?? "ask",
       planMode: input.planMode ?? false,
+      executionMode: input.executionMode ?? (input.planMode ? "plan" : "direct"),
       workingDirectory: input.workingDirectory ?? null,
       running: false,
       createdAt,
@@ -442,6 +514,109 @@ export class PiWorkStore {
       .prepare("SELECT id FROM messages WHERE task_id = ? AND rowid > ?")
       .all(target.taskId, anchor.rowid) as Array<{ id: string }>);
     const truncate = this.sqlite.transaction(() => {
+      const affectedPlans = this.sqlite.prepare(`
+        SELECT id
+        FROM plan_revisions AS candidate
+        WHERE candidate.task_id = ?
+          AND (
+            candidate.created_from_message_id IN (
+              SELECT id
+              FROM messages
+              WHERE task_id = ? AND rowid >= ?
+            )
+            OR (
+              candidate.created_at >= ?
+              AND (
+                candidate.created_from_message_id IS NULL
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM messages AS source
+                  WHERE source.id = candidate.created_from_message_id
+                    AND source.task_id = candidate.task_id
+                )
+              )
+            )
+          )
+      `).all(target.taskId, target.taskId, anchor.rowid, target.createdAt) as Array<{ id: string }>;
+      const affectedRuns = this.sqlite.prepare(`
+        WITH RECURSIVE affected_runs(id) AS (
+          SELECT conductor_runs.id
+          FROM conductor_runs
+          WHERE task_id = ?
+            AND (
+              source_message_id IN (
+                SELECT id
+                FROM messages
+                WHERE task_id = ? AND rowid >= ?
+              )
+              OR final_message_id IN (
+                SELECT id
+                FROM messages
+                WHERE task_id = ? AND rowid >= ?
+              )
+              OR plan_revision_id IN (
+                SELECT candidate.id
+                FROM plan_revisions AS candidate
+                WHERE candidate.task_id = ?
+                  AND (
+                    candidate.created_from_message_id IN (
+                      SELECT id
+                      FROM messages
+                      WHERE task_id = ? AND rowid >= ?
+                    )
+                    OR (
+                      candidate.created_at >= ?
+                      AND (
+                        candidate.created_from_message_id IS NULL
+                        OR NOT EXISTS (
+                          SELECT 1
+                          FROM messages AS source
+                          WHERE source.id = candidate.created_from_message_id
+                            AND source.task_id = candidate.task_id
+                        )
+                      )
+                    )
+                  )
+              )
+              OR (
+                origin != 'legacy'
+                AND source_message_id IS NULL
+                AND plan_revision_id IS NULL
+                AND created_at >= ?
+              )
+            )
+          UNION
+          SELECT child.id
+          FROM conductor_runs AS child
+          JOIN affected_runs AS parent ON child.parent_run_id = parent.id
+        )
+        SELECT id FROM affected_runs
+      `).all(
+        target.taskId,
+        target.taskId,
+        anchor.rowid,
+        target.taskId,
+        anchor.rowid,
+        target.taskId,
+        target.taskId,
+        anchor.rowid,
+        target.createdAt,
+        target.createdAt,
+      ) as Array<{ id: string }>;
+      for (const run of affectedRuns) {
+        this.sqlite.prepare(`
+          DELETE FROM conductor_node_events
+          WHERE execution_id IN (
+            SELECT execution_id FROM conductor_node_attempts WHERE run_id = ?
+          )
+        `).run(run.id);
+        this.sqlite.prepare("DELETE FROM conductor_node_attempts WHERE run_id = ?").run(run.id);
+        this.sqlite.prepare("DELETE FROM conductor_node_states WHERE run_id = ?").run(run.id);
+        this.sqlite.prepare("DELETE FROM conductor_runs WHERE id = ?").run(run.id);
+      }
+      for (const plan of affectedPlans) {
+        this.sqlite.prepare("DELETE FROM plan_revisions WHERE id = ?").run(plan.id);
+      }
       for (const message of later) {
         this.sqlite.prepare("DELETE FROM activities WHERE message_id = ?").run(message.id);
         this.sqlite.prepare("DELETE FROM attachments WHERE message_id = ?").run(message.id);
@@ -502,40 +677,68 @@ export class PiWorkStore {
 
   updateSession(sessionId: string, input: Partial<Pick<
     Session,
-    "projectId" | "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "permissionMode" | "planMode" | "workingDirectory" | "running"
+    "title" | "status" | "archived" | "flagged" | "unread" | "statusId" | "labelIds" | "permissionMode" | "planMode" | "executionMode" | "workingDirectory" | "running"
   >>): Session {
     const current = this.requireTask(sessionId);
     const workspace = this.requireWorkspace(current.workspaceId);
     this.assertSessionWorkspaceKind(workspace, current.kind);
     this.validateSessionResources(workspace, input);
-    if (input.projectId !== undefined && input.projectId !== null) {
-      const project = this.getProject(workspace.id, input.projectId);
-      if (project === null) throw new Error("Project belongs to a different workspace.");
-    }
     this.validateWorkingDirectory(workspace, input.workingDirectory);
-    const next = taskSchema.parse({ ...current, ...input, updatedAt: timestamp() });
+    const normalizedInput = input.executionMode !== undefined
+      ? { ...input, planMode: input.executionMode === "plan" }
+      : input.planMode !== undefined
+        ? { ...input, executionMode: input.planMode ? "plan" as const : "direct" as const }
+        : input;
+    const latestPlan = normalizedInput.executionMode !== undefined && normalizedInput.executionMode !== "plan"
+      ? this.getLatestPlanRevision(sessionId)
+      : null;
+    const supersededPlan = latestPlan?.status === "proposed"
+      ? planRevisionSchema.parse({ ...latestPlan, status: "superseded" })
+      : null;
+    const lifecycleReset = supersededPlan !== null
+      && input.status === undefined
+      && (current.status === "planning" || current.status === "awaiting_plan_approval")
+      ? { status: "draft" as const, running: false }
+      : {};
+    const nextInput = { ...normalizedInput, ...lifecycleReset };
+    const next = taskSchema.parse({ ...current, ...nextInput, updatedAt: timestamp() });
     const transaction = this.sqlite.transaction(() => {
-      this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
-      if (next.kind === "task" && input.projectId !== undefined && current.projectId !== next.projectId) {
-        const oldProjectBoards = this.db.select({ id: boards.id }).from(boards).where(and(
-          eq(boards.workspaceId, current.workspaceId),
-          current.projectId === null ? isNull(boards.projectId) : eq(boards.projectId, current.projectId),
-          eq(boards.kind, "project"),
-        )).all();
-        for (const board of oldProjectBoards) {
-          this.db.delete(taskBoardState).where(and(
-            eq(taskBoardState.taskId, sessionId),
-            eq(taskBoardState.boardId, board.id),
-          )).run();
-        }
+      if (supersededPlan !== null) {
+        this.db.update(planRevisions).set({
+          status: supersededPlan.status,
+          value: JSON.stringify(supersededPlan),
+        }).where(eq(planRevisions.id, supersededPlan.id)).run();
+        this.appendEvent(sessionId, "plan.superseded", {
+          planRevisionId: supersededPlan.id,
+          revision: supersededPlan.revision,
+          reason: "execution_mode_changed",
+        });
       }
-      if (next.kind === "task" && (input.projectId !== undefined || input.statusId !== undefined)) {
+      this.db.update(tasks).set(taskValues(next)).where(eq(tasks.id, sessionId)).run();
+      if (next.kind === "task" && input.statusId !== undefined) {
         this.ensureTaskBoardStates(next);
       }
-      this.appendEvent(sessionId, "session.updated", input);
+      this.appendEvent(sessionId, "session.updated", nextInput);
     });
     transaction();
     return next;
+  }
+
+  reconcileInterruptedSessions(): Session[] {
+    const durableTaskIds = new Set(
+      this.db.select({
+        taskId: conductorRuns.taskId,
+        status: conductorRuns.status,
+        origin: conductorRuns.origin,
+      }).from(conductorRuns).all()
+        .filter(({ status, origin }) => (
+          origin !== "legacy" && (status === "running" || status === "paused")
+        ))
+        .map(({ taskId }) => taskId),
+    );
+    return this.listSessions()
+      .filter(({ id, running }) => running && !durableTaskIds.has(id))
+      .map(({ id }) => this.updateSession(id, { running: false }));
   }
 
   listManagedConversations(): Conversation[] {
@@ -581,6 +784,9 @@ export class PiWorkStore {
       this.sqlite.prepare("DELETE FROM artifacts WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM events WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM messages WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM plan_execution_steps WHERE execution_id IN (SELECT id FROM plan_executions WHERE task_id = ?)").run(taskId);
+      this.sqlite.prepare("DELETE FROM plan_executions WHERE task_id = ?").run(taskId);
+      this.sqlite.prepare("DELETE FROM plan_revisions WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM plans WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM runs WHERE task_id = ?").run(taskId);
       this.sqlite.prepare("DELETE FROM task_board_state WHERE task_id = ?").run(taskId);
@@ -657,107 +863,6 @@ export class PiWorkStore {
       .map(parseTask);
   }
 
-  createProject(input: {
-    workspaceId: string;
-    name: string;
-    description?: string;
-    color?: string;
-  }): Project {
-    this.requireFolderWorkspace(input.workspaceId);
-    const now = timestamp();
-    const project = projectSchema.parse({
-      id: randomUUID(),
-      ...input,
-      description: input.description ?? "",
-      color: input.color ?? "#8a8275",
-      archived: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const transaction = this.sqlite.transaction(() => {
-      this.db.insert(projects).values(project).run();
-      this.createBoardInternal({
-        workspaceId: project.workspaceId,
-        projectId: project.id,
-        name: project.name,
-        kind: "project",
-      });
-      this.appendWorkspaceEvent(project.workspaceId, "project.created", project.id, project);
-    });
-    transaction();
-    return project;
-  }
-
-  listProjects(workspaceId: string, includeArchived = false): Project[] {
-    this.requireFolderWorkspace(workspaceId);
-    const rows = this.db.select().from(projects)
-      .where(eq(projects.workspaceId, workspaceId))
-      .orderBy(asc(projects.createdAt))
-      .all()
-      .map(parseProject);
-    return includeArchived ? rows : rows.filter(({ archived }) => !archived);
-  }
-
-  getProject(workspaceId: string, projectId: string): Project | null {
-    const row = this.db.select().from(projects)
-      .where(and(eq(projects.id, projectId), eq(projects.workspaceId, workspaceId)))
-      .get();
-    return row === undefined ? null : parseProject(row);
-  }
-
-  updateProject(workspaceId: string, projectId: string, input: Partial<Pick<
-    Project,
-    "name" | "description" | "color" | "archived"
-  >>): Project {
-    const current = this.getProject(workspaceId, projectId);
-    if (current === null) throw new Error("Project not found.");
-    const next = projectSchema.parse({ ...current, ...input, updatedAt: timestamp() });
-    const transaction = this.sqlite.transaction(() => {
-      this.db.update(projects).set(next).where(eq(projects.id, projectId)).run();
-      if (input.name !== undefined) {
-        this.db.update(boards).set({ name: next.name, updatedAt: next.updatedAt })
-          .where(and(eq(boards.workspaceId, workspaceId), eq(boards.projectId, projectId)))
-          .run();
-      }
-      this.appendWorkspaceEvent(workspaceId, "project.updated", projectId, input);
-    });
-    transaction();
-    return next;
-  }
-
-  removeProject(workspaceId: string, projectId: string): void {
-    const project = this.getProject(workspaceId, projectId);
-    if (project === null) throw new Error("Project not found.");
-    const boardRows = this.db.select().from(boards)
-      .where(and(eq(boards.workspaceId, workspaceId), eq(boards.projectId, projectId)))
-      .all();
-    const transaction = this.sqlite.transaction(() => {
-      this.sqlite.prepare("UPDATE tasks SET project_id = NULL, updated_at = ? WHERE workspace_id = ? AND project_id = ?")
-        .run(timestamp(), workspaceId, projectId);
-      for (const board of boardRows) {
-        this.sqlite.prepare("DELETE FROM task_board_state WHERE board_id = ?").run(board.id);
-        this.sqlite.prepare("DELETE FROM board_columns WHERE board_id = ?").run(board.id);
-      }
-      this.sqlite.prepare("DELETE FROM boards WHERE workspace_id = ? AND project_id = ?").run(workspaceId, projectId);
-      this.sqlite.prepare("DELETE FROM projects WHERE id = ? AND workspace_id = ?").run(projectId, workspaceId);
-      this.appendWorkspaceEvent(workspaceId, "project.removed", projectId, {});
-    });
-    transaction();
-  }
-
-  createBoard(input: { workspaceId: string; projectId?: string | null; name: string }): Board {
-    this.requireFolderWorkspace(input.workspaceId);
-    if (input.projectId !== undefined && input.projectId !== null && this.getProject(input.workspaceId, input.projectId) === null) {
-      throw new Error("Project not found.");
-    }
-    return this.createBoardInternal({
-      workspaceId: input.workspaceId,
-      projectId: input.projectId ?? null,
-      name: input.name,
-      kind: input.projectId === undefined || input.projectId === null ? "workspace" : "project",
-    });
-  }
-
   listBoards(workspaceId: string): Board[] {
     this.requireFolderWorkspace(workspaceId);
     this.ensureDefaultBoard(workspaceId);
@@ -774,9 +879,7 @@ export class PiWorkStore {
       ? this.ensureDefaultBoard(workspaceId)
       : this.requireBoard(workspaceId, boardId);
     for (const task of this.listTasks(workspaceId)) {
-      if (board.kind === "workspace" || task.projectId === board.projectId) {
-        this.ensureBoardState(task, board);
-      }
+      this.ensureBoardState(task, board);
     }
     return boardSnapshotSchema.parse({
       board,
@@ -891,7 +994,6 @@ export class PiWorkStore {
     const board = this.requireBoard(input.workspaceId, input.boardId);
     const task = this.requireTask(input.taskId);
     if (task.workspaceId !== input.workspaceId) throw new Error("Task belongs to a different workspace.");
-    if (board.kind === "project" && task.projectId !== board.projectId) throw new Error("Task is outside this project board.");
     const targetColumn = this.requireBoardColumn(input.workspaceId, input.boardId, input.toColumnId);
     const current = this.ensureBoardState(task, board);
     if (current.version !== input.expectedVersion) throw new Error("Card was moved by another command.");
@@ -948,7 +1050,21 @@ export class PiWorkStore {
     return snapshot;
   }
 
-  createConductorRun(input: { workspaceId: string; taskId: string; spec: ConductorSpec }): ConductorRun {
+  createConductorRun(input: {
+    workspaceId: string;
+    taskId: string;
+    spec: ConductorSpec;
+    status?: ConductorRun["status"];
+    origin?: ConductorRun["origin"];
+    title?: string;
+    summary?: string;
+    dedupeKey?: string | null;
+    sourceRequestId?: string | null;
+    sourceMessageId?: string | null;
+    planRevisionId?: string | null;
+    parentRunId?: string | null;
+    synthesisNodeId?: string | null;
+  }): ConductorRun {
     const task = this.requireTask(input.taskId);
     if (task.workspaceId !== input.workspaceId) throw new Error("Task belongs to a different workspace.");
     const spec = conductorSpecSchema.parse(input.spec);
@@ -957,7 +1073,18 @@ export class PiWorkStore {
       id: randomUUID(),
       workspaceId: input.workspaceId,
       taskId: input.taskId,
-      status: "pending",
+      status: input.status ?? "pending",
+      origin: input.origin ?? "legacy",
+      title: input.title ?? "Workflow",
+      summary: input.summary ?? "",
+      dedupeKey: input.dedupeKey ?? null,
+      sourceRequestId: input.sourceRequestId ?? null,
+      sourceMessageId: input.sourceMessageId ?? null,
+      planRevisionId: input.planRevisionId ?? null,
+      parentRunId: input.parentRunId ?? null,
+      synthesisNodeId: input.synthesisNodeId ?? null,
+      finalizationStatus: "pending",
+      finalMessageId: null,
       spec,
       lastEventSequence: 0,
       leaseOwner: null,
@@ -974,6 +1101,7 @@ export class PiWorkStore {
           nodeId: node.id,
           status: node.dependsOn.length === 0 ? "ready" : "pending",
           attempt: 0,
+          executionId: null,
           output: null,
           error: null,
           startedAt: null,
@@ -985,6 +1113,28 @@ export class PiWorkStore {
     });
     transaction();
     return run;
+  }
+
+  createConductorRunOnce(input: Parameters<PiWorkStore["createConductorRun"]>[0]): {
+    run: ConductorRun;
+    created: boolean;
+  } {
+    if (input.dedupeKey === undefined || input.dedupeKey === null) {
+      return { run: this.createConductorRun(input), created: true };
+    }
+    let result: { run: ConductorRun; created: boolean } | null = null;
+    const transaction = this.sqlite.transaction(() => {
+      const existing = this.db.select().from(conductorRuns)
+        .where(eq(conductorRuns.dedupeKey, input.dedupeKey!))
+        .get();
+      if (existing !== undefined) {
+        result = { run: parseConductorRun(existing), created: false };
+        return;
+      }
+      result = { run: this.createConductorRun(input), created: true };
+    });
+    transaction();
+    return result!;
   }
 
   getConductorRun(workspaceId: string, runId: string): ConductorRun | null {
@@ -1003,6 +1153,14 @@ export class PiWorkStore {
         eq(conductorRuns.taskId, taskId),
       )).orderBy(desc(conductorRuns.createdAt)).all();
     return rows.map(parseConductorRun);
+  }
+
+  listTaskConductorRuns(taskId: string): ConductorRun[] {
+    const task = this.getTask(taskId);
+    if (task === null) return [];
+    const workspace = this.getWorkspace(task.workspaceId);
+    if (workspace?.kind !== "folder") return [];
+    return this.listConductorRuns(workspace.id, task.id);
   }
 
   listConductorNodeStates(workspaceId: string, runId: string): ConductorNodeState[] {
@@ -1058,7 +1216,7 @@ export class PiWorkStore {
     workspaceId: string,
     runId: string,
     nodeId: string,
-    input: Partial<Pick<ConductorNodeState, "status" | "attempt" | "output" | "error" | "startedAt" | "completedAt">>,
+    input: Partial<Pick<ConductorNodeState, "status" | "attempt" | "executionId" | "output" | "error" | "startedAt" | "completedAt">>,
   ): ConductorNodeState {
     const run = this.getConductorRun(workspaceId, runId);
     if (run === null) throw new Error("Run not found.");
@@ -1080,7 +1238,183 @@ export class PiWorkStore {
       if (next.status === "completed") this.releaseReadyConductorNodes(run, nodeId);
     });
     transaction();
+    if (next.status === "running" || next.status === "completed" || next.status === "failed") {
+      this.projectConductorNodeState(nodeId, next.status, next.error);
+    }
     return next;
+  }
+
+  createConductorNodeAttempt(input: {
+    workspaceId: string;
+    runId: string;
+    nodeId: string;
+    attempt: number;
+    executionId: string;
+    startedAt: string;
+  }): ConductorNodeAttempt {
+    const run = this.getConductorRun(input.workspaceId, input.runId);
+    if (run === null || !run.spec.nodes.some(({ id }) => id === input.nodeId)) {
+      throw new Error("Run node not found.");
+    }
+    const attempt = conductorNodeAttemptSchema.parse({
+      ...input,
+      status: "running",
+      output: null,
+      error: null,
+      completedAt: null,
+    });
+    this.db.insert(conductorNodeAttempts).values(attempt).run();
+    return attempt;
+  }
+
+  updateConductorNodeAttempt(
+    workspaceId: string,
+    executionId: string,
+    input: Partial<Pick<ConductorNodeAttempt, "status" | "output" | "error" | "completedAt">>,
+  ): ConductorNodeAttempt {
+    const currentRow = this.db.select().from(conductorNodeAttempts)
+      .where(eq(conductorNodeAttempts.executionId, executionId))
+      .get();
+    if (currentRow === undefined) throw new Error("Node attempt not found.");
+    const run = this.getConductorRun(workspaceId, currentRow.runId);
+    if (run === null) throw new Error("Node attempt belongs to a different workspace.");
+    const next = conductorNodeAttemptSchema.parse({ ...parseConductorNodeAttempt(currentRow), ...input });
+    this.db.update(conductorNodeAttempts).set(next)
+      .where(eq(conductorNodeAttempts.executionId, executionId))
+      .run();
+    return next;
+  }
+
+  appendConductorNodeEvent(input: ConductorNodeEvent): boolean {
+    const attempt = this.db.select({ executionId: conductorNodeAttempts.executionId })
+      .from(conductorNodeAttempts)
+      .where(eq(conductorNodeAttempts.executionId, input.executionId))
+      .get();
+    if (attempt === undefined) return false;
+    const event = conductorNodeEventSchema.parse(input);
+    this.db.insert(conductorNodeEvents).values({
+      ...event,
+      payload: JSON.stringify(event.payload),
+    }).onConflictDoNothing().run();
+    return true;
+  }
+
+  listConductorNodeAttempts(workspaceId: string, runId: string): ConductorNodeAttemptDetail[] {
+    const run = this.getConductorRun(workspaceId, runId);
+    if (run === null) throw new Error("Run not found.");
+    const attempts = this.db.select().from(conductorNodeAttempts)
+      .where(eq(conductorNodeAttempts.runId, runId))
+      .orderBy(asc(conductorNodeAttempts.nodeId), asc(conductorNodeAttempts.attempt))
+      .all()
+      .map(parseConductorNodeAttempt);
+    const executionIds = attempts.map(({ executionId }) => executionId);
+    const events = executionIds.length === 0 ? [] : this.db.select().from(conductorNodeEvents)
+      .where(inArray(conductorNodeEvents.executionId, executionIds))
+      .orderBy(asc(conductorNodeEvents.sequence))
+      .all()
+      .map(parseConductorNodeEvent);
+    const eventsByExecutionId = new Map<string, ConductorNodeEvent[]>();
+    for (const event of events) {
+      const values = eventsByExecutionId.get(event.executionId) ?? [];
+      values.push(event);
+      eventsByExecutionId.set(event.executionId, values);
+    }
+    return attempts.map((attempt) => conductorNodeAttemptDetailSchema.parse({
+      ...attempt,
+      events: eventsByExecutionId.get(attempt.executionId) ?? [],
+    }));
+  }
+
+  getConductorNodeAttemptByExecutionId(executionId: string): ConductorNodeAttempt | null {
+    const row = this.db.select().from(conductorNodeAttempts)
+      .where(eq(conductorNodeAttempts.executionId, executionId))
+      .get();
+    return row === undefined ? null : parseConductorNodeAttempt(row);
+  }
+
+  getConductorRunByExecutionId(executionId: string): ConductorRun | null {
+    const attempt = this.db.select().from(conductorNodeAttempts)
+      .where(eq(conductorNodeAttempts.executionId, executionId))
+      .get();
+    if (attempt === undefined) return null;
+    const run = this.db.select().from(conductorRuns)
+      .where(eq(conductorRuns.id, attempt.runId))
+      .get();
+    return run === undefined ? null : parseConductorRun(run);
+  }
+
+  claimConductorRunFinalization(workspaceId: string, runId: string): boolean {
+    const result = this.sqlite.prepare(`
+      UPDATE conductor_runs
+      SET finalization_status = 'publishing', updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND finalization_status IN ('pending', 'failed')
+    `).run(timestamp(), runId, workspaceId);
+    return result.changes === 1;
+  }
+
+  completeConductorRunFinalization(
+    workspaceId: string,
+    runId: string,
+    status: "published" | "failed",
+    finalMessageId: string | null,
+  ): ConductorRun {
+    this.db.update(conductorRuns).set({
+      finalizationStatus: status,
+      finalMessageId,
+      updatedAt: timestamp(),
+    }).where(and(eq(conductorRuns.id, runId), eq(conductorRuns.workspaceId, workspaceId))).run();
+    const run = this.getConductorRun(workspaceId, runId);
+    if (run === null) throw new Error("Run not found.");
+    return run;
+  }
+
+  finalizeConductorRunResult(
+    workspaceId: string,
+    runId: string,
+    content: string | null,
+  ): ConductorRun {
+    let result: ConductorRun | null = null;
+    const transaction = this.sqlite.transaction(() => {
+      const current = this.getConductorRun(workspaceId, runId);
+      if (current === null) throw new Error("Run not found.");
+      if (current.finalizationStatus === "published") {
+        result = current;
+        return;
+      }
+      if (!["completed", "failed", "cancelled"].includes(current.status)) {
+        throw new Error("Only terminal conductor runs can be finalized.");
+      }
+
+      let finalMessageId = current.finalMessageId;
+      if (current.status === "completed" && finalMessageId === null) {
+        if (content === null || content.trim() === "") {
+          throw new Error("A completed conductor run requires a final result.");
+        }
+        finalMessageId = this.addMessage({
+          taskId: current.taskId,
+          role: "assistant",
+          content,
+        }).id;
+      }
+      const taskStatus = current.status === "completed"
+        ? "reviewing"
+        : current.status === "cancelled"
+          ? "cancelled"
+          : "failed";
+      this.updateSession(current.taskId, { status: taskStatus, running: false });
+      this.db.update(conductorRuns).set({
+        finalizationStatus: "published",
+        finalMessageId,
+        updatedAt: timestamp(),
+      }).where(and(
+        eq(conductorRuns.id, runId),
+        eq(conductorRuns.workspaceId, workspaceId),
+      )).run();
+      result = this.getConductorRun(workspaceId, runId);
+    });
+    transaction();
+    if (result === null) throw new Error("Run finalization failed.");
+    return result;
   }
 
   createDomainEntity<T extends DomainValue>(
@@ -1482,27 +1816,560 @@ export class PiWorkStore {
       .map((row) => runSchema.parse(row));
   }
 
+  beginPlanning(taskId: string): Task {
+    const task = this.setTaskLifecycle(taskId, "planning", true);
+    this.appendEvent(taskId, "session.updated", { status: "planning", running: true });
+    return task;
+  }
+
+  finishPlanningClarification(taskId: string): Task {
+    const task = this.setTaskLifecycle(taskId, "planning", false);
+    this.appendEvent(taskId, "session.updated", { status: "planning", running: false });
+    return task;
+  }
+
+  savePlanRevision(input: {
+    taskId: string;
+    proposal: PlanProposal;
+    createdFromMessageId?: string | null;
+  }): PlanRevision {
+    this.requireTask(input.taskId);
+    const proposal = planProposalSchema.parse(input.proposal);
+    const transaction = this.sqlite.transaction(() => {
+      const previous = this.getLatestPlanRevision(input.taskId);
+      const createdAt = timestamp();
+      const revision = planRevisionSchema.parse({
+        id: randomUUID(),
+        taskId: input.taskId,
+        revision: (previous?.revision ?? 0) + 1,
+        status: "proposed",
+        title: proposal.title,
+        summary: proposal.summary,
+        steps: proposal.steps.map((step) => ({ ...step, id: randomUUID() })),
+        assumptions: proposal.assumptions,
+        sources: proposal.sources,
+        parentRevisionId: previous?.id ?? null,
+        createdFromMessageId: input.createdFromMessageId ?? null,
+        createdAt,
+        approvedAt: null,
+      });
+      this.db.insert(planRevisions).values({
+        id: revision.id,
+        taskId: revision.taskId,
+        revision: revision.revision,
+        status: revision.status,
+        value: JSON.stringify(revision),
+        parentRevisionId: revision.parentRevisionId,
+        createdFromMessageId: revision.createdFromMessageId,
+        createdAt: revision.createdAt,
+        approvedAt: revision.approvedAt,
+      }).run();
+      if (previous?.status === "proposed") {
+        const superseded = planRevisionSchema.parse({ ...previous, status: "superseded" });
+        this.db.update(planRevisions).set({
+          status: superseded.status,
+          value: JSON.stringify(superseded),
+        }).where(eq(planRevisions.id, previous.id)).run();
+        this.appendEvent(input.taskId, "plan.superseded", {
+          planRevisionId: previous.id,
+          revision: previous.revision,
+          supersededByPlanRevisionId: revision.id,
+        });
+      }
+      this.setTaskLifecycle(input.taskId, "awaiting_plan_approval", false);
+      this.appendEvent(input.taskId, "plan.proposed", {
+        planRevisionId: revision.id,
+        revision: revision.revision,
+        summary: revision.summary,
+      });
+      return revision;
+    });
+    return transaction();
+  }
+
+  saveEditedPlanRevision(input: PlanRevisionEditInput): PlanRevision {
+    const parsed = planRevisionEditInputSchema.parse(input);
+    const transaction = this.sqlite.transaction(() => {
+      const parent = this.getPlanRevision(parsed.parentRevisionId);
+      const latest = this.getLatestPlanRevision(parsed.taskId);
+      if (parent === null || parent.taskId !== parsed.taskId) {
+        throw new Error("Parent plan revision not found.");
+      }
+      if (latest?.id !== parent.id) {
+        throw new Error("Only the latest plan revision can be edited.");
+      }
+      if (parent.status !== "proposed" && parent.status !== "approved") {
+        throw new Error("This plan revision cannot be edited.");
+      }
+      const parentStepIds = new Set(parent.steps.map(({ id }) => id));
+      const retainedStepIds = new Set<string>();
+      const steps = parsed.steps.map((step) => {
+        const requestedId = step.id;
+        if (requestedId !== undefined) {
+          if (!parentStepIds.has(requestedId)) {
+            throw new Error("Edited plan contains a step ID that is not part of its parent revision.");
+          }
+          if (retainedStepIds.has(requestedId)) {
+            throw new Error("Edited plan contains a duplicate step ID.");
+          }
+          retainedStepIds.add(requestedId);
+        }
+        return {
+          id: requestedId ?? randomUUID(),
+          title: step.title,
+          detail: step.detail,
+          targets: step.targets,
+          verification: step.verification,
+        };
+      });
+      const createdAt = timestamp();
+      const revision = planRevisionSchema.parse({
+        id: randomUUID(),
+        taskId: parsed.taskId,
+        revision: parent.revision + 1,
+        status: "proposed",
+        title: parsed.title,
+        summary: parsed.summary,
+        steps,
+        assumptions: parsed.assumptions,
+        sources: parent.sources,
+        parentRevisionId: parent.id,
+        createdFromMessageId: parent.createdFromMessageId,
+        createdAt,
+        approvedAt: null,
+      });
+      this.db.insert(planRevisions).values({
+        id: revision.id,
+        taskId: revision.taskId,
+        revision: revision.revision,
+        status: revision.status,
+        value: JSON.stringify(revision),
+        parentRevisionId: revision.parentRevisionId,
+        createdFromMessageId: revision.createdFromMessageId,
+        createdAt: revision.createdAt,
+        approvedAt: revision.approvedAt,
+      }).run();
+      if (parent.status === "proposed") {
+        const superseded = planRevisionSchema.parse({ ...parent, status: "superseded" });
+        this.db.update(planRevisions).set({
+          status: superseded.status,
+          value: JSON.stringify(superseded),
+        }).where(eq(planRevisions.id, parent.id)).run();
+        this.appendEvent(parsed.taskId, "plan.superseded", {
+          planRevisionId: parent.id,
+          revision: parent.revision,
+          supersededByPlanRevisionId: revision.id,
+          reason: "human_edit",
+        });
+      }
+      this.setTaskLifecycle(parsed.taskId, "awaiting_plan_approval", false);
+      this.appendEvent(parsed.taskId, "plan.proposed", {
+        planRevisionId: revision.id,
+        revision: revision.revision,
+        summary: revision.summary,
+        parentRevisionId: parent.id,
+        source: "human_edit",
+      });
+      return revision;
+    });
+    return transaction();
+  }
+
+  getPlanRevisionDiff(
+    taskId: string,
+    revisionId: string,
+    compareToRevisionId?: string,
+  ): PlanRevisionDiff {
+    this.requireTask(taskId);
+    const revision = this.getPlanRevision(revisionId);
+    if (revision === null || revision.taskId !== taskId) {
+      throw new Error("Plan revision not found.");
+    }
+    const baseRevisionId = compareToRevisionId ?? revision.parentRevisionId;
+    if (baseRevisionId === null) {
+      throw new Error("The first plan revision has no parent to compare.");
+    }
+    const base = this.getPlanRevision(baseRevisionId);
+    if (base === null || base.taskId !== taskId) {
+      throw new Error("Comparison plan revision not found.");
+    }
+    return diffPlanRevisions(base, revision);
+  }
+
+  listPlanRevisions(taskId: string): PlanRevision[] {
+    this.requireTask(taskId);
+    return this.db.select().from(planRevisions)
+      .where(eq(planRevisions.taskId, taskId))
+      .orderBy(asc(planRevisions.revision))
+      .all()
+      .map((row) => planRevisionSchema.parse(JSON.parse(row.value)));
+  }
+
+  getPlanRevision(planRevisionId: string): PlanRevision | null {
+    const row = this.db.select().from(planRevisions).where(eq(planRevisions.id, planRevisionId)).get();
+    return row === undefined ? null : planRevisionSchema.parse(JSON.parse(row.value));
+  }
+
+  getLatestPlanRevision(taskId: string): PlanRevision | null {
+    const row = this.db.select().from(planRevisions)
+      .where(eq(planRevisions.taskId, taskId))
+      .orderBy(desc(planRevisions.revision))
+      .get();
+    return row === undefined ? null : planRevisionSchema.parse(JSON.parse(row.value));
+  }
+
+  approvePlanRevisionForAction(
+    taskId: string,
+    planRevisionId: string,
+    action: PlanApprovalAction,
+  ): { revision: PlanRevision; execution: PlanExecutionDetail | null } {
+    const transaction = this.sqlite.transaction(() => {
+      const latest = this.getLatestPlanRevision(taskId);
+      if (latest === null || latest.id !== planRevisionId || latest.status !== "proposed") {
+        throw new Error("Only the latest proposed plan can be approved.");
+      }
+      const approvedAt = timestamp();
+      const approved = planRevisionSchema.parse({ ...latest, status: "approved", approvedAt });
+      this.db.update(planRevisions).set({
+        status: approved.status,
+        value: JSON.stringify(approved),
+        approvedAt,
+      }).where(and(
+        eq(planRevisions.id, planRevisionId),
+        eq(planRevisions.status, "proposed"),
+      )).run();
+      const mode = action === "approve_and_execute"
+        ? "current_session"
+        : action === "approve_and_execute_fresh"
+          ? "fresh_session"
+          : action === "approve_and_orchestrate"
+            ? "orchestration"
+            : null;
+      const execution = mode === null ? null : this.insertPlanExecution(approved, mode);
+      this.setTaskLifecycle(taskId, mode === null ? "ready_to_execute" : "running", mode !== null);
+      this.appendEvent(taskId, "plan.approved", {
+        planRevisionId,
+        revision: approved.revision,
+        action,
+        executionId: execution?.execution.id ?? null,
+      });
+      return { revision: approved, execution };
+    });
+    return transaction();
+  }
+
+  approvePlanRevision(taskId: string, planRevisionId: string): PlanRevision {
+    return this.approvePlanRevisionForAction(taskId, planRevisionId, "approve_and_execute").revision;
+  }
+
+  createPlanExecutionForApprovedRevision(
+    taskId: string,
+    planRevisionId: string,
+    mode: PlanExecutionMode,
+  ): PlanExecutionDetail {
+    const transaction = this.sqlite.transaction(() => {
+      const revision = this.getPlanRevision(planRevisionId);
+      if (revision === null || revision.taskId !== taskId || revision.status !== "approved") {
+        throw new Error("The selected approved plan revision is unavailable.");
+      }
+      const task = this.requireTask(taskId);
+      if (task.running || task.status === "running" || task.status === "awaiting_action_approval") {
+        throw new Error("This plan is already executing.");
+      }
+      const execution = this.insertPlanExecution(revision, mode);
+      this.setTaskLifecycle(taskId, "running", true);
+      this.appendEvent(taskId, "plan.execution_retried", {
+        planRevisionId,
+        revision: revision.revision,
+        executionId: execution.execution.id,
+        mode,
+      });
+      return execution;
+    });
+    return transaction();
+  }
+
+  retryApprovedPlan(taskId: string, planRevisionId: string): PlanRevision {
+    this.createPlanExecutionForApprovedRevision(taskId, planRevisionId, "current_session");
+    return this.getPlanRevision(planRevisionId)!;
+  }
+
+  listPlanExecutions(taskId: string): PlanExecutionDetail[] {
+    this.requireTask(taskId);
+    return this.db.select().from(planExecutions)
+      .where(eq(planExecutions.taskId, taskId))
+      .orderBy(desc(planExecutions.createdAt))
+      .all()
+      .map((row) => this.getPlanExecutionDetail(parsePlanExecution(row).id)!);
+  }
+
+  getPlanExecutionDetail(executionId: string): PlanExecutionDetail | null {
+    const row = this.db.select().from(planExecutions).where(eq(planExecutions.id, executionId)).get();
+    if (row === undefined) return null;
+    return {
+      execution: parsePlanExecution(row),
+      steps: this.db.select().from(planExecutionSteps)
+        .where(eq(planExecutionSteps.executionId, executionId))
+        .orderBy(asc(planExecutionSteps.ordinal))
+        .all()
+        .map(parsePlanExecutionStep),
+    };
+  }
+
+  getPlanExecutionByConductorRunId(conductorRunId: string): PlanExecutionDetail | null {
+    const row = this.db.select().from(planExecutions)
+      .where(eq(planExecutions.conductorRunId, conductorRunId))
+      .get();
+    return row === undefined ? null : this.getPlanExecutionDetail(parsePlanExecution(row).id);
+  }
+
+  markPlanExecutionStarted(
+    taskId: string,
+    planRevisionId: string,
+    executionId?: string,
+    agentSessionId?: string | null,
+  ): Task {
+    const task = this.setTaskLifecycle(taskId, "running", true);
+    const revision = this.getPlanRevision(planRevisionId);
+    if (executionId !== undefined) {
+      const execution = this.requirePlanExecution(executionId);
+      if (execution.taskId !== taskId || execution.planRevisionId !== planRevisionId) {
+        throw new Error("Plan execution does not match the approved revision.");
+      }
+      const startedAt = timestamp();
+      this.db.update(planExecutions).set({
+        status: "running",
+        agentSessionId: agentSessionId ?? execution.agentSessionId,
+        startedAt,
+      }).where(eq(planExecutions.id, executionId)).run();
+    }
+    this.appendEvent(taskId, "plan.execution_started", {
+      planRevisionId,
+      revision: revision?.revision ?? null,
+      executionId: executionId ?? null,
+      mode: executionId === undefined ? "current_session" : this.requirePlanExecution(executionId).mode,
+    });
+    return task;
+  }
+
+  updatePlanExecutionStep(executionId: string, input: PlanStepUpdateInput): PlanExecutionStep {
+    const transaction = this.sqlite.transaction(() => {
+      const execution = this.requirePlanExecution(executionId);
+      if (execution.status !== "running") throw new Error("Plan execution is not running.");
+      const detail = this.getPlanExecutionDetail(executionId)!;
+      const current = detail.steps.find(({ stepId }) => stepId === input.stepId);
+      if (current === undefined) throw new Error("Unknown plan step.");
+      const plan = this.getPlanRevision(execution.planRevisionId);
+      const planStep = plan?.steps.find(({ id }) => id === input.stepId);
+      if (planStep === undefined) throw new Error("The approved plan step is unavailable.");
+      const allowed = current.status === "pending"
+        ? new Set(["running", "skipped"])
+        : current.status === "running"
+          ? new Set(["completed", "failed"])
+          : new Set<string>();
+      if (!allowed.has(input.status)) {
+        throw new Error(`Invalid plan step transition: ${current.status} -> ${input.status}.`);
+      }
+      if (input.status === "running") {
+        const prior = detail.steps.filter(({ ordinal }) => ordinal < current.ordinal);
+        if (prior.some(({ status }) => status !== "completed" && status !== "skipped")) {
+          throw new Error("Plan steps must start in their approved order.");
+        }
+        if (detail.steps.some(({ status, stepId }) => stepId !== current.stepId && status === "running")) {
+          throw new Error("Only one direct plan step can run at a time.");
+        }
+      }
+      const verificationResults = input.verificationResults ?? current.verificationResults;
+      const indexes = new Set<number>();
+      for (const result of verificationResults) {
+        if (result.verificationIndex >= planStep.verification.length || indexes.has(result.verificationIndex)) {
+          throw new Error("Verification result does not match the approved plan.");
+        }
+        indexes.add(result.verificationIndex);
+      }
+      const now = timestamp();
+      const terminal = input.status === "completed" || input.status === "failed" || input.status === "skipped";
+      this.db.update(planExecutionSteps).set({
+        status: input.status,
+        verificationResults: JSON.stringify(verificationResults),
+        note: input.note ?? current.note,
+        error: input.status === "failed" ? input.note ?? current.error ?? "Plan step failed." : current.error,
+        startedAt: input.status === "running" ? now : current.startedAt,
+        completedAt: terminal ? now : current.completedAt,
+        updatedAt: now,
+      }).where(and(
+        eq(planExecutionSteps.executionId, executionId),
+        eq(planExecutionSteps.stepId, input.stepId),
+      )).run();
+      const updated = this.getPlanExecutionDetail(executionId)!.steps.find(({ stepId }) => stepId === input.stepId)!;
+      this.appendEvent(execution.taskId, "plan.step_updated", {
+        executionId,
+        planRevisionId: execution.planRevisionId,
+        stepId: input.stepId,
+        status: updated.status,
+        verificationResults: updated.verificationResults,
+        note: updated.note,
+        error: updated.error,
+      });
+      return updated;
+    });
+    return transaction();
+  }
+
+  finishPlanExecution(executionId: string): PlanExecutionDetail {
+    const detail = this.getPlanExecutionDetail(executionId);
+    if (detail === null) throw new Error("Plan execution not found.");
+    const incomplete = detail.steps.filter(({ status }) => status === "pending" || status === "running");
+    if (incomplete.length > 0 || detail.steps.some(({ status }) => status === "failed")) {
+      return this.failPlanExecutionRecord(executionId, "The agent exited before every plan step completed.");
+    }
+    const completedAt = timestamp();
+    this.db.update(planExecutions).set({ status: "completed", completedAt, error: null })
+      .where(eq(planExecutions.id, executionId)).run();
+    this.setTaskLifecycle(detail.execution.taskId, "reviewing", false);
+    this.appendEvent(detail.execution.taskId, "plan.execution_completed", {
+      executionId,
+      planRevisionId: detail.execution.planRevisionId,
+    });
+    return this.getPlanExecutionDetail(executionId)!;
+  }
+
+  failPlanExecutionRecord(executionId: string, error: string): PlanExecutionDetail {
+    return this.finishPlanExecutionAs(executionId, "failed", error);
+  }
+
+  cancelPlanExecutionRecord(executionId: string, error = "Execution cancelled."): PlanExecutionDetail {
+    return this.finishPlanExecutionAs(executionId, "cancelled", error);
+  }
+
+  setPlanExecutionConductorRun(executionId: string, conductorRunId: string): PlanExecution {
+    const execution = this.requirePlanExecution(executionId);
+    this.db.update(planExecutions).set({ conductorRunId }).where(eq(planExecutions.id, executionId)).run();
+    return this.requirePlanExecution(executionId);
+  }
+
+  setPlanExecutionStepConductorNode(executionId: string, stepId: string, conductorNodeId: string): void {
+    this.db.update(planExecutionSteps).set({ conductorNodeId, updatedAt: timestamp() }).where(and(
+      eq(planExecutionSteps.executionId, executionId),
+      eq(planExecutionSteps.stepId, stepId),
+    )).run();
+  }
+
+  projectConductorNodeState(
+    conductorNodeId: string,
+    status: "running" | "completed" | "failed",
+    error: string | null = null,
+  ): PlanExecutionStep | null {
+    const row = this.db.select().from(planExecutionSteps)
+      .where(eq(planExecutionSteps.conductorNodeId, conductorNodeId))
+      .get();
+    if (row === undefined) return null;
+    const current = parsePlanExecutionStep(row);
+    const execution = this.requirePlanExecution(current.executionId);
+    if (execution.status !== "running") return current;
+    if (
+      current.status === "completed"
+      || current.status === "failed"
+      || current.status === "skipped"
+      || current.status === status
+    ) {
+      return current;
+    }
+    if (status === "running" && current.status !== "pending") return current;
+    if ((status === "completed" || status === "failed") && current.status !== "running" && current.status !== "pending") {
+      return current;
+    }
+    const now = timestamp();
+    this.db.update(planExecutionSteps).set({
+      status,
+      error: status === "failed" ? error ?? "Orchestration node failed." : current.error,
+      note: status === "failed" ? error ?? current.note : current.note,
+      startedAt: current.startedAt ?? now,
+      completedAt: status === "running" ? null : now,
+      updatedAt: now,
+    }).where(and(
+      eq(planExecutionSteps.executionId, current.executionId),
+      eq(planExecutionSteps.stepId, current.stepId),
+    )).run();
+    const updated = this.getPlanExecutionDetail(current.executionId)!.steps
+      .find(({ stepId }) => stepId === current.stepId)!;
+    this.appendEvent(execution.taskId, "plan.step_updated", {
+      executionId: execution.id,
+      planRevisionId: execution.planRevisionId,
+      stepId: updated.stepId,
+      status: updated.status,
+      verificationResults: updated.verificationResults,
+      note: updated.note,
+      error: updated.error,
+    });
+    return updated;
+  }
+
+  markAwaitingActionApproval(taskId: string): Task {
+    return this.setTaskLifecycle(taskId, "awaiting_action_approval", true);
+  }
+
+  resumePlanExecution(taskId: string): Task {
+    return this.setTaskLifecycle(taskId, "running", true);
+  }
+
+  finishPlanExecutionReview(taskId: string): Task {
+    return this.setTaskLifecycle(taskId, "reviewing", false);
+  }
+
+  failPlanExecution(taskId: string): Task {
+    return this.setTaskLifecycle(taskId, "failed", false);
+  }
+
+  cancelPlanExecution(taskId: string): Task {
+    return this.setTaskLifecycle(taskId, "cancelled", false);
+  }
+
+  // Legacy compatibility for databases and callers that still speak the single-plan shape.
   savePlan(plan: Plan): Plan {
     const parsed = planSchema.parse(plan);
-    this.db.insert(plans).values({ taskId: parsed.taskId, value: JSON.stringify(parsed) }).onConflictDoUpdate({
-      target: plans.taskId,
-      set: { value: JSON.stringify(parsed) },
-    }).run();
-    this.updateTaskStatus(parsed.taskId, "awaiting_plan_approval");
-    this.appendEvent(parsed.taskId, "plan.proposed", { summary: parsed.summary });
+    this.savePlanRevision({
+      taskId: parsed.taskId,
+      proposal: {
+        title: parsed.summary.split(/\r?\n/, 1)[0]?.slice(0, 160) || "Plan",
+        summary: parsed.summary,
+        steps: parsed.steps.map(({ title, detail }) => ({
+          title,
+          detail,
+          targets: [],
+          verification: [],
+        })),
+        assumptions: [],
+        sources: parsed.sources.map((path) => ({ path })),
+      },
+    });
     return parsed;
   }
 
   getPlan(taskId: string): Plan | null {
+    const revision = this.getLatestPlanRevision(taskId);
+    if (revision !== null) {
+      return planSchema.parse({
+        taskId,
+        summary: revision.summary,
+        steps: revision.steps.map(({ id, title, detail }) => ({ id, title, detail })),
+        sources: revision.sources.map(({ path }) => path),
+      });
+    }
     const row = this.db.select().from(plans).where(eq(plans.taskId, taskId)).get();
     return row === undefined ? null : planSchema.parse(JSON.parse(row.value));
   }
 
   approvePlan(taskId: string, approved: boolean): Task {
-    const nextStatus: TaskStatus = approved ? "running" : "planning";
-    const task = this.updateTaskStatus(taskId, nextStatus);
-    this.appendEvent(taskId, approved ? "plan.approved" : "plan.rejected", {});
-    return task;
+    if (!approved) {
+      const task = this.setTaskLifecycle(taskId, "planning", false);
+      this.appendEvent(taskId, "plan.rejected", {});
+      return task;
+    }
+    const latest = this.getLatestPlanRevision(taskId);
+    if (latest === null) throw new Error("No plan is available to approve.");
+    this.approvePlanRevision(taskId, latest.id);
+    return this.requireTask(taskId);
   }
 
   createArtifact(input: Omit<Artifact, "id" | "publishedPath" | "createdAt">): Artifact {
@@ -1579,6 +2446,7 @@ export class PiWorkStore {
       statusId: null,
       labelIds: [],
       planMode: true,
+      executionMode: "plan",
       workingDirectory: targetWorkspace.rootPath,
       running: false,
       updatedAt: timestamp(),
@@ -1608,13 +2476,13 @@ export class PiWorkStore {
   }
 
   cancelTask(taskId: string): Task {
-    const task = this.updateTaskStatus(taskId, "cancelled");
+    const task = this.setTaskLifecycle(taskId, "cancelled", false);
     this.appendEvent(taskId, "task.cancelled", {});
     return task;
   }
 
   completeTask(taskId: string): Task {
-    const task = this.updateTaskStatus(taskId, "completed");
+    const task = this.setTaskLifecycle(taskId, "completed", false);
     this.appendEvent(taskId, "task.completed", {});
     return task;
   }
@@ -1710,9 +2578,7 @@ export class PiWorkStore {
 
   private createBoardInternal(input: {
     workspaceId: string;
-    projectId: string | null;
     name: string;
-    kind: Board["kind"];
   }): Board {
     const now = timestamp();
     const board = boardSchema.parse({
@@ -1755,13 +2621,12 @@ export class PiWorkStore {
   }
 
   private ensureDefaultBoard(workspaceId: string): Board {
-    const row = this.db.select().from(boards).where(and(
-      eq(boards.workspaceId, workspaceId),
-      eq(boards.kind, "workspace"),
-      isNull(boards.projectId),
-    )).orderBy(asc(boards.createdAt)).get();
+    const row = this.db.select().from(boards)
+      .where(eq(boards.workspaceId, workspaceId))
+      .orderBy(asc(boards.createdAt))
+      .get();
     return row === undefined
-      ? this.createBoardInternal({ workspaceId, projectId: null, name: "Workspace", kind: "workspace" })
+      ? this.createBoardInternal({ workspaceId, name: "Workspace" })
       : parseBoard(row);
   }
 
@@ -1802,12 +2667,6 @@ export class PiWorkStore {
     if (task.kind !== "task") return;
     const workspaceBoard = this.ensureDefaultBoard(task.workspaceId);
     this.ensureBoardState(task, workspaceBoard);
-    if (task.projectId === null) return;
-    const projectBoardRow = this.db.select().from(boards).where(and(
-      eq(boards.workspaceId, task.workspaceId),
-      eq(boards.projectId, task.projectId),
-    )).get();
-    if (projectBoardRow !== undefined) this.ensureBoardState(task, parseBoard(projectBoardRow));
   }
 
   private ensureBoardState(task: Task, board: Board): TaskBoardState {
@@ -1955,9 +2814,17 @@ export class PiWorkStore {
   }
 
   private updateTaskStatus(taskId: string, status: TaskStatus): Task {
+    return this.setTaskLifecycle(taskId, status, this.requireTask(taskId).running);
+  }
+
+  private setTaskLifecycle(taskId: string, status: TaskStatus, running: boolean): Task {
     this.requireTask(taskId);
     const updatedAt = timestamp();
-    this.db.update(tasks).set({ status, updatedAt }).where(eq(tasks.id, taskId)).run();
+    this.db.update(tasks).set({
+      status,
+      running: running ? "1" : "0",
+      updatedAt,
+    }).where(eq(tasks.id, taskId)).run();
     const run = this.getLatestRun(taskId);
     if (run === null) {
       throw new Error(`Task ${taskId} has no run.`);
@@ -1986,6 +2853,97 @@ export class PiWorkStore {
     });
     this.db.insert(runs).values(run).run();
     return run;
+  }
+
+  private insertPlanExecution(revision: PlanRevision, mode: PlanExecutionMode): PlanExecutionDetail {
+    const createdAt = timestamp();
+    const execution = planExecutionSchema.parse({
+      id: randomUUID(),
+      taskId: revision.taskId,
+      planRevisionId: revision.id,
+      mode,
+      status: "pending",
+      agentSessionId: mode === "current_session" ? revision.taskId : mode === "fresh_session" ? randomUUID() : null,
+      conductorRunId: null,
+      error: null,
+      createdAt,
+      startedAt: null,
+      completedAt: null,
+    });
+    this.db.insert(planExecutions).values(execution).run();
+    for (const [ordinal, step] of revision.steps.entries()) {
+      this.db.insert(planExecutionSteps).values({
+        executionId: execution.id,
+        planRevisionId: revision.id,
+        stepId: step.id,
+        ordinal,
+        status: "pending",
+        verificationResults: "[]",
+        note: null,
+        error: null,
+        conductorNodeId: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: createdAt,
+      }).run();
+    }
+    return this.getPlanExecutionDetail(execution.id)!;
+  }
+
+  private requirePlanExecution(executionId: string): PlanExecution {
+    const row = this.db.select().from(planExecutions).where(eq(planExecutions.id, executionId)).get();
+    if (row === undefined) throw new Error("Plan execution not found.");
+    return parsePlanExecution(row);
+  }
+
+  private finishPlanExecutionAs(
+    executionId: string,
+    status: "failed" | "cancelled",
+    error: string,
+  ): PlanExecutionDetail {
+    const transaction = this.sqlite.transaction(() => {
+      const execution = this.requirePlanExecution(executionId);
+      if (execution.status === "failed" || execution.status === "cancelled" || execution.status === "completed") {
+        return this.getPlanExecutionDetail(executionId)!;
+      }
+      const now = timestamp();
+      const detail = this.getPlanExecutionDetail(executionId)!;
+      for (const step of detail.steps) {
+        if (step.status !== "pending" && step.status !== "running") continue;
+        const nextStatus = step.status === "running" ? "failed" : "skipped";
+        this.db.update(planExecutionSteps).set({
+          status: nextStatus,
+          error: nextStatus === "failed" ? error : step.error,
+          note: nextStatus === "skipped" ? "Skipped because execution ended before this step started." : step.note,
+          completedAt: now,
+          updatedAt: now,
+        }).where(and(
+          eq(planExecutionSteps.executionId, executionId),
+          eq(planExecutionSteps.stepId, step.stepId),
+        )).run();
+      }
+      this.db.update(planExecutions).set({ status, error, completedAt: now })
+        .where(eq(planExecutions.id, executionId)).run();
+      this.setTaskLifecycle(execution.taskId, status === "cancelled" ? "cancelled" : "failed", false);
+      this.appendEvent(
+        execution.taskId,
+        status === "cancelled" ? "plan.execution_cancelled" : "plan.execution_failed",
+        { executionId, planRevisionId: execution.planRevisionId, error },
+      );
+      return this.getPlanExecutionDetail(executionId)!;
+    });
+    return transaction();
+  }
+
+  private failInterruptedPlanExecutions(): void {
+    const interrupted = this.db.select().from(planExecutions)
+      .where(inArray(planExecutions.status, ["pending", "running"]))
+      .all()
+      .map(parsePlanExecution)
+      .filter(({ mode }) => mode !== "orchestration");
+    for (const execution of interrupted) {
+      this.finishPlanExecutionAs(execution.id, "failed", "Execution was interrupted by an application restart.");
+    }
   }
 
   private appendEvent(taskId: string, type: WorkEvent["type"], payload: Record<string, unknown>): void {
@@ -2024,7 +2982,6 @@ export class PiWorkStore {
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT NOT NULL,
-        project_id TEXT,
         title TEXT NOT NULL,
         goal TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -2039,6 +2996,7 @@ export class PiWorkStore {
         label_ids TEXT NOT NULL DEFAULT '[]',
         permission_mode TEXT NOT NULL DEFAULT 'ask',
         plan_mode TEXT NOT NULL DEFAULT '0',
+        execution_mode TEXT NOT NULL DEFAULT 'direct',
         working_directory TEXT,
         running TEXT NOT NULL DEFAULT '0',
         created_at TEXT NOT NULL,
@@ -2047,6 +3005,48 @@ export class PiWorkStore {
       CREATE TABLE IF NOT EXISTS plans (
         task_id TEXT PRIMARY KEY NOT NULL,
         value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS plan_revisions (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        value TEXT NOT NULL,
+        parent_revision_id TEXT,
+        created_from_message_id TEXT,
+        created_at TEXT NOT NULL,
+        approved_at TEXT,
+        UNIQUE (task_id, revision)
+      );
+      CREATE INDEX IF NOT EXISTS plan_revisions_task ON plan_revisions(task_id, revision);
+      CREATE TABLE IF NOT EXISTS plan_executions (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        agent_session_id TEXT,
+        conductor_run_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS plan_executions_task ON plan_executions(task_id, created_at);
+      CREATE TABLE IF NOT EXISTS plan_execution_steps (
+        execution_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        verification_results TEXT NOT NULL DEFAULT '[]',
+        note TEXT,
+        error TEXT,
+        conductor_node_id TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (execution_id, step_id)
       );
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY NOT NULL,
@@ -2089,29 +3089,14 @@ export class PiWorkStore {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS workspace_directories_workspace ON workspace_directories(workspace_id);
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY NOT NULL,
-        workspace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        color TEXT NOT NULL DEFAULT '#8a8275',
-        archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS projects_workspace ON projects(workspace_id, archived);
       CREATE TABLE IF NOT EXISTS boards (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT NOT NULL,
-        project_id TEXT,
         name TEXT NOT NULL,
-        kind TEXT NOT NULL,
         version INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS boards_project ON boards(workspace_id, project_id) WHERE project_id IS NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS boards_workspace_default ON boards(workspace_id) WHERE kind = 'workspace' AND project_id IS NULL;
       CREATE TABLE IF NOT EXISTS board_columns (
         id TEXT PRIMARY KEY NOT NULL,
         workspace_id TEXT NOT NULL,
@@ -2159,6 +3144,17 @@ export class PiWorkStore {
         workspace_id TEXT NOT NULL,
         task_id TEXT NOT NULL,
         status TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT 'legacy',
+        title TEXT NOT NULL DEFAULT 'Workflow',
+        summary TEXT NOT NULL DEFAULT '',
+        dedupe_key TEXT,
+        source_request_id TEXT,
+        source_message_id TEXT,
+        plan_revision_id TEXT,
+        parent_run_id TEXT,
+        synthesis_node_id TEXT,
+        finalization_status TEXT NOT NULL DEFAULT 'pending',
+        final_message_id TEXT,
         spec TEXT NOT NULL,
         last_event_sequence INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT,
@@ -2173,12 +3169,33 @@ export class PiWorkStore {
         node_id TEXT NOT NULL,
         status TEXT NOT NULL,
         attempt INTEGER NOT NULL DEFAULT 0,
+        execution_id TEXT,
         output TEXT,
         error TEXT,
         started_at TEXT,
         completed_at TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (run_id, node_id)
+      );
+      CREATE TABLE IF NOT EXISTS conductor_node_attempts (
+        execution_id TEXT PRIMARY KEY NOT NULL,
+        run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        output TEXT,
+        error TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE (run_id, node_id, attempt)
+      );
+      CREATE TABLE IF NOT EXISTS conductor_node_events (
+        execution_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (execution_id, sequence)
       );
       CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY NOT NULL,
@@ -2254,7 +3271,6 @@ export class PiWorkStore {
     this.addColumn("workspaces", "updated_at", "TEXT");
     this.sqlite.exec("UPDATE workspaces SET directories = json_array(root_path) WHERE directories = '[]'");
     this.sqlite.exec("UPDATE workspaces SET updated_at = created_at WHERE updated_at IS NULL");
-    this.addColumn("tasks", "project_id", "TEXT");
     this.addColumn("tasks", "provider_id", "TEXT");
     this.addColumn("tasks", "model_id", "TEXT");
     this.addColumn("tasks", "thinking_level", "TEXT NOT NULL DEFAULT 'off'");
@@ -2266,10 +3282,95 @@ export class PiWorkStore {
     this.addColumn("tasks", "label_ids", "TEXT NOT NULL DEFAULT '[]'");
     this.addColumn("tasks", "permission_mode", "TEXT NOT NULL DEFAULT 'ask'");
     this.addColumn("tasks", "plan_mode", "TEXT NOT NULL DEFAULT '0'");
+    this.addColumn("tasks", "execution_mode", "TEXT NOT NULL DEFAULT 'direct'");
+    this.sqlite.exec("UPDATE tasks SET execution_mode = 'plan' WHERE plan_mode = '1' AND execution_mode = 'direct'");
+    this.sqlite.exec(`
+      UPDATE tasks
+      SET title = 'New session', goal = 'New session'
+      WHERE title = 'New task' AND goal = 'New task'
+    `);
     this.addColumn("tasks", "working_directory", "TEXT");
     this.addColumn("tasks", "running", "TEXT NOT NULL DEFAULT '0'");
+    this.addColumn("conductor_node_states", "execution_id", "TEXT");
+    this.addColumn("conductor_runs", "origin", "TEXT NOT NULL DEFAULT 'legacy'");
+    this.addColumn("conductor_runs", "title", "TEXT NOT NULL DEFAULT 'Workflow'");
+    this.addColumn("conductor_runs", "summary", "TEXT NOT NULL DEFAULT ''");
+    this.addColumn("conductor_runs", "dedupe_key", "TEXT");
+    this.addColumn("conductor_runs", "source_request_id", "TEXT");
+    this.addColumn("conductor_runs", "source_message_id", "TEXT");
+    this.addColumn("conductor_runs", "plan_revision_id", "TEXT");
+    this.addColumn("conductor_runs", "parent_run_id", "TEXT");
+    this.addColumn("conductor_runs", "synthesis_node_id", "TEXT");
+    this.addColumn("conductor_runs", "finalization_status", "TEXT NOT NULL DEFAULT 'pending'");
+    this.addColumn("conductor_runs", "final_message_id", "TEXT");
+    this.sqlite.exec("CREATE UNIQUE INDEX IF NOT EXISTS conductor_runs_dedupe_key ON conductor_runs(dedupe_key) WHERE dedupe_key IS NOT NULL");
+    this.migrateAwayProjects();
     this.backfillWorkspaceDirectories();
     this.ensureIntegerEventSequence();
+    this.migrateLegacyPlans();
+    this.removeOrphanedPlanBranches();
+  }
+
+  private removeOrphanedPlanBranches(): void {
+    const orphanedPlans = this.sqlite.prepare(`
+      SELECT candidate.id
+      FROM plan_revisions AS candidate
+      WHERE candidate.created_from_message_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM messages AS source
+          WHERE source.id = candidate.created_from_message_id
+            AND source.task_id = candidate.task_id
+        )
+    `).all() as Array<{ id: string }>;
+    if (orphanedPlans.length === 0) return;
+
+    const orphanedPlanIds = new Set(orphanedPlans.map(({ id }) => id));
+    const runs = this.sqlite.prepare(`
+      SELECT id, parent_run_id, plan_revision_id
+      FROM conductor_runs
+    `).all() as Array<{
+      id: string;
+      parent_run_id: string | null;
+      plan_revision_id: string | null;
+    }>;
+    const affectedRunIds = new Set(runs
+      .filter(({ plan_revision_id: planRevisionId }) => (
+        planRevisionId !== null && orphanedPlanIds.has(planRevisionId)
+      ))
+      .map(({ id }) => id));
+    let foundChildRun = true;
+    while (foundChildRun) {
+      foundChildRun = false;
+      for (const run of runs) {
+        if (
+          run.parent_run_id !== null
+          && affectedRunIds.has(run.parent_run_id)
+          && !affectedRunIds.has(run.id)
+        ) {
+          affectedRunIds.add(run.id);
+          foundChildRun = true;
+        }
+      }
+    }
+
+    const transaction = this.sqlite.transaction(() => {
+      for (const runId of affectedRunIds) {
+        this.sqlite.prepare(`
+          DELETE FROM conductor_node_events
+          WHERE execution_id IN (
+            SELECT execution_id FROM conductor_node_attempts WHERE run_id = ?
+          )
+        `).run(runId);
+        this.sqlite.prepare("DELETE FROM conductor_node_attempts WHERE run_id = ?").run(runId);
+        this.sqlite.prepare("DELETE FROM conductor_node_states WHERE run_id = ?").run(runId);
+        this.sqlite.prepare("DELETE FROM conductor_runs WHERE id = ?").run(runId);
+      }
+      for (const planId of orphanedPlanIds) {
+        this.sqlite.prepare("DELETE FROM plan_revisions WHERE id = ?").run(planId);
+      }
+    });
+    transaction();
   }
 
   private addColumn(table: string, column: string, definition: string): void {
@@ -2277,6 +3378,183 @@ export class PiWorkStore {
     if (!columns.some(({ name }) => name === column)) {
       this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
+  }
+
+  private migrateLegacyPlans(): void {
+    const rows = this.sqlite.prepare(`
+      SELECT plans.task_id, plans.value, tasks.title, tasks.status, tasks.updated_at
+      FROM plans
+      INNER JOIN tasks ON tasks.id = plans.task_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM plan_revisions WHERE plan_revisions.task_id = plans.task_id
+      )
+    `).all() as Array<{
+      task_id: string;
+      value: string;
+      title: string;
+      status: TaskStatus;
+      updated_at: string;
+    }>;
+    const approvedStatuses = new Set<TaskStatus>([
+      "running",
+      "awaiting_action_approval",
+      "reviewing",
+      "completed",
+    ]);
+    const insert = this.sqlite.prepare(`
+      INSERT INTO plan_revisions (
+        id, task_id, revision, status, value, parent_revision_id,
+        created_from_message_id, created_at, approved_at
+      ) VALUES (?, ?, 1, ?, ?, NULL, NULL, ?, ?)
+    `);
+    const transaction = this.sqlite.transaction(() => {
+      for (const row of rows) {
+        let legacy: Plan;
+        try {
+          legacy = planSchema.parse(JSON.parse(row.value));
+        } catch {
+          continue;
+        }
+        const status = approvedStatuses.has(row.status) ? "approved" : "proposed";
+        const createdAt = row.updated_at || timestamp();
+        const revision = planRevisionSchema.parse({
+          id: randomUUID(),
+          taskId: row.task_id,
+          revision: 1,
+          status,
+          title: row.title || legacy.summary.slice(0, 160),
+          summary: legacy.summary,
+          steps: legacy.steps.map(({ id, title, detail }) => ({
+            id,
+            title,
+            detail,
+            targets: [],
+            verification: [],
+          })),
+          assumptions: [],
+          sources: legacy.sources.map((path) => ({ path })),
+          parentRevisionId: null,
+          createdFromMessageId: null,
+          createdAt,
+          approvedAt: status === "approved" ? createdAt : null,
+        });
+        insert.run(
+          revision.id,
+          revision.taskId,
+          revision.status,
+          JSON.stringify(revision),
+          revision.createdAt,
+          revision.approvedAt,
+        );
+      }
+    });
+    transaction();
+  }
+
+  private migrateAwayProjects(): void {
+    const taskColumns = this.sqlite.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    const boardColumnsInfo = this.sqlite.prepare("PRAGMA table_info(boards)").all() as Array<{ name: string }>;
+    const hasProjectTable = (this.sqlite.prepare(
+      "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'projects'",
+    ).get() as { found: number } | undefined) !== undefined;
+    const tasksHaveProject = taskColumns.some(({ name }) => name === "project_id");
+    const boardsHaveProjectId = boardColumnsInfo.some(({ name }) => name === "project_id");
+    const boardsHaveKind = boardColumnsInfo.some(({ name }) => name === "kind");
+    const boardsHaveProject = boardsHaveProjectId || boardsHaveKind;
+    if (!hasProjectTable && !tasksHaveProject && !boardsHaveProject) {
+      this.sqlite.exec("CREATE UNIQUE INDEX IF NOT EXISTS boards_workspace_default ON boards(workspace_id)");
+      return;
+    }
+
+    const transaction = this.sqlite.transaction(() => {
+      this.sqlite.exec("DROP INDEX IF EXISTS boards_project");
+      this.sqlite.exec("DROP INDEX IF EXISTS boards_workspace_default");
+      this.sqlite.exec("DROP INDEX IF EXISTS projects_workspace");
+
+      if (boardsHaveProject) {
+        const legacyProjectBoardFilter = [
+          boardsHaveProjectId ? "project_id IS NOT NULL" : null,
+          boardsHaveKind ? "kind <> 'workspace'" : null,
+        ].filter((condition): condition is string => condition !== null).join(" OR ");
+        const legacyProjectBoards = this.sqlite.prepare(
+          `SELECT id FROM boards WHERE ${legacyProjectBoardFilter}`,
+        ).all() as Array<{ id: string }>;
+        for (const board of legacyProjectBoards) {
+          this.sqlite.prepare("DELETE FROM task_board_state WHERE board_id = ?").run(board.id);
+          this.sqlite.prepare("DELETE FROM board_columns WHERE board_id = ?").run(board.id);
+        }
+      }
+
+      if (tasksHaveProject) {
+        this.sqlite.exec(`
+          ALTER TABLE tasks RENAME TO tasks_with_projects;
+          CREATE TABLE tasks (
+            id TEXT PRIMARY KEY NOT NULL,
+            workspace_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            status TEXT NOT NULL,
+            provider_id TEXT,
+            model_id TEXT,
+            thinking_level TEXT NOT NULL DEFAULT 'off',
+            kind TEXT NOT NULL DEFAULT 'chat',
+            archived TEXT NOT NULL DEFAULT '0',
+            flagged TEXT NOT NULL DEFAULT '0',
+            unread TEXT NOT NULL DEFAULT '0',
+            status_id TEXT,
+            label_ids TEXT NOT NULL DEFAULT '[]',
+            permission_mode TEXT NOT NULL DEFAULT 'ask',
+            plan_mode TEXT NOT NULL DEFAULT '0',
+            execution_mode TEXT NOT NULL DEFAULT 'direct',
+            working_directory TEXT,
+            running TEXT NOT NULL DEFAULT '0',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO tasks (
+            id, workspace_id, title, goal, status, provider_id, model_id, thinking_level, kind,
+            archived, flagged, unread, status_id, label_ids, permission_mode, plan_mode, execution_mode,
+            working_directory, running, created_at, updated_at
+          )
+          SELECT
+            id, workspace_id, title, goal, status, provider_id, model_id, thinking_level, kind,
+            archived, flagged, unread, status_id, label_ids, permission_mode, plan_mode,
+            CASE WHEN plan_mode = '1' THEN 'plan' ELSE 'direct' END,
+            working_directory, running, created_at, updated_at
+          FROM tasks_with_projects;
+          DROP TABLE tasks_with_projects;
+        `);
+      }
+
+      if (boardsHaveProject) {
+        const workspaceBoardFilter = [
+          boardsHaveProjectId ? "project_id IS NULL" : null,
+          boardsHaveKind ? "kind = 'workspace'" : null,
+        ].filter((condition): condition is string => condition !== null).join(" AND ");
+        this.sqlite.exec(`
+          ALTER TABLE boards RENAME TO boards_with_projects;
+          CREATE TABLE boards (
+            id TEXT PRIMARY KEY NOT NULL,
+            workspace_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO boards (id, workspace_id, name, version, created_at, updated_at)
+          SELECT id, workspace_id, name, version, created_at, updated_at
+          FROM boards_with_projects
+          WHERE ${workspaceBoardFilter};
+          DROP TABLE boards_with_projects;
+        `);
+      }
+
+      if (hasProjectTable) this.sqlite.exec("DROP TABLE projects");
+      this.sqlite.prepare("DELETE FROM domain_entities WHERE domain = 'project'").run();
+      this.sqlite.prepare("DELETE FROM workspace_events WHERE kind LIKE 'project.%'").run();
+      this.sqlite.exec("CREATE UNIQUE INDEX IF NOT EXISTS boards_workspace_default ON boards(workspace_id)");
+    });
+    transaction();
   }
 
   private backfillWorkspaceDirectories(): void {

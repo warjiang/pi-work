@@ -26,7 +26,6 @@ export const workspaceDirectories = sqliteTable("workspace_directories", {
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull(),
-  projectId: text("project_id"),
   title: text("title").notNull(),
   goal: text("goal").notNull(),
   status: text("status").notNull(),
@@ -41,6 +40,7 @@ export const tasks = sqliteTable("tasks", {
   labelIds: text("label_ids").notNull(),
   permissionMode: text("permission_mode").notNull(),
   planMode: text("plan_mode").notNull(),
+  executionMode: text("execution_mode").notNull(),
   workingDirectory: text("working_directory"),
   running: text("running").notNull(),
   createdAt: text("created_at").notNull(),
@@ -59,6 +59,51 @@ export const plans = sqliteTable("plans", {
   taskId: text("task_id").primaryKey(),
   value: text("value").notNull(),
 });
+
+export const planRevisions = sqliteTable("plan_revisions", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  revision: integer("revision").notNull(),
+  status: text("status").notNull(),
+  value: text("value").notNull(),
+  parentRevisionId: text("parent_revision_id"),
+  createdFromMessageId: text("created_from_message_id"),
+  createdAt: text("created_at").notNull(),
+  approvedAt: text("approved_at"),
+}, (table) => [
+  uniqueIndex("plan_revisions_task_revision").on(table.taskId, table.revision),
+]);
+
+export const planExecutions = sqliteTable("plan_executions", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  planRevisionId: text("plan_revision_id").notNull(),
+  mode: text("mode").notNull(),
+  status: text("status").notNull(),
+  agentSessionId: text("agent_session_id"),
+  conductorRunId: text("conductor_run_id"),
+  error: text("error"),
+  createdAt: text("created_at").notNull(),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+});
+
+export const planExecutionSteps = sqliteTable("plan_execution_steps", {
+  executionId: text("execution_id").notNull(),
+  planRevisionId: text("plan_revision_id").notNull(),
+  stepId: text("step_id").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  status: text("status").notNull(),
+  verificationResults: text("verification_results").notNull().default("[]"),
+  note: text("note"),
+  error: text("error"),
+  conductorNodeId: text("conductor_node_id"),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.executionId, table.stepId] }),
+]);
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -87,23 +132,10 @@ export const events = sqliteTable("events", {
   value: text("value").notNull(),
 });
 
-export const projects = sqliteTable("projects", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  name: text("name").notNull(),
-  description: text("description").notNull().default(""),
-  color: text("color").notNull().default("#8a8275"),
-  archived: integer("archived", { mode: "boolean" }).notNull().default(false),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
-
 export const boards = sqliteTable("boards", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull(),
-  projectId: text("project_id"),
   name: text("name").notNull(),
-  kind: text("kind").notNull(),
   version: integer("version").notNull().default(0),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
@@ -160,6 +192,17 @@ export const conductorRuns = sqliteTable("conductor_runs", {
   workspaceId: text("workspace_id").notNull(),
   taskId: text("task_id").notNull(),
   status: text("status").notNull(),
+  origin: text("origin").notNull().default("legacy"),
+  title: text("title").notNull().default("Workflow"),
+  summary: text("summary").notNull().default(""),
+  dedupeKey: text("dedupe_key"),
+  sourceRequestId: text("source_request_id"),
+  sourceMessageId: text("source_message_id"),
+  planRevisionId: text("plan_revision_id"),
+  parentRunId: text("parent_run_id"),
+  synthesisNodeId: text("synthesis_node_id"),
+  finalizationStatus: text("finalization_status").notNull().default("pending"),
+  finalMessageId: text("final_message_id"),
   spec: text("spec").notNull(),
   lastEventSequence: integer("last_event_sequence").notNull().default(0),
   leaseOwner: text("lease_owner"),
@@ -167,13 +210,16 @@ export const conductorRuns = sqliteTable("conductor_runs", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
   completedAt: text("completed_at"),
-});
+}, (table) => [
+  uniqueIndex("conductor_runs_dedupe_key").on(table.dedupeKey),
+]);
 
 export const conductorNodeStates = sqliteTable("conductor_node_states", {
   runId: text("run_id").notNull(),
   nodeId: text("node_id").notNull(),
   status: text("status").notNull(),
   attempt: integer("attempt").notNull().default(0),
+  executionId: text("execution_id"),
   output: text("output"),
   error: text("error"),
   startedAt: text("started_at"),
@@ -181,6 +227,30 @@ export const conductorNodeStates = sqliteTable("conductor_node_states", {
   updatedAt: text("updated_at").notNull(),
 }, (table) => [
   primaryKey({ columns: [table.runId, table.nodeId] }),
+]);
+
+export const conductorNodeAttempts = sqliteTable("conductor_node_attempts", {
+  executionId: text("execution_id").primaryKey(),
+  runId: text("run_id").notNull(),
+  nodeId: text("node_id").notNull(),
+  attempt: integer("attempt").notNull(),
+  status: text("status").notNull(),
+  output: text("output"),
+  error: text("error"),
+  startedAt: text("started_at").notNull(),
+  completedAt: text("completed_at"),
+}, (table) => [
+  uniqueIndex("conductor_node_attempts_run_node_attempt").on(table.runId, table.nodeId, table.attempt),
+]);
+
+export const conductorNodeEvents = sqliteTable("conductor_node_events", {
+  executionId: text("execution_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  kind: text("kind").notNull(),
+  payload: text("payload").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.executionId, table.sequence] }),
 ]);
 
 export const appSettings = sqliteTable("app_settings", {
