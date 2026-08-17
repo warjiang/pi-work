@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fallbackSessionTitle, isUntitledSessionTitle } from "./session-title.js";
+import { fallbackSessionTitle, isUntitledSessionTitle, shouldGenerateFirstMessageTitle } from "./session-title.js";
 
 describe("session title helpers", () => {
   it("recognizes current and legacy untitled names", () => {
@@ -34,5 +34,30 @@ describe("session title helpers", () => {
 
   it("falls back to the default placeholder for empty input", () => {
     expect(fallbackSessionTitle("   ")).toBe("New session");
+  });
+
+  it("generates a first-message title only for untitled, model-ready sessions", () => {
+    expect(shouldGenerateFirstMessageTitle({
+      title: "New session",
+      providerId: "openai",
+      modelId: "gpt-4o",
+    })).toBe(true);
+    // Already named — leave the user's/model's title alone.
+    expect(shouldGenerateFirstMessageTitle({
+      title: "Apache OSSIE 快速入门",
+      providerId: "openai",
+      modelId: "gpt-4o",
+    })).toBe(false);
+    // No model configured yet — nothing to call.
+    expect(shouldGenerateFirstMessageTitle({
+      title: "New session",
+      providerId: null,
+      modelId: "gpt-4o",
+    })).toBe(false);
+    expect(shouldGenerateFirstMessageTitle({
+      title: "New session",
+      providerId: "openai",
+      modelId: null,
+    })).toBe(false);
   });
 });

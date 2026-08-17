@@ -140,7 +140,7 @@ import { loadWindowBounds, saveWindowBounds } from "./window-state.js";
 import { SecretsBroker, maskSecret } from "./secrets-broker.js";
 import { LangfuseExporter, type LangfuseConfig, type RunContext } from "./observability.js";
 import { DurableConductor } from "./conductor.js";
-import { fallbackSessionTitle, isUntitledSessionTitle } from "./session-title.js";
+import { fallbackSessionTitle, isUntitledSessionTitle, shouldGenerateFirstMessageTitle } from "./session-title.js";
 
 let mainWindow: BrowserWindow | null = null;
 let windowStateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1376,6 +1376,39 @@ async function nameUntitledSession(input: {
   }
   getStore().updateSession(input.taskId, { title });
   notifySessionChanged(input.taskId);
+}
+
+function kickOffFirstMessageTitle(input: {
+  taskId: string;
+  sourceMessageId: string;
+  prompt: string;
+  title: string;
+  providerId: string | null;
+  modelId: string | null;
+  thinkingLevel: ThinkingLevel;
+  runtime: AgentRuntime;
+}): void {
+  if (!shouldGenerateFirstMessageTitle(input)) return;
+  const providerId = input.providerId;
+  const modelId = input.modelId;
+  if (providerId === null || modelId === null) return;
+  void (async () => {
+    try {
+      const credential = await providerCredential(providerId);
+      await nameUntitledSession({
+        taskId: input.taskId,
+        sourceMessageId: input.sourceMessageId,
+        prompt: input.prompt,
+        response: "",
+        provider: credential,
+        modelId,
+        thinkingLevel: input.thinkingLevel,
+        runtime: input.runtime,
+      });
+    } catch {
+      // Ignore; the post-run naming pass will still name the session once it completes.
+    }
+  })();
 }
 
 async function runChatInBackground(input: {
@@ -2723,6 +2756,16 @@ function registerIpc(): void {
         });
         approvedAttachmentPaths.delete(attachment.path);
       }
+      kickOffFirstMessageTitle({
+        taskId: task.id,
+        sourceMessageId: userMessage.id,
+        prompt: parsed.content,
+        title: task.title,
+        providerId: parsed.providerId,
+        modelId: parsed.modelId,
+        thinkingLevel: parsed.thinkingLevel,
+        runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
+      });
       await requestPlanForTask(task.id, userMessage.id);
       return taskSchema.parse(getStore().getTask(task.id));
     }
@@ -2756,6 +2799,7 @@ function registerIpc(): void {
     if (parsed.editMessageId !== undefined) {
       getStore().editMessage(parsed.editMessageId, parsed.content);
     } else {
+      const isFirstUserMessage = getStore().listMessages(task.id).every(({ role }) => role !== "user");
       const userMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
       for (const attachment of inspectedAttachments) {
         getStore().addAttachment({
@@ -2764,6 +2808,18 @@ function registerIpc(): void {
           ...attachment,
         });
         approvedAttachmentPaths.delete(attachment.path);
+      }
+      if (isFirstUserMessage) {
+        kickOffFirstMessageTitle({
+          taskId: task.id,
+          sourceMessageId: userMessage.id,
+          prompt: parsed.content,
+          title: task.title,
+          providerId: parsed.providerId,
+          modelId: parsed.modelId,
+          thinkingLevel: parsed.thinkingLevel,
+          runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
+        });
       }
     }
     void runChatInBackground({

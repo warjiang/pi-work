@@ -5,6 +5,16 @@ export function isUntitledSessionTitle(title: string): boolean {
   return untitledSessionTitles.has(title.trim().toLocaleLowerCase());
 }
 
+export function shouldGenerateFirstMessageTitle(input: {
+  title: string;
+  providerId: string | null;
+  modelId: string | null;
+}): boolean {
+  return input.providerId !== null
+    && input.modelId !== null
+    && isUntitledSessionTitle(input.title);
+}
+
 function stripCommandPrefix(value: string): string {
   return value.trim().replace(/^\/(?:plan|goal)\b[\s:]*/i, "").trim();
 }
