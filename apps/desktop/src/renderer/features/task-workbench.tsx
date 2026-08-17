@@ -4259,6 +4259,7 @@ function PlanApprovalDock(props: {
   onRequestChanges(content: string): void;
 }) {
   const titleId = useId();
+  const feedbackId = useId();
   const [feedback, setFeedback] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const submitFeedback = (event: FormEvent) => {
@@ -4269,12 +4270,15 @@ function PlanApprovalDock(props: {
   };
   return (
     <div className="composer-dock plan-approval-dock">
-      <section className="plan-approval-dock-panel" aria-labelledby={titleId}>
-        <header>
-          <strong id={titleId}>{props.t("implementPlanQuestion")}</strong>
+      <section className="plan-approval-dock-panel" aria-labelledby={titleId} aria-busy={props.busy}>
+        <header className="plan-approval-dock-header">
+          <span className="plan-approval-dock-icon" aria-hidden="true"><Icon name="plan" size={16} /></span>
+          <span>
+            <strong id={titleId}>{props.t("implementPlanQuestion")}</strong>
+            <small>{props.t("planApprovalNeeded")}</small>
+          </span>
         </header>
-        <div className="plan-approval-choice is-primary">
-          <span aria-hidden="true">1</span>
+        <div className="plan-approval-primary">
           <PlanActionMenu
             approvalRequired
             readyToExecute={false}
@@ -4291,14 +4295,16 @@ function PlanApprovalDock(props: {
             type="button"
             className={`plan-feedback-toggle${feedbackOpen ? " is-open" : ""}`}
             aria-expanded={feedbackOpen}
+            aria-controls={feedbackId}
+            disabled={props.busy}
             onClick={() => setFeedbackOpen((open) => !open)}
           >
             <span aria-hidden="true"><Icon name="square-pen" size={14} /></span>
             <strong>{props.t("requestPlanChanges")}</strong>
-            <Icon name={feedbackOpen ? "chevron-down" : "forward"} size={14} />
+            <Icon name={feedbackOpen ? "chevron-down" : "chevron-right"} size={14} />
           </button>
           {feedbackOpen ? (
-            <form className="plan-feedback-form" onSubmit={submitFeedback}>
+            <form id={feedbackId} className="plan-feedback-form" onSubmit={submitFeedback}>
               <Textarea
                 autoFocus
                 value={feedback}
@@ -4308,6 +4314,11 @@ function PlanApprovalDock(props: {
                 placeholder={props.t("planFeedbackPlaceholder")}
                 onChange={(event) => setFeedback(event.target.value)}
                 onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setFeedbackOpen(false);
+                    return;
+                  }
                   if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();

@@ -5426,148 +5426,155 @@ kbd {
 }
 
 .plan-approval-dock {
-  padding-bottom: 12px;
+  padding-bottom: 14px;
 }
 
 .plan-approval-dock-panel {
   display: grid;
-  width: min(720px, calc(100% - 48px));
+  width: min(680px, calc(100% - 48px));
   min-width: 0;
-  gap: 5px;
+  gap: 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-overlay);
+  border-radius: 12px;
   background: var(--panel);
-  padding: 12px;
-  box-shadow: 0 9px 22px color-mix(in srgb, var(--text) 6%, transparent);
+  padding: 14px;
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--text) 7%, transparent);
 }
 
-.plan-approval-dock-panel > header {
-  display: flex;
-  min-height: 18px;
+.plan-approval-dock-header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
-  padding: 0 1px;
+  gap: 10px;
+  padding: 0 2px;
 }
 
-.plan-approval-dock-panel > header strong {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.plan-approval-choice {
+.plan-approval-dock-icon {
   display: grid;
-  width: 100%;
-  min-height: 42px;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  gap: 6px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  padding: 3px 7px;
-  color: var(--muted);
-  text-align: left;
-  transition:
-    background var(--dur-fast) var(--ease-standard),
-    border-color var(--dur-fast) var(--ease-standard);
-}
-
-.plan-approval-choice:hover,
-.plan-approval-choice:focus-visible {
-  border-color: transparent;
-  background: var(--panel);
-}
-
-.plan-approval-choice.is-primary {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--panel-muted) 80%, var(--panel));
-}
-
-.plan-approval-choice > span:first-child {
-  display: grid;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  color: var(--faint);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-control);
+  background: var(--amber-bg);
+  color: var(--amber);
 }
 
-.plan-approval-choice > strong {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.plan-approval-choice.is-primary .plan-action-split {
+.plan-approval-dock-header > span:last-child {
+  display: grid;
   min-width: 0;
-  grid-column: 2 / -1;
-  overflow: visible;
-  border-radius: 8px;
+  gap: 1px;
 }
 
-.plan-approval-choice.is-primary .plan-action-split > button {
-  border-color: transparent;
-  background: transparent;
+.plan-approval-dock-header strong,
+.plan-approval-dock-header small {
+  display: block;
+}
+
+.plan-approval-dock-header strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+.plan-approval-dock-header small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.plan-approval-primary {
+  min-width: 0;
+}
+
+.plan-approval-primary .plan-action-split {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+  border-radius: var(--radius-control);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.plan-approval-primary .plan-action-split > button {
+  min-height: 38px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
   box-shadow: none;
 }
 
-.plan-approval-choice.is-primary .plan-action-split > button:first-child {
-  min-height: 34px;
+.plan-approval-primary .plan-action-split > button:first-child {
   flex: 1;
   justify-content: flex-start;
-  padding-inline: 5px 8px;
-  color: var(--text);
+  padding-inline: 14px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
-.plan-approval-choice.is-primary .plan-action-split > button:hover,
-.plan-approval-choice.is-primary .plan-action-split > button:focus-visible {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  box-shadow: none;
+.plan-approval-primary .plan-action-split > button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 90%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 90%, var(--panel));
 }
 
-.plan-approval-choice.is-primary .plan-action-split > button:active {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+.plan-approval-primary .plan-action-split > button:focus-visible {
+  z-index: 1;
+  outline: 0;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-text) 70%, transparent);
 }
 
-.plan-approval-choice.is-primary .plan-action-menu-trigger {
-  border-left-color: color-mix(in srgb, var(--border) 78%, transparent);
-  background: transparent;
-  color: var(--muted);
+.plan-approval-primary .plan-action-split > button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.plan-approval-primary .plan-action-menu-trigger {
+  width: 38px;
+  border-left-color: color-mix(in srgb, var(--accent-text) 24%, transparent);
+  padding-inline: 0;
 }
 
 .plan-feedback-direct {
   display: grid;
-  gap: 4px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  padding-top: 4px;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
 }
 
 .plan-feedback-toggle {
   display: flex;
   width: 100%;
-  min-height: 36px;
+  min-height: 38px;
   align-items: center;
   gap: 8px;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--radius-control);
   background: transparent;
-  padding: 3px 7px;
+  padding: 3px 8px;
   color: var(--muted);
   text-align: left;
-  transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard);
 }
 
 .plan-feedback-toggle:hover,
 .plan-feedback-toggle:focus-visible,
 .plan-feedback-toggle.is-open {
-  background: color-mix(in srgb, var(--panel-muted) 58%, var(--panel));
+  background: var(--panel-muted);
   color: var(--text);
+}
+
+.plan-feedback-toggle:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.plan-feedback-toggle:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .plan-feedback-toggle:focus-visible {
@@ -5582,7 +5589,7 @@ kbd {
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--border);
-  border-radius: 50%;
+  border-radius: var(--radius-control);
   background: var(--panel);
   color: var(--faint);
 }
@@ -5600,11 +5607,12 @@ kbd {
 
 .plan-feedback-form {
   position: relative;
-  margin: 0 7px 2px 40px;
+  margin: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--panel-muted) 38%, var(--panel));
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  animation: plan-feedback-reveal 160ms var(--ease-standard);
   transition:
     border-color var(--dur-fast) var(--ease-standard),
     background var(--dur-fast) var(--ease-standard),
@@ -5612,22 +5620,22 @@ kbd {
 }
 
 .plan-feedback-form:focus-within {
-  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+  border-color: color-mix(in srgb, var(--ring) 55%, var(--border));
   background: var(--panel);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 5%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 10%, transparent);
 }
 
 .plan-feedback-form textarea {
-  min-height: 62px;
-  max-height: 120px;
-  resize: none;
+  min-height: 78px;
+  max-height: 160px;
+  resize: vertical;
   border: 0;
   border-radius: inherit;
   background: transparent;
-  padding: 9px 42px 9px 11px;
+  padding: 11px 44px 11px 12px;
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
   box-shadow: none;
 }
 
@@ -5640,8 +5648,8 @@ kbd {
   position: absolute;
   right: 7px;
   bottom: 7px;
-  width: 27px;
-  height: 27px;
+  width: 30px;
+  height: 30px;
   border: 0;
   border-radius: 7px;
   padding: 0;
@@ -5650,6 +5658,24 @@ kbd {
     background var(--dur-fast) var(--ease-standard),
     color var(--dur-fast) var(--ease-standard),
     transform var(--dur-fast) var(--ease-standard);
+}
+
+@keyframes plan-feedback-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-feedback-form {
+    animation: none;
+  }
 }
 
 .plan-feedback-submit:hover:not(:disabled) {
