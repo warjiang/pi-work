@@ -29,7 +29,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
@@ -68,7 +67,6 @@ export const workspaceSidebarIcons = {
 export function TopBar(props: {
   workspaceScope: WorkspaceScope;
   workspaces: Workspace[];
-  sessionTitle?: string;
   t: T;
   onWorkspaceScope(scope: WorkspaceScope): void;
   onToggleSidebar(): void;
@@ -110,24 +108,21 @@ export function TopBar(props: {
                   {workspace.id === props.workspaceScope ? <Icon name="check" /> : null}
                 </DropdownMenuItem>
               ))}
-              {!personal && folder !== undefined ? (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => setEditingWorkspace(folder)}>
-                    <Icon name="folder-settings" />
-                    {props.t("editWorkspace")}
-                  </DropdownMenuItem>
-                </>
-              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
-          {props.sessionTitle !== undefined ? (
-            <>
-              <span className="topbar-context-separator" aria-hidden="true">/</span>
-              <h1 title={props.sessionTitle}>{props.sessionTitle}</h1>
-            </>
-          ) : null}
           <div className="topbar-task-actions" id="topbar-task-actions" />
+          {!personal && folder !== undefined ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="topbar-workspace-edit"
+              aria-label={props.t("editWorkspace")}
+              title={props.t("editWorkspace")}
+              onClick={() => setEditingWorkspace(folder)}
+            >
+              <Icon name="folder-settings" />
+            </Button>
+          ) : null}
         </div>
         <div className="topbar-trailing">
           <Button

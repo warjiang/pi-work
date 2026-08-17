@@ -1043,9 +1043,10 @@ export function TaskWorkbench(props: {
       label: props.t("plan"),
       description: props.t("slashPlanDescription"),
       keywords: ["plan", "planning", "计划"],
-      insertText: "/plan ",
+      insertText: "",
+      onSelect: () => updateSession.mutate({ executionMode: "plan" }),
     }] : []),
-  ], [personal, props.t]);
+  ], [personal, props.t, updateSession]);
   useEffect(() => {
     setTopbarActionsTarget(document.getElementById("topbar-task-actions"));
   }, []);
@@ -1104,12 +1105,6 @@ export function TaskWorkbench(props: {
       style={{ "--inspector-width": `${activeInspectorWidth}px` } as CSSProperties}
     >
       <div className="execution-pane">
-        {!personal ? <header className="task-context-header">
-          <div className="task-context-meta">
-            <span className={`lifecycle-badge lifecycle-${props.session.status}`}>{lifecycleLabel(props.session, props.t)}</span>
-            <span className="folder-path"><Icon name="workspace" size={14} />{props.session.workingDirectory ?? props.workspace?.rootPath ?? props.t("workFolder")}</span>
-          </div>
-        </header> : null}
         {topbarActionsTarget === null ? null : createPortal(headerActions, topbarActionsTarget)}
         {error ? <Alert className="task-inline-error"><AlertDescription>{error}</AlertDescription><Button variant="ghost" size="icon" aria-label={props.t("close")} onClick={() => setError(null)}><Icon name="close" /></Button></Alert> : null}
         <div className={`conversation-stage${primaryWorkspaceActive ? " primary-workspace-stage" : ""}`}>

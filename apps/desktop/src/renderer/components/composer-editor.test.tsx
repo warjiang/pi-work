@@ -323,6 +323,44 @@ describe("ComposerEditor interactions", () => {
     expect(screen.queryByRole("option", { name: /goal/i })).toBeNull();
   });
 
+  it("runs a slash command action without leaving command text in the editor", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <ComposerEditor
+        value=""
+        onChange={onChange}
+        autoFocus
+        slashCommands={[
+          {
+            id: "plan",
+            command: "/plan",
+            label: "Plan",
+            description: "Switch to plan mode",
+            keywords: ["planning"],
+            insertText: "",
+            onSelect,
+          },
+        ]}
+      />,
+    );
+    const textbox = screen.getByRole("textbox");
+
+    await waitFor(() => expect(document.activeElement).toBe(textbox));
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? "/pl" : "",
+      },
+    });
+    expect(await screen.findByRole("option", { name: /plan/i })).toBeTruthy();
+
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(onSelect).toHaveBeenCalledOnce());
+    expect(editorText(textbox)).toBe("");
+  });
+
   it("does not emit onChange loops for external replacement and supports imperative focus", async () => {
     const onChange = vi.fn();
     const ref = createRef<ComposerEditorHandle>();

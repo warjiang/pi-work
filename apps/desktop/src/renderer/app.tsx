@@ -581,7 +581,6 @@ export function App() {
         <TopBar
           workspaceScope={ui.workspaceScope}
           workspaces={workspaces.data ?? []}
-          {...(ui.view === "inbox" && selectedSession !== null ? { sessionTitle: selectedSession.title } : {})}
           t={t}
           onWorkspaceScope={ui.setWorkspaceScope}
           onToggleSidebar={toggleSidebar}

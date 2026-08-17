@@ -85,6 +85,7 @@ export type ComposerSlashCommand = {
   description: string;
   keywords: readonly string[];
   insertText: string;
+  onSelect?(): void;
 };
 
 export type ComposerEditorProps = {
@@ -543,6 +544,7 @@ function SlashCommandPlugin({ commands }: { commands: readonly ComposerSlashComm
         if (textNodeContainingQuery === null) return;
         textNodeContainingQuery.replace($createTextNode(option.command.insertText));
         closeMenu();
+        option.command.onSelect?.();
       }}
       menuRenderFn={(anchorElementRef, {
         selectedIndex,
