@@ -1968,7 +1968,7 @@ kbd {
 }
 
 .task-workbench.inspector-visible {
-  grid-template-columns: minmax(0, 1fr) var(--inspector-width, 380px);
+  grid-template-columns: minmax(0, 1fr) var(--inspector-width, 460px);
 }
 
 .execution-pane {
@@ -4058,6 +4058,27 @@ kbd {
   stroke: color-mix(in srgb, var(--green) 64%, var(--border-strong));
 }
 
+.conductor-flow .react-flow__edge.animated .react-flow__edge-path,
+.conductor-flow .conductor-flow-edge.is-active .react-flow__edge-path {
+  stroke: var(--green);
+  stroke-width: 1.75;
+  stroke-dasharray: 5;
+  animation: conductor-flow-edge-dash 0.6s linear infinite;
+}
+
+@keyframes conductor-flow-edge-dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conductor-flow .react-flow__edge.animated .react-flow__edge-path,
+  .conductor-flow .conductor-flow-edge.is-active .react-flow__edge-path {
+    animation: none;
+  }
+}
+
 .conductor-flow .react-flow__controls {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -4560,7 +4581,10 @@ kbd {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
 }
 
 .conductor-node-execution-header h2 {
@@ -4586,11 +4610,10 @@ kbd {
 .conductor-node-execution-summary {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
-  margin-top: 18px;
-  border-block: 1px solid var(--border);
-  padding: 10px 0;
   color: var(--muted-foreground);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -4601,9 +4624,31 @@ kbd {
   margin-top: 12px;
 }
 
+.conductor-attempt-select {
+  height: 28px;
+  min-width: 0;
+  max-width: 100%;
+  padding-block: 0;
+  padding-inline: 10px 6px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conductor-attempt-select > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .conductor-node-execution-attempts .conductor-attempt {
   margin-top: 0;
   padding-block: 10px;
+}
+
+.conductor-node-execution-attempts .conductor-attempt-headerless {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
 }
 
 .conductor-node-execution-attempts .conductor-attempt + .conductor-attempt {
@@ -4729,9 +4774,6 @@ kbd {
 
 .conductor-attempt-content .assistant-result {
   margin: 0;
-  border-radius: 8px;
-  background: var(--panel-muted);
-  padding: 9px;
 }
 
 .conductor-attempt-content .alert {
@@ -16375,7 +16417,6 @@ h3,
   background: var(--panel);
 }
 
-.task-inspector .conductor-attempt-content .assistant-result,
 .task-inspector .path-block,
 .task-inspector .conductor-inspector-empty {
   background: var(--panel-muted);

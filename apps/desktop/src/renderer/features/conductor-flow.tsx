@@ -122,15 +122,20 @@ export function buildConductorFlowGraph(options: {
         },
       };
     }),
-    edges: options.layout.edges.map(({ source, target }) => ({
-      id: `${source}-${target}`,
-      source,
-      target,
-      type: "smoothstep",
-      className: `conductor-flow-edge${statesByNodeId.get(source)?.status === "completed" ? " is-completed" : ""}`,
-      focusable: false,
-      selectable: false,
-    })),
+    edges: options.layout.edges.map(({ source, target }) => {
+      const targetStatus = statesByNodeId.get(target)?.status;
+      const active = targetStatus === "running" || targetStatus === "ready";
+      return {
+        id: `${source}-${target}`,
+        source,
+        target,
+        type: "smoothstep",
+        animated: active,
+        className: `conductor-flow-edge${statesByNodeId.get(source)?.status === "completed" ? " is-completed" : ""}${active ? " is-active" : ""}`,
+        focusable: false,
+        selectable: false,
+      };
+    }),
   };
 }
 

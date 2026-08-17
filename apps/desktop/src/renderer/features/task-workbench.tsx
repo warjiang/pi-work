@@ -133,9 +133,10 @@ type SelectedConductorNode = {
   maxAttempts: number;
 };
 
-export const defaultInspectorWidth = 380;
-export const minimumInspectorWidth = 320;
-export const maximumInspectorWidth = 520;
+export const defaultInspectorWidth = 460;
+export const minimumInspectorWidth = 420;
+export const maximumInspectorWidth = 900;
+export const minimumConversationWidth = 480;
 export const inspectorWidthStorageKey = "pi-work:task-inspector-width";
 export const defaultPlanInspectorWidth = 680;
 export const minimumPlanInspectorWidth = 420;
@@ -145,6 +146,20 @@ export const planInspectorWidthStorageKey = "pi-work:plan-inspector-width";
 export function clampInspectorWidth(value: number): number {
   if (!Number.isFinite(value)) return defaultInspectorWidth;
   return Math.min(maximumInspectorWidth, Math.max(minimumInspectorWidth, Math.round(value)));
+}
+
+export function clampResizeWidth(
+  handle: Element,
+  value: number,
+  minimumWidth: number,
+  maximumWidth: number,
+): number {
+  const container = handle.closest(".task-workbench");
+  const containerWidth = container?.clientWidth ?? 0;
+  const availableMax = containerWidth > 0
+    ? Math.max(minimumWidth, Math.min(maximumWidth, containerWidth - minimumConversationWidth))
+    : maximumWidth;
+  return Math.min(availableMax, Math.max(minimumWidth, Math.round(value)));
 }
 
 export function parseInspectorWidth(value: string | null): number {
@@ -1223,6 +1238,11 @@ export function TaskWorkbench(props: {
                   language={props.settings?.language ?? "en"}
                   onOpenPlan={openPlan}
                   onOpenOrchestrationRun={openOrchestrationRun}
+                  onSelectConductorNode={(node) => {
+                    setSelectedConductorRunId(node.runId);
+                    setSelectedConductorNode(node);
+                    props.onContextOpen("node");
+                  }}
                   onApprovePlan={(planRevisionId, action) => approvePlan.mutate({ planRevisionId, action })}
                   onExecuteApprovedPlan={(planRevisionId, mode) => executeApprovedPlan.mutate({ planRevisionId, mode })}
                   onRetryApprovedPlan={(planRevisionId) => retryApprovedPlan.mutate(planRevisionId)}
@@ -1741,6 +1761,7 @@ function MessageList({
   language,
   onOpenPlan,
   onOpenOrchestrationRun,
+  onSelectConductorNode,
   onApprovePlan,
   onExecuteApprovedPlan,
   onRetryApprovedPlan,
@@ -1768,6 +1789,7 @@ function MessageList({
   language: string;
   onOpenPlan(planRevisionId: string): void;
   onOpenOrchestrationRun(runId: string): void;
+  onSelectConductorNode(node: SelectedConductorNode): void;
   onApprovePlan(planRevisionId: string, action: PlanApprovalAction): void;
   onExecuteApprovedPlan(planRevisionId: string, mode: PlanExecutionMode): void;
   onRetryApprovedPlan(planRevisionId: string): void;
@@ -1783,6 +1805,7 @@ function MessageList({
       run={run}
       runs={workflowRuns}
       workspaceId={workspaceId}
+      onSelectNode={onSelectConductorNode}
       t={t}
     />
   );
@@ -1825,6 +1848,7 @@ function MessageList({
               runs={workflowRuns}
               workspaceId={workspaceId}
               presentation="plan-execution"
+              onSelectNode={onSelectConductorNode}
               t={t}
             />
           ) : null}
@@ -2047,6 +2071,7 @@ function ConversationWorkflowCard(props: {
   runs: ConductorRun[];
   workspaceId: string;
   presentation?: "workflow" | "plan-execution";
+  onSelectNode(node: SelectedConductorNode): void;
   t: T;
 }) {
   const queryClient = useQueryClient();
@@ -2060,12 +2085,6 @@ function ConversationWorkflowCard(props: {
     queryFn: () => window.piWork.conductor.nodes({ workspaceId: props.workspaceId, runId: props.run.id }),
     refetchInterval: active ? 1_000 : false,
   });
-  const attempts = useQuery({
-    queryKey: ["conductor-attempts", props.workspaceId, props.run.id],
-    queryFn: () => window.piWork.conductor.attempts({ workspaceId: props.workspaceId, runId: props.run.id }),
-    enabled: open,
-    refetchInterval: open && active ? 1_000 : false,
-  });
   const progress = workflowProgress(nodes.data ?? [], props.run.spec.nodes.length);
   const currentNode = progress.current === null
     ? null
@@ -2074,10 +2093,6 @@ function ConversationWorkflowCard(props: {
     ?? currentNode
     ?? props.run.spec.nodes[0]
     ?? null;
-  const selectedState = selectedNode === null ? null : nodes.data?.find(({ nodeId }) => nodeId === selectedNode.id) ?? null;
-  const selectedAttempts = selectedNode === null
-    ? []
-    : (attempts.data ?? []).filter(({ nodeId }) => nodeId === selectedNode.id);
   const planExecution = props.presentation === "plan-execution";
   const retryRuns = planExecution
     ? props.runs.filter((run) => (
@@ -2161,37 +2176,17 @@ function ConversationWorkflowCard(props: {
               statusLabel={(status) => workflowNodeStatusLabel(status, props.t)}
               attemptLabel={props.t("attempt")}
               liveLabel={props.t("conductorLive")}
-              onSelectNode={(node) => setSelectedNodeId(node.id)}
+              onSelectNode={(node) => {
+                setSelectedNodeId(node.id);
+                props.onSelectNode({
+                  runId: props.run.id,
+                  nodeId: node.id,
+                  title: node.title,
+                  maxAttempts: node.maxAttempts,
+                });
+              }}
             />
           )}
-          {selectedNode !== null ? (
-            <section className="conversation-workflow-node">
-              <header>
-                <div>
-                  <span>{selectedNode.executionClass === "read" ? props.t("workflowRead") : props.t("workflowWrite")}</span>
-                  <h4>{selectedNode.title}</h4>
-                </div>
-                {selectedState !== null ? (
-                  <ConductorStatusBadge
-                    status={selectedState.status}
-                    label={workflowNodeStatusLabel(selectedState.status, props.t)}
-                  />
-                ) : null}
-              </header>
-              {selectedState?.error ? <Alert><AlertDescription>{selectedState.error}</AlertDescription></Alert> : null}
-              <div className="conversation-workflow-node-output">
-                <strong>{props.t("workflowNodeOutput")}</strong>
-                {selectedState?.output
-                  ? <AssistantResult content={selectedState.output} t={props.t} />
-                  : <p>{props.t("workflowNoOutput")}</p>}
-              </div>
-              {selectedAttempts.length > 0 ? (
-                <div className="conversation-workflow-attempts">
-                  {selectedAttempts.map((attempt) => <ConductorAttempt key={`${attempt.nodeId}-${attempt.attempt}`} attempt={attempt} t={props.t} />)}
-                </div>
-              ) : null}
-            </section>
-          ) : null}
           {retryRuns.length > 0 ? (
             <div className="conversation-workflow-retries">
               <strong>{props.t(planExecution ? "planExecutionHistory" : "workflowRetryHistory")}</strong>
@@ -2466,12 +2461,19 @@ export function orderedProcessActivities(activities: Activity[]): Activity[] {
   });
 }
 
+const workflowToolName = "workflow";
+
+function isWorkflowToolActivity(activity: Activity): boolean {
+  return (activity.kind === "tool_call" || activity.kind === "tool_result")
+    && activity.metadata.toolName === workflowToolName;
+}
+
 function HistoricalProcess({ activities, animateCollapse = false, t }: {
   activities: Activity[];
   animateCollapse?: boolean;
   t: T;
 }) {
-  const ordered = orderedProcessActivities(activities);
+  const ordered = orderedProcessActivities(activities).filter((activity) => !isWorkflowToolActivity(activity));
   const animateOnMount = useRef(animateCollapse).current;
   const hasActivities = ordered.length > 0;
   const [open, setOpen] = useState(animateOnMount);
@@ -2744,7 +2746,7 @@ function LiveProcessView({ process, collapse, t }: { process: LiveProcess; colla
           );
         }
         const tool = process.tools.find(({ toolCallId }) => toolCallId === item.toolCallId);
-        return tool === undefined ? null : (
+        return tool === undefined || tool.toolName === workflowToolName ? null : (
           <LiveProcessItem key={`tool-${tool.toolCallId}`} last={index === process.timeline.length - 1}>
             <ToolProcessCard animate collapse={collapse} tool={tool} t={t} />
           </LiveProcessItem>
@@ -3328,7 +3330,7 @@ function TaskInspector(props: {
           else if (event.key === "End") nextWidth = props.maximumWidth;
           else return;
           event.preventDefault();
-          props.onResize(nextWidth, true);
+          props.onResize(clampResizeWidth(event.currentTarget, nextWidth, props.minimumWidth, props.maximumWidth), true);
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -3344,9 +3346,11 @@ function TaskInspector(props: {
         onPointerMove={(event) => {
           const state = resizeState.current;
           if (state === null || state.pointerId !== event.pointerId) return;
-          const width = Math.min(
+          const width = clampResizeWidth(
+            event.currentTarget,
+            state.startWidth + state.startX - event.clientX,
+            props.minimumWidth,
             props.maximumWidth,
-            Math.max(props.minimumWidth, Math.round(state.startWidth + state.startX - event.clientX)),
           );
           state.latestWidth = width;
           props.onResize(width, false);
@@ -3982,6 +3986,7 @@ function ConductorNodeExecution(props: {
   t: T;
 }) {
   const queryClient = useQueryClient();
+  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
   const nodes = useQuery({
     queryKey: ["conductor-nodes", props.workspace.id, props.selectedNode.runId],
     queryFn: () => window.piWork.conductor.nodes({
@@ -4029,6 +4034,9 @@ function ConductorNodeExecution(props: {
   }), [executionIds, props.selectedNode.runId, props.workspace.id, queryClient]);
   const status = nodeState?.status ?? "pending";
   const attempt = nodeState?.attempt ?? 0;
+  const selectedAttempt = nodeAttempts.find(({ executionId }) => executionId === selectedAttemptId)
+    ?? nodeAttempts[nodeAttempts.length - 1]
+    ?? null;
   return (
     <article className="conductor-node-execution" aria-label={props.t("conductorNodeExecution")}>
       <header className="conductor-node-execution-header">
@@ -4037,21 +4045,37 @@ function ConductorNodeExecution(props: {
           <h2>{props.selectedNode.title}</h2>
           <p>{props.t("conductorNodeExecutionDetail")}</p>
         </div>
+        <div className="conductor-node-execution-summary">
+          <ConductorStatusBadge status={status} label={workflowNodeStatusLabel(status, props.t)} />
+          {status === "running" ? <span className="conductor-node-live">{props.t("conductorLive")}</span> : null}
+          {nodeAttempts.length > 0 && selectedAttempt !== null ? (
+            <Select value={selectedAttempt.executionId} onValueChange={setSelectedAttemptId}>
+              <SelectTrigger className="conductor-attempt-select" aria-label={props.t("attempt")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent><SelectGroup>
+                {nodeAttempts.map((nodeAttempt) => (
+                  <SelectItem key={nodeAttempt.executionId} value={nodeAttempt.executionId}>
+                    {props.t("attempt")} {nodeAttempt.attempt}/{props.selectedNode.maxAttempts} · {workflowNodeStatusLabel(nodeAttempt.status, props.t)} · {conductorElapsed(nodeAttempt.startedAt, nodeAttempt.completedAt)}
+                  </SelectItem>
+                ))}
+              </SelectGroup></SelectContent>
+            </Select>
+          ) : (
+            <span>{props.t("attempt")} {attempt}/{props.selectedNode.maxAttempts}</span>
+          )}
+        </div>
       </header>
-      <div className="conductor-node-execution-summary">
-        <ConductorStatusBadge status={status} label={workflowNodeStatusLabel(status, props.t)} />
-        <span>{props.t("attempt")} {attempt}/{props.selectedNode.maxAttempts}</span>
-        {status === "running" ? <span className="conductor-node-live">{props.t("conductorLive")}</span> : null}
-      </div>
+      {nodeState?.error ? <Alert><AlertDescription>{nodeState.error}</AlertDescription></Alert> : null}
       {attempts.isError || nodes.isError ? (
         <TaskSectionError t={props.t} onRetry={() => {
           void nodes.refetch();
           void attempts.refetch();
         }} />
       ) : null}
-      {nodeAttempts.length > 0 ? (
+      {selectedAttempt !== null ? (
         <div className="conductor-node-execution-attempts">
-          {nodeAttempts.map((nodeAttempt) => <ConductorAttempt key={nodeAttempt.executionId} attempt={nodeAttempt} t={props.t} />)}
+          <ConductorAttempt key={selectedAttempt.executionId} attempt={selectedAttempt} t={props.t} headerless />
         </div>
       ) : null}
       {!attempts.isError && !nodes.isError && status === "running" && nodeAttempts.length === 0 ? (
@@ -4084,8 +4108,8 @@ function workflowNodeStatusLabel(
   return workflowStatusLabel(status, t);
 }
 
-function ConductorAttempt(props: { attempt: ConductorNodeAttemptDetail; t: T }) {
-  const [open, setOpen] = useState(props.attempt.status === "running");
+function ConductorAttempt(props: { attempt: ConductorNodeAttemptDetail; t: T; defaultOpen?: boolean; headerless?: boolean }) {
+  const [open, setOpen] = useState(props.defaultOpen === true || props.attempt.status === "running");
   const process = useMemo(() => props.attempt.events.reduce<LiveProcess>(
     (current, event) => reduceLiveProcess(current, event.kind, event.payload, props.t),
     { thoughts: [], tools: [], timeline: [], notice: null },
@@ -4095,6 +4119,16 @@ function ConductorAttempt(props: { attempt: ConductorNodeAttemptDetail; t: T }) 
     .map(({ payload }) => typeof payload.delta === "string" ? payload.delta : "")
     .join(""), [props.attempt.events]);
   const output = props.attempt.output ?? streamed;
+  const body = (
+    <div className="conductor-attempt-content">
+      {process.timeline.length > 0 || process.notice !== null ? <LiveProcessView collapse={false} process={process} t={props.t} /> : null}
+      {output !== "" ? <AssistantResult streaming={props.attempt.status === "running"} content={output} t={props.t} /> : null}
+      {props.attempt.error !== null ? <Alert><AlertDescription>{props.attempt.error}</AlertDescription></Alert> : null}
+    </div>
+  );
+  if (props.headerless === true) {
+    return <div className={`conductor-attempt conductor-attempt-headerless conductor-attempt-${props.attempt.status}`}>{body}</div>;
+  }
   return (
     <details
       className={`conductor-attempt conductor-attempt-${props.attempt.status}`}
@@ -4112,11 +4146,7 @@ function ConductorAttempt(props: { attempt: ConductorNodeAttemptDetail; t: T }) 
           />
         </span>
       </summary>
-      <div className="conductor-attempt-content">
-        {process.timeline.length > 0 || process.notice !== null ? <LiveProcessView collapse={false} process={process} t={props.t} /> : null}
-        {output !== "" ? <AssistantResult streaming={props.attempt.status === "running"} content={output} t={props.t} /> : null}
-        {props.attempt.error !== null ? <Alert><AlertDescription>{props.attempt.error}</AlertDescription></Alert> : null}
-      </div>
+      {body}
     </details>
   );
 }
