@@ -1,8 +1,11 @@
-import type { AppSettings, ModelCatalog, ModelOption, ProviderConfig } from "@pi-work/protocol";
+import type { AppSettings, ModelCatalog, ModelOption, ProviderConfig, Session } from "@pi-work/protocol";
 import { describe, expect, it } from "vitest";
 import {
   commandSettingItems,
+  createNewFolderTaskInput,
   createNewSessionInput,
+  mergeSessionSnapshot,
+  recentSessions,
   resolveDefaultModel,
   resolveDefaultThinkingLevel,
   workspaceSidebarIcons,
@@ -90,6 +93,43 @@ describe("new session defaults", () => {
       thinkingLevel: "medium",
     });
   });
+
+  it("creates a blank folder session directly in Plan mode", () => {
+    const workspace = {
+      id: "018f88d1-1eb5-709a-90ef-4325747e294c",
+      name: "Product",
+      rootPath: "/workspace/product",
+    } as Parameters<typeof createNewFolderTaskInput>[0];
+
+    expect(createNewFolderTaskInput(workspace, gpt, "medium")).toEqual({
+      workspaceId: workspace.id,
+      title: "New session",
+      goal: "New session",
+      kind: "task",
+      providerId: "openai",
+      modelId: "gpt-5",
+      thinkingLevel: "medium",
+      permissionMode: "ask",
+      planMode: true,
+      executionMode: "plan",
+      workingDirectory: "/workspace/product",
+    });
+  });
+
+  it("merges a completed session snapshot into the cached session list", () => {
+    const running = {
+      id: "task-a",
+      running: true,
+      title: "Running",
+    } as Session;
+    const completed = {
+      ...running,
+      running: false,
+      title: "Completed",
+    };
+
+    expect(mergeSessionSnapshot([running], completed)).toEqual([completed]);
+  });
 });
 
 describe("command settings", () => {
@@ -117,8 +157,26 @@ describe("workspace sidebar icons", () => {
       board: "folder-kanban",
       sources: "source",
       automations: "automation",
-      folderSettings: "folder-settings",
       settings: "settings",
     });
+  });
+
+  it("keeps at most eight unique unarchived recent sessions", () => {
+    const sessions = Array.from({ length: 10 }, (_, index) => ({
+      id: `task-${index}`,
+      archived: index === 8,
+    })) as unknown as Session[];
+    sessions.splice(2, 0, sessions[0]!);
+
+    expect(recentSessions(sessions).map(({ id }) => id)).toEqual([
+      "task-0",
+      "task-1",
+      "task-2",
+      "task-3",
+      "task-4",
+      "task-5",
+      "task-6",
+      "task-7",
+    ]);
   });
 });

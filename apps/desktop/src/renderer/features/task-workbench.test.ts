@@ -1,24 +1,224 @@
 import { describe, expect, it } from "vitest";
+import type { ChatMessage, ConductorNodeState, ConductorRun, PlanRevision } from "@pi-work/protocol";
 import {
   activeTurnIndex,
   activeTurnDuringScroll,
+  clampInspectorWidth,
+  clampPlanInspectorWidth,
+  conductorRunTargetId,
+  conductorDraftError,
   conversationTurns,
+  createConductorDraft,
+  defaultInspectorWidth,
+  defaultPlanInspectorWidth,
   isNearBottom,
+  maximumInspectorWidth,
+  maximumPlanInspectorWidth,
+  minimumInspectorWidth,
+  minimumPlanInspectorWidth,
   orderedProcessActivities,
+  optimisticEditBranch,
+  parseConductorDraft,
+  parseInspectorWidth,
+  parsePlanInspectorWidth,
+  planExecutionRun,
+  planRevisionMarkdown,
   persistedAssistantMatchesStream,
   processSummary,
   reduceLiveProcess,
+  restoreFailedComposerInput,
+  serializeConductorDraft,
   summarizeProcessValue,
   toolFromActivity,
   toolPreview,
   turnHoverDistance,
   visibleMessageContent,
+  workflowProgress,
+  workflowRunsForPlan,
+  standaloneWorkflowRuns,
 } from "./task-workbench.js";
 
 const t = (key: string) => key;
 const empty = { thoughts: [], tools: [], timeline: [], notice: null };
 
 describe("live Pi process reducer", () => {
+  it("keeps legacy conductor specs readable", () => {
+    const draft = createConductorDraft(
+      "Preflight",
+      "Inspect the workspace",
+      "00000000-0000-4000-8000-000000000001",
+    );
+
+    expect(parseConductorDraft(serializeConductorDraft(draft))).toEqual(draft);
+    expect(conductorDraftError(draft)).toBeNull();
+  });
+
+  it("summarizes workflow progress and prioritizes the active node", () => {
+    const state = (
+      nodeId: string,
+      status: ConductorNodeState["status"],
+    ): ConductorNodeState => ({
+      runId: "00000000-0000-4000-8000-000000000010",
+      nodeId,
+      status,
+      attempt: status === "pending" ? 0 : 1,
+      executionId: null,
+      output: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: "2026-08-16T00:00:00.000Z",
+    });
+    const pending = state("00000000-0000-4000-8000-000000000011", "pending");
+    const ready = state("00000000-0000-4000-8000-000000000012", "ready");
+    const running = state("00000000-0000-4000-8000-000000000013", "running");
+    const completed = state("00000000-0000-4000-8000-000000000014", "completed");
+
+    expect(workflowProgress([pending, ready, running, completed], 4)).toEqual({
+      completed: 1,
+      total: 4,
+      current: running,
+    });
+    expect(workflowProgress([pending, ready, completed], 3).current).toBe(ready);
+    expect(workflowProgress([completed], 1)).toEqual({
+      completed: 1,
+      total: 1,
+      current: null,
+    });
+  });
+
+  it("uses the latest approved-plan run as plan execution and only shows orchestration runs standalone", () => {
+    const plan = { id: "00000000-0000-4000-8000-000000000020" } as PlanRevision;
+    const retriedPlanRun = {
+      id: "00000000-0000-4000-8000-000000000024",
+      origin: "approved_plan",
+      planRevisionId: plan.id,
+      parentRunId: "00000000-0000-4000-8000-000000000021",
+    } as ConductorRun;
+    const approvedPlanRun = {
+      id: "00000000-0000-4000-8000-000000000021",
+      origin: "approved_plan",
+      planRevisionId: plan.id,
+    } as ConductorRun;
+    const conversationRun = {
+      id: "00000000-0000-4000-8000-000000000022",
+      origin: "conversation",
+      planRevisionId: null,
+    } as ConductorRun;
+    const orphanedPlanRun = {
+      id: "00000000-0000-4000-8000-000000000023",
+      origin: "approved_plan",
+      planRevisionId: "00000000-0000-4000-8000-000000000099",
+    } as ConductorRun;
+    const runs = [retriedPlanRun, approvedPlanRun, conversationRun, orphanedPlanRun];
+
+    expect(workflowRunsForPlan(runs, plan.id)).toEqual([retriedPlanRun, approvedPlanRun]);
+    expect(planExecutionRun(runs, plan.id)).toBe(retriedPlanRun);
+    expect(standaloneWorkflowRuns(runs)).toEqual([conversationRun]);
+    expect(conductorRunTargetId(retriedPlanRun.id)).toBe(
+      "conductor-run-00000000-0000-4000-8000-000000000024",
+    );
+  });
+
+  it("optimistically removes plans and workflows from an edited message branch", () => {
+    const first = {
+      id: "00000000-0000-4000-8000-000000000030",
+      taskId: "00000000-0000-4000-8000-000000000031",
+      role: "user",
+      content: "Original request",
+      createdAt: "2026-08-16T00:00:01.000Z",
+    } as ChatMessage;
+    const reply = {
+      ...first,
+      id: "00000000-0000-4000-8000-000000000032",
+      role: "assistant",
+      content: "Original answer",
+      createdAt: "2026-08-16T00:00:02.000Z",
+    } as ChatMessage;
+    const plan = {
+      id: "00000000-0000-4000-8000-000000000033",
+      createdFromMessageId: first.id,
+      createdAt: "2026-08-16T00:00:03.000Z",
+    } as PlanRevision;
+    const planRun = {
+      id: "00000000-0000-4000-8000-000000000034",
+      origin: "approved_plan",
+      planRevisionId: plan.id,
+      sourceMessageId: null,
+      finalMessageId: null,
+      parentRunId: null,
+      createdAt: "2026-08-16T00:00:04.000Z",
+    } as ConductorRun;
+    const retryRun = {
+      ...planRun,
+      id: "00000000-0000-4000-8000-000000000035",
+      origin: "legacy",
+      planRevisionId: null,
+      parentRunId: planRun.id,
+    } as ConductorRun;
+    const orphanedPlan = {
+      ...plan,
+      id: "00000000-0000-4000-8000-000000000036",
+      createdFromMessageId: "00000000-0000-4000-8000-000000000099",
+      createdAt: "2026-08-16T00:00:03.500Z",
+    } as PlanRevision;
+
+    expect(optimisticEditBranch({
+      messages: [first, reply],
+      planRevisions: [plan, orphanedPlan],
+      conductorRuns: [planRun, retryRun],
+      messageId: first.id,
+      content: "Revised request",
+    })).toEqual({
+      messages: [{ ...first, content: "Revised request" }],
+      planRevisions: [],
+      conductorRuns: [],
+    });
+  });
+
+  it("reports unknown, self, and cyclic conductor dependencies", () => {
+    const first = "00000000-0000-4000-8000-000000000001";
+    const second = "00000000-0000-4000-8000-000000000002";
+    const base = {
+      maxParallel: 2,
+      nodes: [
+        { id: first, title: "First", prompt: "First", dependsOn: [second], maxAttempts: 1 },
+        { id: second, title: "Second", prompt: "Second", dependsOn: [first], maxAttempts: 1 },
+      ],
+    };
+
+    expect(conductorDraftError(base)).toContain("acyclic");
+    expect(conductorDraftError({
+      ...base,
+      nodes: [{ ...base.nodes[0], dependsOn: [first] }],
+    })).toContain("itself");
+    expect(conductorDraftError({
+      ...base,
+      nodes: [{ ...base.nodes[0], dependsOn: ["00000000-0000-4000-8000-000000000099"] }],
+    })).toContain("Unknown dependency");
+  });
+
+  it("clamps and restores the task inspector width", () => {
+    expect(parseInspectorWidth(null)).toBe(defaultInspectorWidth);
+    expect(parseInspectorWidth("520")).toBe(520);
+    expect(parseInspectorWidth("invalid")).toBe(defaultInspectorWidth);
+    expect(clampInspectorWidth(100)).toBe(minimumInspectorWidth);
+    expect(clampInspectorWidth(900)).toBe(maximumInspectorWidth);
+  });
+
+  it("keeps the expanded Plan width independent from the task inspector", () => {
+    expect(parsePlanInspectorWidth(null)).toBe(defaultPlanInspectorWidth);
+    expect(parsePlanInspectorWidth("720")).toBe(720);
+    expect(parsePlanInspectorWidth("invalid")).toBe(defaultPlanInspectorWidth);
+    expect(clampPlanInspectorWidth(100)).toBe(minimumPlanInspectorWidth);
+    expect(clampPlanInspectorWidth(1_000)).toBe(maximumPlanInspectorWidth);
+  });
+
+  it("restores a failed submitted draft without overwriting newer typing", () => {
+    expect(restoreFailedComposerInput("", "/plan research DeepSeek harness")).toBe("/plan research DeepSeek harness");
+    expect(restoreFailedComposerInput("A newer draft", "/plan research DeepSeek harness")).toBe("A newer draft");
+  });
+
   it("hides internal attached-file manifests from conversation content", () => {
     expect(visibleMessageContent(
       "Attached files:\n- /Users/me/clipboard-attachments/a.png\n\nI reviewed the image.",
@@ -27,6 +227,41 @@ describe("live Pi process reducer", () => {
 
   it("keeps regular assistant content untouched", () => {
     expect(visibleMessageContent("I reviewed the image.")).toBe("I reviewed the image.");
+  });
+
+  it("hides legacy plan status messages now that the plan renders inline", () => {
+    expect(visibleMessageContent("Plan ready for review: Review the workspace.")).toBe("");
+    expect(visibleMessageContent("Plan updated for review: Focus on the runtime.")).toBe("");
+  });
+
+  it("renders targets, verification, assumptions, and runtime sources in plan Markdown", () => {
+    const markdown = planRevisionMarkdown({
+      id: "00000000-0000-4000-8000-000000000001",
+      taskId: "00000000-0000-4000-8000-000000000002",
+      revision: 2,
+      status: "proposed",
+      title: "Version plan mode",
+      summary: "Keep every reviewable revision.",
+      steps: [{
+        id: "00000000-0000-4000-8000-000000000003",
+        title: "Persist revisions",
+        detail: "Add append-only storage.",
+        targets: ["packages/storage/src/schema.ts"],
+        verification: ["Run storage tests"],
+      }],
+      assumptions: ["The legacy plan table remains during migration."],
+      sources: [{ path: "packages/storage/src/index.ts", operation: "read" }],
+      parentRevisionId: "00000000-0000-4000-8000-000000000004",
+      createdFromMessageId: "00000000-0000-4000-8000-000000000005",
+      createdAt: "2026-08-16T00:00:00.000Z",
+      approvedAt: null,
+    });
+
+    expect(markdown).toContain("packages/storage/src/schema.ts");
+    expect(markdown).toContain("   - Targets:\n     - packages/storage/src/schema.ts");
+    expect(markdown).toContain("Run storage tests");
+    expect(markdown).toContain("The legacy plan table remains during migration.");
+    expect(markdown).toContain("`packages/storage/src/index.ts` (read)");
   });
 
   it("replaces a streamed response once the same assistant message is persisted", () => {

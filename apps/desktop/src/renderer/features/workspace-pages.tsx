@@ -85,107 +85,6 @@ export function PageHeader(props: { eyebrow?: string; title: string; detail?: st
   );
 }
 
-export function FolderSettingsPage({ workspace, t }: { workspace: Workspace; t: T }) {
-  const queryClient = useQueryClient();
-  const workspaceQuery = useQuery({
-    queryKey: ["workspace", workspace.id],
-    queryFn: () => window.piWork.workspace.get(workspace.id),
-    initialData: workspace,
-  });
-  const directories = useQuery({
-    queryKey: ["workspace-directories", workspace.id],
-    queryFn: () => window.piWork.workspace.directories(workspace.id),
-  });
-  const projects = useQuery({
-    queryKey: ["projects", workspace.id],
-    queryFn: () => window.piWork.project.list(workspace.id),
-  });
-  const current = workspaceQuery.data ?? workspace;
-  const [name, setName] = useState(current.name);
-  const [outputPath, setOutputPath] = useState(current.outputPath);
-  const [projectName, setProjectName] = useState("");
-  useEffect(() => {
-    setName(current.name);
-    setOutputPath(current.outputPath);
-  }, [current.name, current.outputPath]);
-  const refresh = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["workspace", workspace.id] }),
-      queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
-      queryClient.invalidateQueries({ queryKey: ["workspace-directories", workspace.id] }),
-      queryClient.invalidateQueries({ queryKey: ["projects", workspace.id] }),
-      queryClient.invalidateQueries({ queryKey: ["board-snapshot", workspace.id] }),
-    ]);
-  };
-  const save = useMutation({
-    mutationFn: () => window.piWork.workspace.update({
-      workspaceId: workspace.id,
-      name: name.trim(),
-      outputPath: outputPath.trim(),
-      expectedVersion: current.version,
-    }),
-    onSuccess: refresh,
-  });
-  const createProject = useMutation({
-    mutationFn: () => window.piWork.project.create({
-      workspaceId: workspace.id,
-      name: projectName.trim(),
-    }),
-    onSuccess: async () => {
-      setProjectName("");
-      await refresh();
-    },
-  });
-  return (
-    <section className="page">
-      <PageHeader eyebrow={current.name} title={t("folderSettings")} detail={t("folderSettingsDetail")} />
-      <div className="page-body">
-        <section className="settings-section">
-          <FieldGroup>
-            <Field><FieldLabel>{t("name")}</FieldLabel><Input value={name} onChange={(event) => setName(event.target.value)} /></Field>
-            <Field><FieldLabel>{t("artifactRoot")}</FieldLabel><Input value={outputPath} onChange={(event) => setOutputPath(event.target.value)} /></Field>
-            <Button disabled={save.isPending || name.trim() === "" || outputPath.trim() === ""} onClick={() => save.mutate()}>{t("save")}</Button>
-          </FieldGroup>
-        </section>
-        <section className="settings-section">
-          <PageHeader title={t("authorizedFolders")} action={<Button variant="outline" onClick={() => void window.piWork.workspace.addDirectory(workspace.id).then(refresh)}><Icon name="plus" />{t("addDirectory")}</Button>} />
-          <div className="folder-settings-list">
-            {(directories.data ?? []).map((directory) => (
-              <div key={directory.id}>
-                <Icon name="workspace" />
-                <span><strong>{directory.isRoot ? t("folderRoot") : t("authorizedFolders")}</strong><code>{directory.path}</code></span>
-                {!directory.isRoot ? <Button variant="ghost" size="icon" aria-label={t("delete")} onClick={() => void window.piWork.workspace.removeDirectory({ workspaceId: workspace.id, directoryId: directory.id }).then(refresh)}><Icon name="trash" /></Button> : null}
-              </div>
-            ))}
-          </div>
-        </section>
-        <section className="settings-section">
-          <PageHeader title={t("projects")} detail={t("projectsDetail")} />
-          <div className="workflow-list">
-            {(projects.data ?? []).map((project) => (
-              <div className="workflow-row" key={project.id}>
-                <span className="color-preview" style={{ background: project.color }} />
-                <Input
-                  defaultValue={project.name}
-                  onBlur={(event) => {
-                    const next = event.target.value.trim();
-                    if (next !== "" && next !== project.name) void window.piWork.project.update({ workspaceId: workspace.id, projectId: project.id, name: next }).then(refresh);
-                  }}
-                />
-                <Button variant="ghost" size="icon" aria-label={t("delete")} onClick={() => void window.piWork.project.remove({ workspaceId: workspace.id, projectId: project.id }).then(refresh)}><Icon name="trash" /></Button>
-              </div>
-            ))}
-            <div className="workflow-create">
-              <Input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder={t("projectName")} />
-              <Button disabled={projectName.trim() === "" || createProject.isPending} onClick={() => createProject.mutate()}><Icon name="plus" />{t("add")}</Button>
-            </div>
-          </div>
-        </section>
-      </div>
-    </section>
-  );
-}
-
 export function BoardPage(props: {
   sessions: Session[];
   snapshot: BoardSnapshot | undefined;
@@ -194,13 +93,20 @@ export function BoardPage(props: {
   labels: Label[];
   workspace: Workspace;
   t: T;
+  onNewTask(): void;
   onOpenTask(taskId: string): void;
   onSelectBoard(boardId: string | undefined): void;
   onRefresh(): Promise<void>;
 }) {
   const [mode, setMode] = useState<"board" | "list">("board");
   const [manageOpen, setManageOpen] = useState(false);
-  const visible = sessionsForBoard(props.sessions, props.workspace.id);
+  const [query, setQuery] = useState("");
+  const [lifecycle, setLifecycle] = useState("all");
+  const visible = sessionsForBoard(props.sessions, props.workspace.id).filter((session) => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const matchesQuery = normalizedQuery === "" || `${session.title} ${session.goal}`.toLocaleLowerCase().includes(normalizedQuery);
+    return matchesQuery && (lifecycle === "all" || session.status === lifecycle);
+  });
   const columns = props.snapshot?.columns ?? [];
   const stateByTaskId = new Map((props.snapshot?.states ?? []).map((state) => [state.taskId, state]));
   async function moveSession(
@@ -223,7 +129,7 @@ export function BoardPage(props: {
     await props.onRefresh();
   }
   return (
-    <section className="page">
+    <section className="page board-page">
       <PageHeader
         eyebrow={props.workspace.name}
         title={props.t("board")}
@@ -233,12 +139,28 @@ export function BoardPage(props: {
             <SelectTrigger aria-label={props.t("board")}><SelectValue placeholder={props.t("board")} /></SelectTrigger>
             <SelectContent><SelectGroup>{props.boards.map((board) => <SelectItem key={board.id} value={board.id}>{board.name}</SelectItem>)}</SelectGroup></SelectContent>
           </Select>
-          <ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup>
+          <ToggleGroup className="board-view-toggle" type="single" value={mode} onValueChange={(value) => value && setMode(value as "board" | "list")}><ToggleGroupItem value="board">{props.t("board")}</ToggleGroupItem><ToggleGroupItem value="list">{props.t("list")}</ToggleGroupItem></ToggleGroup>
           <Button variant="outline" onClick={() => setManageOpen(true)}><Icon name="sliders" />{props.t("manage")}</Button>
+          <Button onClick={props.onNewTask}><Icon name="plus" size={14} />{props.t("newTask")}</Button>
         </div>}
       />
+      <div className="board-toolbar">
+        <div className="task-list-search"><Icon name="search" size={14} /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={props.t("searchTasks")} /></div>
+        <Select value={lifecycle} onValueChange={setLifecycle}>
+          <SelectTrigger aria-label={props.t("status")}><SelectValue /></SelectTrigger>
+          <SelectContent><SelectGroup>
+            <SelectItem value="all">{props.t("allStatuses")}</SelectItem>
+            {["draft", "planning", "awaiting_plan_approval", "running", "awaiting_action_approval", "reviewing", "completed", "failed", "cancelled"].map((value) => (
+              <SelectItem value={value} key={value}>{systemStatusLabel({ status: value as Session["status"], running: false }, props.t)}</SelectItem>
+            ))}
+          </SelectGroup></SelectContent>
+        </Select>
+        <span>{visible.length} {props.t("tasks")}</span>
+      </div>
       <div className="page-body board-body">
-        {mode === "board" ? (
+        {visible.length === 0 ? (
+          <div className="task-list-empty"><Icon name="search" /><h2>{props.t("noSearchResults")}</h2></div>
+        ) : mode === "board" ? (
           <div className="kanban">
             {columns.map((column) => {
               const taskOrder = new Map(
@@ -372,7 +294,7 @@ function WorkflowManager(props: {
       <Dialog open={props.open} onOpenChange={props.onOpenChange}>
         <DialogContent className="workflow-dialog">
           <DialogHeader><DialogTitle>{props.t("manageWorkflow")}</DialogTitle><DialogDescription>{props.t("workflowDetail")}</DialogDescription></DialogHeader>
-          <ToggleGroup type="single" value={tab} onValueChange={(value) => value && setTab(value as "statuses" | "labels" | "columns")}><ToggleGroupItem value="statuses">{props.t("workStage")}</ToggleGroupItem><ToggleGroupItem value="columns">{props.t("boardColumns")}</ToggleGroupItem><ToggleGroupItem value="labels">{props.t("labels")}</ToggleGroupItem></ToggleGroup>
+          <ToggleGroup className="workflow-tabs" type="single" value={tab} onValueChange={(value) => value && setTab(value as "statuses" | "labels" | "columns")}><ToggleGroupItem value="statuses">{props.t("workStage")}</ToggleGroupItem><ToggleGroupItem value="columns">{props.t("boardColumns")}</ToggleGroupItem><ToggleGroupItem value="labels">{props.t("labels")}</ToggleGroupItem></ToggleGroup>
           <div className="workflow-list">
             {tab === "columns"
               ? (props.snapshot?.columns ?? []).map((column) => (
@@ -1822,12 +1744,13 @@ function sourceTypeLabel(type: Source["type"], t: T): string {
   return t(keys[type]);
 }
 
-function systemStatusLabel(session: Session, t: T): string {
+function systemStatusLabel(session: Pick<Session, "status" | "running">, t: T): string {
   if (session.running) return t("lifecycleRunning");
   const keys: Record<Session["status"], MessageKey> = {
     draft: "lifecycleDraft",
     planning: "lifecyclePlanning",
     awaiting_plan_approval: "lifecycleAwaitingPlan",
+    ready_to_execute: "lifecycleReadyToExecute",
     running: "lifecycleRunning",
     awaiting_action_approval: "lifecycleAwaitingAction",
     reviewing: "lifecycleReviewing",

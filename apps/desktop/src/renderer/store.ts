@@ -6,10 +6,11 @@ export type AppView =
   | "completed"
   | "board"
   | "sources"
-  | "automations"
-  | "folder-settings";
+  | "automations";
 
-export type InspectorTab = "task" | "plan" | "orchestration" | "activity" | "output";
+export const taskModes = ["conversation", "orchestration", "artifacts"] as const;
+export type TaskMode = (typeof taskModes)[number];
+export type ContextPanel = "task" | "activity" | "node" | "plan" | null;
 export type WorkspaceScope = "personal" | string;
 export type SettingsSection =
   | "general"
@@ -34,10 +35,9 @@ type WorkspaceUiState = {
   settingsSection: SettingsSection;
   sidebarCollapsed: boolean;
   sidebarDrawerOpen: boolean;
-  inspectorOpen: boolean;
-  inspectorTab: InspectorTab;
+  taskMode: TaskMode;
+  contextPanel: ContextPanel;
   commandOpen: boolean;
-  newTaskOpen: boolean;
   search: string;
   showView(view: AppView): void;
   setWorkspaceScope(scope: WorkspaceScope): void;
@@ -49,11 +49,11 @@ type WorkspaceUiState = {
   toggleSidebar(): void;
   setSidebarCollapsed(collapsed: boolean): void;
   setSidebarDrawerOpen(open: boolean): void;
-  toggleInspector(): void;
-  showInspector(tab?: InspectorTab): void;
-  setInspectorTab(tab: InspectorTab): void;
+  setTaskMode(mode: TaskMode): void;
+  openContextPanel(panel: Exclude<ContextPanel, null>): void;
+  closeContextPanel(): void;
+  toggleContextPanel(panel?: Exclude<ContextPanel, null>): void;
   setCommandOpen(open: boolean): void;
-  setNewTaskOpen(open: boolean): void;
   setSearch(value: string): void;
 };
 
@@ -65,22 +65,25 @@ export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
   settingsSection: "general",
   sidebarCollapsed: false,
   sidebarDrawerOpen: false,
-  inspectorOpen: true,
-  inspectorTab: "task",
+  taskMode: "conversation",
+  contextPanel: null,
   commandOpen: false,
-  newTaskOpen: false,
   search: "",
   showView: (view) => set({ view, sidebarDrawerOpen: false }),
   setWorkspaceScope: (workspaceScope) => set({
     workspaceScope,
     selectedTaskId: null,
     view: "inbox",
+    taskMode: "conversation",
+    contextPanel: null,
   }),
   selectTask: (selectedTaskId) => set({ selectedTaskId }),
   openTask: (selectedTaskId) => set({
     selectedTaskId,
     view: "inbox",
     sidebarDrawerOpen: false,
+    taskMode: "conversation",
+    contextPanel: null,
   }),
   openSettings: (section) => set((state) => ({
     settingsOpen: true,
@@ -94,10 +97,12 @@ export const useWorkspaceUi = create<WorkspaceUiState>((set) => ({
   })),
   setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
   setSidebarDrawerOpen: (sidebarDrawerOpen) => set({ sidebarDrawerOpen }),
-  toggleInspector: () => set((state) => ({ inspectorOpen: !state.inspectorOpen })),
-  showInspector: (inspectorTab = "task") => set({ inspectorOpen: true, inspectorTab }),
-  setInspectorTab: (inspectorTab) => set({ inspectorTab }),
+  setTaskMode: (taskMode) => set({ taskMode }),
+  openContextPanel: (contextPanel) => set({ contextPanel }),
+  closeContextPanel: () => set({ contextPanel: null }),
+  toggleContextPanel: (panel = "task") => set((state) => ({
+    contextPanel: state.contextPanel === panel ? null : panel,
+  })),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
-  setNewTaskOpen: (newTaskOpen) => set({ newTaskOpen }),
   setSearch: (search) => set({ search }),
 }));

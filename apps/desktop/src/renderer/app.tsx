@@ -10,11 +10,12 @@ import { Disclosure, DisclosureContent, DisclosureTrigger } from "./components/u
 import { Icon } from "./components/ui/icon.js";
 import {
   CommandPalette,
-  NewTaskDialog,
   OnboardingDialog,
   Sidebar,
   TopBar,
+  createNewFolderTaskInput,
   createNewSessionInput,
+  mergeSessionSnapshot,
   resolveDefaultModel,
   resolveDefaultThinkingLevel,
 } from "./features/app-shell.js";
@@ -24,7 +25,6 @@ import { SessionEmptyState, TaskListPage, TaskWorkbench } from "./features/task-
 import {
   AutomationsPage,
   BoardPage,
-  FolderSettingsPage,
   SourcesPage,
 } from "./features/workspace-pages.js";
 import { translator } from "./i18n.js";
@@ -91,12 +91,25 @@ export function App() {
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.piWork.settings.get() });
   const buildInfo = useQuery({ queryKey: ["system-info"], queryFn: () => window.piWork.system.info() });
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: () => window.piWork.workspace.list() });
-  const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => window.piWork.session.list() });
+  const sessions = useQuery({
+    queryKey: ["sessions"],
+    queryFn: () => window.piWork.session.list(),
+    refetchInterval: (query) => (
+      (query.state.data as Session[] | undefined)?.some(({ running }) => running) ? 1_000 : false
+    ),
+  });
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => window.piWork.provider.list() });
   const models = useQuery({ queryKey: ["models"], queryFn: () => window.piWork.model.list() });
   const toolApprovals = useQuery({ queryKey: ["tool-approvals"], queryFn: () => window.piWork.chat.toolApprovals() });
   const language = settings.data?.language ?? "en";
   const t = useMemo(() => translator(language), [language]);
+
+  useEffect(() => window.piWork.session.onChanged((session) => {
+    queryClient.setQueryData<Session[] | undefined>(
+      ["sessions"],
+      (current) => mergeSessionSnapshot(current, session),
+    );
+  }), [queryClient]);
 
   const workspaceById = useMemo(
     () => new Map((workspaces.data ?? []).map((workspace) => [workspace.id, workspace])),
@@ -139,11 +152,6 @@ export function App() {
   const boardSnapshot = useQuery({
     queryKey: ["board-snapshot", workflowWorkspaceId, selectedBoardId],
     queryFn: () => window.piWork.board.snapshot({ workspaceId: workflowWorkspaceId, boardId: selectedBoardId }),
-    enabled: workflowWorkspaceId !== null,
-  });
-  const projects = useQuery({
-    queryKey: ["projects", workflowWorkspaceId],
-    queryFn: () => window.piWork.project.list(workflowWorkspaceId!),
     enabled: workflowWorkspaceId !== null,
   });
   useEffect(() => setSelectedBoardId(undefined), [workflowWorkspaceId]);
@@ -221,7 +229,7 @@ export function App() {
       }
       if (!ui.settingsOpen && command && event.key.toLocaleLowerCase() === "i" && selectedSession !== null) {
         event.preventDefault();
-        ui.toggleInspector();
+        ui.toggleContextPanel("task");
       }
       if (event.key === "Escape") {
         if (ui.commandOpen) {
@@ -281,7 +289,6 @@ export function App() {
       queryClient.invalidateQueries({ queryKey: ["labels"] }),
       queryClient.invalidateQueries({ queryKey: ["board-snapshot"] }),
       queryClient.invalidateQueries({ queryKey: ["boards"] }),
-      queryClient.invalidateQueries({ queryKey: ["projects"] }),
       queryClient.invalidateQueries({ queryKey: ["workspace-directories"] }),
       queryClient.invalidateQueries({ queryKey: ["artifacts"] }),
     ]);
@@ -346,7 +353,7 @@ export function App() {
   function showView(view: AppView) {
     ui.selectTask(null);
     if (
-      (view === "board" || view === "sources" || view === "automations" || view === "folder-settings")
+      (view === "board" || view === "sources" || view === "automations")
       && scopeWorkspace?.kind !== "folder"
     ) {
       return;
@@ -396,13 +403,36 @@ export function App() {
     },
     onError: (cause: Error) => setAppError(cause.message),
   });
+  const createFolderTask = useMutation({
+    mutationFn: () => {
+      const workspace = scopeWorkspace?.kind === "folder" ? scopeWorkspace : null;
+      if (workspace === null) throw new Error(t("chooseFolder"));
+      const model = resolveDefaultModel(
+        providers.data ?? [],
+        models.data,
+        settings.data,
+      );
+      if (model === undefined) throw new Error(t("configureModel"));
+      return window.piWork.task.create(createNewFolderTaskInput(
+        workspace,
+        model,
+        resolveDefaultThinkingLevel(model, settings.data),
+      ));
+    },
+    onSuccess: async (session) => {
+      await refresh();
+      ui.setWorkspaceScope(session.workspaceId);
+      ui.openTask(session.id);
+    },
+    onError: (cause: Error) => setAppError(cause.message),
+  });
 
   function createNewItem() {
     if (ui.workspaceScope === "personal") {
       if (!createPersonalSession.isPending) createPersonalSession.mutate();
       return;
     }
-    ui.setNewTaskOpen(true);
+    if (!createFolderTask.isPending) createFolderTask.mutate();
   }
 
   useGSAP(() => {
@@ -553,6 +583,7 @@ export function App() {
           workspaces={workspaces.data ?? []}
           {...(ui.view === "inbox" && selectedSession !== null ? { sessionTitle: selectedSession.title } : {})}
           t={t}
+          onWorkspaceScope={ui.setWorkspaceScope}
           onToggleSidebar={toggleSidebar}
           consoleOpen={consoleOpen}
           onToggleConsole={toggleConsole}
@@ -561,10 +592,6 @@ export function App() {
           view={ui.view}
           buildInfo={buildInfo.data}
           sessions={scopedSessions}
-          personalSessions={(sessions.data ?? []).filter((session) => (
-            session.kind === "chat" && workspaceById.get(session.workspaceId)?.kind === "managed"
-          ))}
-          workspaces={workspaces.data ?? []}
           workspaceScope={ui.workspaceScope}
           selectedTaskId={ui.selectedTaskId}
           attentionIds={attentionIds}
@@ -578,7 +605,6 @@ export function App() {
             ui.setSidebarDrawerOpen(false);
           }}
           onView={showView}
-          onWorkspaceScope={ui.setWorkspaceScope}
           onOpenSettings={() => ui.openSettings()}
           onOpenTask={openSession}
           onCloseDrawer={() => ui.setSidebarDrawerOpen(false)}
@@ -603,12 +629,12 @@ export function App() {
             statuses={workflowWorkspaceId === null ? [] : (statuses.data ?? [])}
             labels={workflowWorkspaceId === null ? [] : (labels.data ?? [])}
             approvals={(toolApprovals.data ?? []).filter(({ sessionId }) => sessionId === selectedSession.id)}
-            inspectorOpen={ui.inspectorOpen}
-            inspectorTab={ui.inspectorTab}
+            taskMode={ui.taskMode}
+            contextPanel={ui.contextPanel}
             t={t}
-            onInspectorOpen={ui.showInspector}
-            onInspectorToggle={ui.toggleInspector}
-            onInspectorTab={ui.setInspectorTab}
+            onTaskMode={ui.setTaskMode}
+            onContextOpen={ui.openContextPanel}
+            onContextClose={ui.closeContextPanel}
             onRefresh={refresh}
             onDelete={() => removeSession.mutate(selectedSession.id)}
             folders={folderWorkspaces}
@@ -637,27 +663,28 @@ export function App() {
             sessions={pageSessions}
             workspaces={workspaces.data ?? []}
             t={t}
+            onNewTask={createNewItem}
             onOpenTask={openSession}
           />
         ) : null}
         {ui.view === "board" && boardWorkspace !== null ? (
-            <BoardPage
-              sessions={sessions.data ?? []}
-              snapshot={boardSnapshot.data}
-              boards={boards.data ?? []}
-              statuses={statuses.data ?? []}
-              labels={labels.data ?? []}
-              workspace={boardWorkspace}
-              t={t}
-              onOpenTask={openSession}
-              onSelectBoard={setSelectedBoardId}
-              onRefresh={refresh}
-            />
+          <BoardPage
+            sessions={sessions.data ?? []}
+            snapshot={boardSnapshot.data}
+            boards={boards.data ?? []}
+            statuses={statuses.data ?? []}
+            labels={labels.data ?? []}
+            workspace={boardWorkspace}
+            t={t}
+            onNewTask={createNewItem}
+            onOpenTask={openSession}
+            onSelectBoard={setSelectedBoardId}
+            onRefresh={refresh}
+          />
         ) : null}
         {ui.view === "sources" && resourceWorkspaceId !== null ? <SourcesPage workspaceId={resourceWorkspaceId} t={t} /> : null}
         {ui.view === "automations" && resourceWorkspaceId !== null ? <AutomationsPage workspaceId={resourceWorkspaceId} t={t} /> : null}
-          {ui.view === "folder-settings" && boardWorkspace !== null ? <FolderSettingsPage workspace={boardWorkspace} t={t} /> : null}
-        </main>
+      </main>
         {!ui.settingsOpen ? consolePanel : null}
       </div>
       {ui.settingsOpen ? (
@@ -703,25 +730,6 @@ export function App() {
         onOpenContext={openContext}
         onOpenSettings={ui.openSettings}
       />
-      {!ui.settingsOpen && ui.workspaceScope !== "personal" ? (
-        <NewTaskDialog
-          open={ui.newTaskOpen}
-          scope={ui.workspaceScope}
-          workspaces={workspaces.data ?? []}
-          providers={providers.data ?? []}
-          models={models.data}
-          projects={projects.data ?? []}
-          settings={appSettings}
-          t={t}
-          onOpenChange={ui.setNewTaskOpen}
-          onCreated={(session) => {
-            void refresh().then(() => {
-              ui.setWorkspaceScope(session.workspaceId);
-              ui.openTask(session.id);
-            });
-          }}
-        />
-      ) : null}
       {!ui.settingsOpen ? (
         <OnboardingDialog
           open={onboardingOpen}

@@ -10,7 +10,7 @@ export function Field({ className, ...props }: ComponentProps<"div">) {
 }
 
 export function FieldLabel({ className, ...props }: ComponentProps<"label">) {
-  return <label className={cn("text-xs font-medium", className)} {...props} />;
+  return <label data-slot="field-label" className={cn("text-xs font-medium", className)} {...props} />;
 }
 
 export function FieldDescription({ className, ...props }: ComponentProps<"p">) {
