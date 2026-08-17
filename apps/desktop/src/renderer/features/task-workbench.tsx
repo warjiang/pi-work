@@ -4272,7 +4272,7 @@ function PlanApprovalDock(props: {
     <div className="composer-dock plan-approval-dock">
       <section className="plan-approval-dock-panel" aria-labelledby={titleId} aria-busy={props.busy}>
         <header className="plan-approval-dock-header">
-          <span className="plan-approval-dock-icon" aria-hidden="true"><Icon name="plan" size={16} /></span>
+          <span className="plan-approval-dock-icon" aria-hidden="true"><Icon name="plan" size={14} /></span>
           <span>
             <strong id={titleId}>{props.t("implementPlanQuestion")}</strong>
             <small>{props.t("planApprovalNeeded")}</small>

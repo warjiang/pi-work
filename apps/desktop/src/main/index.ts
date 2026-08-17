@@ -2770,6 +2770,13 @@ function registerIpc(): void {
       return taskSchema.parse(getStore().getTask(task.id));
     }
 
+    if (parsed.editMessageId !== undefined && task !== null && task.running) {
+      const cancelResponse = await sendAgentRequest({ type: "cancel", sessionId: task.id });
+      if (cancelResponse.type === "error") throw new Error(cancelResponse.message);
+      clearPendingToolApprovals(task.id);
+      task = getStore().updateSession(task.id, { running: false });
+    }
+
     task ??= getStore().createTask({
       ...(managedSessionId === null ? {} : { id: managedSessionId }),
       workspaceId: workspace.id,
