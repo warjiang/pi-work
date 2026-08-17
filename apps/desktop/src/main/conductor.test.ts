@@ -15,6 +15,7 @@ function fixture(options: {
   maxParallel?: number;
   maxAttempts?: number;
   dependent?: boolean;
+  executionClasses?: ["read" | "write", "read" | "write"];
 } = {}) {
   const store = new PiWorkStore();
   stores.push(store);
@@ -41,6 +42,7 @@ function fixture(options: {
           title: "First",
           prompt: "First",
           dependsOn: [],
+          executionClass: options.executionClasses?.[0],
           maxAttempts: options.maxAttempts ?? 1,
         },
         {
@@ -48,6 +50,7 @@ function fixture(options: {
           title: "Second",
           prompt: "Second",
           dependsOn: options.dependent === false ? [] : [firstId],
+          executionClass: options.executionClasses?.[1],
           maxAttempts: 1,
         },
       ],
@@ -83,6 +86,13 @@ describe("DurableConductor", () => {
     expect(calls).toEqual([firstId, firstId, secondId]);
     expect(store.listConductorNodeStates(workspace.id, run.id).map(({ status }) => status))
       .toEqual(["completed", "completed"]);
+    const firstNodeAttempts = store.listConductorNodeAttempts(workspace.id, run.id)
+      .filter(({ nodeId }) => nodeId === firstId);
+    expect(firstNodeAttempts.map(({ status, output, error }) => ({ status, output, error }))).toEqual([
+      { status: "failed", output: null, error: "temporary" },
+      { status: "completed", output: "first-result", error: null },
+    ]);
+    expect(firstNodeAttempts.every(({ executionId }) => /^[0-9a-f-]{36}$/.test(executionId))).toBe(true);
   });
 
   it("does not launch new nodes while paused and resumes them later", async () => {
@@ -111,6 +121,85 @@ describe("DurableConductor", () => {
     conductor.resume(workspace.id, run.id);
     await waitUntil(() => store.getConductorRun(workspace.id, run.id)?.status === "completed");
     expect(calls).toEqual([firstId, secondId]);
+  });
+
+  it("runs independent read nodes in parallel", async () => {
+    const { store, workspace, run } = fixture({
+      maxParallel: 2,
+      dependent: false,
+      executionClasses: ["read", "read"],
+    });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const conductor = new DurableConductor(store, async (_run, node) => {
+      calls.push(node.id);
+      await pending;
+      return node.title;
+    });
+    conductors.push(conductor);
+
+    conductor.start(workspace.id, run.id);
+    await waitUntil(() => calls.length === 2);
+    expect(store.listConductorNodeStates(workspace.id, run.id)
+      .filter(({ status }) => status === "running")).toHaveLength(2);
+
+    release();
+    await waitUntil(() => store.getConductorRun(workspace.id, run.id)?.status === "completed");
+  });
+
+  it("runs write nodes exclusively", async () => {
+    const { store, workspace, run, firstId, secondId } = fixture({
+      maxParallel: 2,
+      dependent: false,
+      executionClasses: ["read", "write"],
+    });
+    let releaseWrite!: () => void;
+    const writePending = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const active = new Set<string>();
+    const overlaps: string[][] = [];
+    const calls: string[] = [];
+    const conductor = new DurableConductor(store, async (_run, node) => {
+      calls.push(node.id);
+      active.add(node.id);
+      if (active.size > 1) overlaps.push([...active]);
+      if (node.id === secondId) await writePending;
+      active.delete(node.id);
+      return node.title;
+    });
+    conductors.push(conductor);
+
+    conductor.start(workspace.id, run.id);
+    await waitUntil(() => calls.includes(secondId));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(calls).toEqual([secondId]);
+
+    releaseWrite();
+    await waitUntil(() => calls.includes(firstId));
+    await waitUntil(() => store.getConductorRun(workspace.id, run.id)?.status === "completed");
+    expect(overlaps).toEqual([]);
+  });
+
+  it("does not start pending runs during recovery", async () => {
+    const { store, workspace, run } = fixture({
+      executionClasses: ["read", "read"],
+    });
+    const calls: string[] = [];
+    const conductor = new DurableConductor(store, async (_run, node) => {
+      calls.push(node.id);
+      return node.title;
+    });
+    conductors.push(conductor);
+
+    conductor.recover();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(calls).toEqual([]);
+    expect(store.getConductorRun(workspace.id, run.id)?.status).toBe("pending");
   });
 
   it("recovers interrupted nodes and honours cancellation of active work", async () => {

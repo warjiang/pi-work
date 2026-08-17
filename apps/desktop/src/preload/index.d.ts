@@ -16,7 +16,9 @@ import type {
   McpCallToolResult,
   McpInspectResult,
   ObservabilitySettings,
-  Plan,
+  PlanExecutionDetail,
+  PlanRevisionDiff,
+  PlanRevision,
   Session,
   Skill,
   Source,
@@ -26,12 +28,12 @@ import type {
   Conversation,
   Workspace,
   WorkspaceDirectory,
-  Project,
   Board,
   BoardColumn,
   BoardSnapshot,
   ConductorRun,
   ConductorNodeState,
+  ConductorNodeAttemptDetail,
 } from "@pi-work/protocol";
 
 declare global {
@@ -43,19 +45,13 @@ declare global {
         get(workspaceId: string): Promise<Workspace | null>;
         update(input: unknown): Promise<Workspace>;
         directories(workspaceId: string): Promise<WorkspaceDirectory[]>;
+        chooseDirectory(workspaceId: string): Promise<string | null>;
         addDirectory(workspaceId: string): Promise<Workspace | null>;
         removeDirectory(input: unknown): Promise<Workspace>;
-      };
-      project: {
-        list(workspaceId: string): Promise<Project[]>;
-        create(input: unknown): Promise<Project>;
-        update(input: unknown): Promise<Project>;
-        remove(input: unknown): Promise<void>;
       };
       board: {
         list(workspaceId: string): Promise<Board[]>;
         snapshot(input: unknown): Promise<BoardSnapshot>;
-        create(input: unknown): Promise<Board>;
         createColumn(input: unknown): Promise<BoardColumn>;
         updateColumn(input: unknown): Promise<BoardColumn>;
         removeColumn(input: unknown): Promise<void>;
@@ -66,10 +62,12 @@ declare global {
         get(input: unknown): Promise<ConductorRun | null>;
         create(input: unknown): Promise<ConductorRun>;
         nodes(input: unknown): Promise<ConductorNodeState[]>;
+        attempts(input: unknown): Promise<ConductorNodeAttemptDetail[]>;
         start(input: unknown): Promise<ConductorRun>;
         pause(input: unknown): Promise<ConductorRun>;
         resume(input: unknown): Promise<ConductorRun>;
         stop(input: unknown): Promise<ConductorRun>;
+        retry(input: unknown): Promise<ConductorRun>;
       };
       provider: {
         list(): Promise<import("@pi-work/protocol").ProviderConfig[]>;
@@ -143,6 +141,7 @@ declare global {
         attachments(sessionId: string): Promise<Attachment[]>;
         stop(sessionId: string): Promise<void>;
         promote(input: unknown): Promise<Session>;
+        onChanged(listener: (session: Session) => void): () => void;
       };
       agent: {
         onEvent(listener: (event: Extract<AgentMessage, { type: "event" }>) => void): () => void;
@@ -158,10 +157,17 @@ declare global {
       task: {
         list(workspaceId: string): Promise<Task[]>;
         create(input: unknown): Promise<Task>;
-        getPlan(taskId: string): Promise<Plan | null>;
-        generatePlan(input: unknown): Promise<Plan>;
+        getPlan(taskId: string): Promise<PlanRevision | null>;
+        listPlanRevisions(taskId: string): Promise<PlanRevision[]>;
+        listPlanExecutions(taskId: string): Promise<PlanExecutionDetail[]>;
+        savePlanRevision(input: unknown): Promise<PlanRevision>;
+        getPlanRevisionDiff(input: unknown): Promise<PlanRevisionDiff>;
+        requestPlan(input: unknown): Promise<unknown>;
+        generatePlan(input: unknown): Promise<unknown>;
         updateBrief(input: unknown): Promise<Task>;
         approvePlan(input: unknown): Promise<Task>;
+        executeApprovedPlan(input: unknown): Promise<Task>;
+        retryApprovedPlan(input: unknown): Promise<Task>;
         abort(input: unknown): Promise<Task>;
         complete(input: unknown): Promise<Task>;
         resume(input: unknown): Promise<Task>;

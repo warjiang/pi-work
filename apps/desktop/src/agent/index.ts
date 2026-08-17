@@ -1,9 +1,20 @@
 import { PiAdapter } from "@pi-work/pi-adapter";
-import { agentRequestSchema, agentResponseSchema } from "@pi-work/protocol";
+import {
+  agentRequestSchema,
+  agentResponseSchema,
+  type WorkflowContext,
+  type WorkflowDraft,
+  type WorkflowSubmissionResult,
+} from "@pi-work/protocol";
 import { randomUUID } from "node:crypto";
 
 const adapter = new PiAdapter();
 const pendingApprovals = new Map<string, { sessionId: string; resolve: (approved: boolean) => void }>();
+const pendingWorkflows = new Map<string, {
+  sessionId: string;
+  resolve: (result: WorkflowSubmissionResult) => void;
+  reject: (error: Error) => void;
+}>();
 const activeRuns = new Map<string, {
   requestId: string;
   nextSequence(): number;
@@ -48,6 +59,26 @@ function requestApproval(
   return new Promise((resolve) => pendingApprovals.set(approvalId, { sessionId, resolve }));
 }
 
+function submitWorkflow(
+  requestId: string,
+  sessionId: string,
+  context: WorkflowContext,
+  draft: WorkflowDraft,
+): Promise<WorkflowSubmissionResult> {
+  const workflowRequestId = randomUUID();
+  process.parentPort?.postMessage(agentResponseSchema.parse({
+    type: "workflow.submit",
+    requestId,
+    workflowRequestId,
+    sessionId,
+    context,
+    draft,
+  }));
+  return new Promise((resolve, reject) => {
+    pendingWorkflows.set(workflowRequestId, { sessionId, resolve, reject });
+  });
+}
+
 process.parentPort?.on("message", async (event) => {
   const request = agentRequestSchema.safeParse(event.data);
   if (!request.success) {
@@ -71,6 +102,15 @@ process.parentPort?.on("message", async (event) => {
   try {
     const { requestId } = request.data;
     switch (request.data.type) {
+      case "workflow.resolve": {
+        const pending = pendingWorkflows.get(request.data.workflowRequestId);
+        if (pending !== undefined) {
+          pendingWorkflows.delete(request.data.workflowRequestId);
+          if (request.data.error !== undefined) pending.reject(new Error(request.data.error));
+          else pending.resolve(request.data.result!);
+        }
+        break;
+      }
       case "tool.resolve":
         pendingApprovals.get(request.data.approvalId)?.resolve(request.data.approved);
         pendingApprovals.delete(request.data.approvalId);
@@ -83,6 +123,12 @@ process.parentPort?.on("message", async (event) => {
             if (approval.sessionId === request.data.sessionId) {
               approval.resolve(false);
               pendingApprovals.delete(approvalId);
+            }
+          }
+          for (const [workflowRequestId, workflow] of pendingWorkflows) {
+            if (workflow.sessionId === request.data.sessionId) {
+              workflow.reject(new Error("Workflow submission was cancelled."));
+              pendingWorkflows.delete(workflowRequestId);
             }
           }
           await adapter.cancel(request.data.sessionId);
@@ -108,14 +154,35 @@ process.parentPort?.on("message", async (event) => {
         break;
       }
       case "plan": {
-        const plan = await adapter.createPlan(
-          request.data.task,
-          request.data.provider ?? null,
-          request.data.modelId,
-          request.data.thinkingLevel,
-          request.data.runtime,
-        );
-        process.parentPort?.postMessage(agentResponseSchema.parse({ type: "plan", requestId, plan }));
+        let sequence = 0;
+        const taskId = request.data.task.id;
+        const run = {
+          requestId,
+          nextSequence: () => sequence++,
+          cancelled: false,
+          cancellationEmitted: false,
+        };
+        activeRuns.set(taskId, run);
+        let result: Awaited<ReturnType<PiAdapter["createPlan"]>>;
+        try {
+          result = await adapter.createPlan(
+            request.data.task,
+            request.data.conversation,
+            request.data.previousPlan,
+            request.data.feedbackMessageId,
+            request.data.provider ?? null,
+            request.data.modelId,
+            request.data.thinkingLevel,
+            request.data.runtime,
+            (kind, payload) => {
+              streamEvent(requestId, taskId, run.nextSequence(), kind, { ...payload, planning: true });
+            },
+          );
+        } finally {
+          activeRuns.delete(taskId);
+        }
+        process.parentPort?.postMessage(agentResponseSchema.parse({ type: "plan", requestId, result }));
+        streamEvent(requestId, taskId, run.nextSequence(), "completed", { planning: true });
         break;
       }
       case "title": {
@@ -132,6 +199,7 @@ process.parentPort?.on("message", async (event) => {
       }
       case "chat": {
         const sessionId = request.data.sessionId;
+        const planExecution = request.data.planExecution;
         let sequence = 0;
         const run = {
           requestId,
@@ -154,6 +222,19 @@ process.parentPort?.on("message", async (event) => {
             request.data.permissionMode,
             (kind, payload) => streamEvent(requestId, sessionId, run.nextSequence(), kind, payload),
             request.data.mcpServers,
+            request.data.workflowContext,
+            request.data.workflowContext === null
+              ? undefined
+              : (draft, context) => submitWorkflow(requestId, sessionId, context, draft),
+            planExecution,
+            planExecution === null
+              ? undefined
+              : (input) => streamEvent(requestId, sessionId, run.nextSequence(), "runtime", {
+                state: "plan_step_update",
+                executionId: planExecution.executionId,
+                planRevisionId: planExecution.planRevisionId,
+                input,
+              }),
           );
         } finally {
           activeRuns.delete(sessionId);
