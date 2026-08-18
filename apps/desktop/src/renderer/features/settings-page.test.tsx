@@ -34,6 +34,7 @@ const workspace: Workspace = {
   directories: ["/tmp/demo"],
   outputPath: "/tmp/demo/output",
   kind: "folder",
+  version: 0,
   createdAt: "2026-08-13T00:00:00.000Z",
 };
 const models: ModelCatalog = {

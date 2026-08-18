@@ -4,7 +4,32 @@ const piWork = {
   workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),
     list: () => ipcRenderer.invoke("workspace:list"),
+    get: (workspaceId: string) => ipcRenderer.invoke("workspace:get", workspaceId),
+    update: (input: unknown) => ipcRenderer.invoke("workspace:update", input),
+    directories: (workspaceId: string) => ipcRenderer.invoke("workspace:directories", workspaceId),
+    chooseDirectory: (workspaceId: string) => ipcRenderer.invoke("workspace:choose-directory", { workspaceId }),
     addDirectory: (workspaceId: string) => ipcRenderer.invoke("workspace:add-directory", { workspaceId }),
+    removeDirectory: (input: unknown) => ipcRenderer.invoke("workspace:remove-directory", input),
+  },
+  board: {
+    list: (workspaceId: string) => ipcRenderer.invoke("board:list", workspaceId),
+    snapshot: (input: unknown) => ipcRenderer.invoke("board:snapshot", input),
+    createColumn: (input: unknown) => ipcRenderer.invoke("board:column-create", input),
+    updateColumn: (input: unknown) => ipcRenderer.invoke("board:column-update", input),
+    removeColumn: (input: unknown) => ipcRenderer.invoke("board:column-remove", input),
+    moveCard: (input: unknown) => ipcRenderer.invoke("board:move-card", input),
+  },
+  conductor: {
+    list: (input: unknown) => ipcRenderer.invoke("conductor:list", input),
+    get: (input: unknown) => ipcRenderer.invoke("conductor:get", input),
+    create: (input: unknown) => ipcRenderer.invoke("conductor:create", input),
+    nodes: (input: unknown) => ipcRenderer.invoke("conductor:nodes", input),
+    attempts: (input: unknown) => ipcRenderer.invoke("conductor:attempts", input),
+    start: (input: unknown) => ipcRenderer.invoke("conductor:start", input),
+    pause: (input: unknown) => ipcRenderer.invoke("conductor:pause", input),
+    resume: (input: unknown) => ipcRenderer.invoke("conductor:resume", input),
+    stop: (input: unknown) => ipcRenderer.invoke("conductor:stop", input),
+    retry: (input: unknown) => ipcRenderer.invoke("conductor:retry", input),
   },
   provider: {
     list: () => ipcRenderer.invoke("provider:list"),
@@ -76,6 +101,11 @@ const piWork = {
     attachments: (sessionId: string) => ipcRenderer.invoke("session:attachments", sessionId),
     stop: (sessionId: string) => ipcRenderer.invoke("session:stop", sessionId),
     promote: (input: unknown) => ipcRenderer.invoke("session:promote", input),
+    onChanged: (listener: (session: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, session: unknown) => listener(session);
+      ipcRenderer.on("session:changed", handler);
+      return () => ipcRenderer.removeListener("session:changed", handler);
+    },
   },
   agent: {
     onEvent: (listener: (event: unknown) => void) => {
@@ -96,9 +126,16 @@ const piWork = {
     list: (workspaceId: string) => ipcRenderer.invoke("task:list", workspaceId),
     create: (input: unknown) => ipcRenderer.invoke("task:create", input),
     getPlan: (taskId: string) => ipcRenderer.invoke("task:plan", taskId),
+    listPlanRevisions: (taskId: string) => ipcRenderer.invoke("task:plan-revisions", taskId),
+    listPlanExecutions: (taskId: string) => ipcRenderer.invoke("task:plan-executions", taskId),
+    savePlanRevision: (input: unknown) => ipcRenderer.invoke("task:save-plan-revision", input),
+    getPlanRevisionDiff: (input: unknown) => ipcRenderer.invoke("task:plan-revision-diff", input),
+    requestPlan: (input: unknown) => ipcRenderer.invoke("task:request-plan", input),
     generatePlan: (input: unknown) => ipcRenderer.invoke("task:generate-plan", input),
     updateBrief: (input: unknown) => ipcRenderer.invoke("task:update-brief", input),
     approvePlan: (input: unknown) => ipcRenderer.invoke("task:approve-plan", input),
+    executeApprovedPlan: (input: unknown) => ipcRenderer.invoke("task:execute-approved-plan", input),
+    retryApprovedPlan: (input: unknown) => ipcRenderer.invoke("task:retry-approved-plan", input),
     abort: (input: unknown) => ipcRenderer.invoke("task:abort", input),
     complete: (input: unknown) => ipcRenderer.invoke("task:complete", input),
     resume: (input: unknown) => ipcRenderer.invoke("task:resume", input),
@@ -173,6 +210,6 @@ function domainApi(name: "status" | "label" | "source" | "skill" | "automation")
     list: (workspaceId: string) => ipcRenderer.invoke(`${name}:list`, workspaceId),
     create: (input: unknown) => ipcRenderer.invoke(`${name}:create`, input),
     update: (input: unknown) => ipcRenderer.invoke(`${name}:update`, input),
-    remove: (id: string) => ipcRenderer.invoke(`${name}:remove`, { id }),
+    remove: (id: string, workspaceId?: string) => ipcRenderer.invoke(`${name}:remove`, { id, workspaceId }),
   };
 }

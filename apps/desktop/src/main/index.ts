@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, screen, shell, utilityProcess, WebContentsView } from "electron";
 import type { OpenDialogOptions, Rectangle, UtilityProcess } from "electron";
@@ -13,7 +13,12 @@ import type {
   ExtensionPackage,
   ModelCatalog,
   ModelTestResult,
-  Plan,
+  PlanExecutionContext,
+  PlanExecutionDetail,
+  PlanExecutionMode,
+  PlanClarificationOption,
+  PlanRevision,
+  PlanningResult,
   SetProviderCredentialInput,
   StatusDefinition,
   Label,
@@ -23,6 +28,13 @@ import type {
   Automation,
   PermissionMode,
   McpRuntimeServer,
+  BoardSnapshot,
+  ConductorNode,
+  ConductorRun,
+  ConductorSpec,
+  WorkflowContext,
+  WorkflowDraft,
+  WorkflowSubmissionResult,
 } from "@pi-work/protocol";
 import {
   agentResponseSchema,
@@ -37,16 +49,26 @@ import {
   createTaskInputSchema,
   createWorkspaceInputSchema,
   addWorkspaceDirectoryInputSchema,
+  removeWorkspaceDirectoryInputSchema,
+  updateWorkspaceInputSchema,
+  createBoardColumnInputSchema,
+  updateBoardColumnInputSchema,
+  removeBoardColumnInputSchema,
+  moveBoardCardInputSchema,
+  createConductorRunInputSchema,
+  conductorRunCommandInputSchema,
+  retryConductorRunInputSchema,
   automationSchema,
   browserBoundsInputSchema,
   browserNavigateInputSchema,
   buildInfoSchema,
   cancelRemoteSkillPreviewInputSchema,
   createDomainEntityInputSchema,
-  generatePlanInputSchema,
+  requestPlanInputSchema,
   completeTaskInputSchema,
   createSkillInputSchema,
   externalUrlInputSchema,
+  executeApprovedPlanInputSchema,
   executeManagedCliInputSchema,
   extensionSourceSchema,
   inspectAttachmentPathsSchema,
@@ -63,7 +85,11 @@ import {
   mcpInspectInputSchema,
   mcpInspectResultSchema,
   mcpStdioConfigSchema,
-  planSchema,
+  planRevisionSchema,
+  planRevisionDiffInputSchema,
+  planRevisionDiffSchema,
+  planRevisionEditInputSchema,
+  planStepUpdateInputSchema,
   promoteSessionInputSchema,
   publishArtifactInputSchema,
   observabilitySettingsSchema,
@@ -85,6 +111,7 @@ import {
   removeDomainEntityInputSchema,
   removeManagedCliInputSchema,
   resolveToolApprovalInputSchema,
+  retryApprovedPlanInputSchema,
   sessionSearchInputSchema,
   sessionEnvironmentInputSchema,
   setSessionEnvironmentInputSchema,
@@ -112,6 +139,8 @@ import {
 import { loadWindowBounds, saveWindowBounds } from "./window-state.js";
 import { SecretsBroker, maskSecret } from "./secrets-broker.js";
 import { LangfuseExporter, type LangfuseConfig, type RunContext } from "./observability.js";
+import { DurableConductor } from "./conductor.js";
+import { fallbackSessionTitle, isUntitledSessionTitle, shouldGenerateFirstMessageTitle } from "./session-title.js";
 
 let mainWindow: BrowserWindow | null = null;
 let windowStateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +154,7 @@ let managedCliRuntime: ManagedCliRuntime | null = null;
 let browserView: WebContentsView | null = null;
 let skillManager: SkillManager | null = null;
 let mcpOAuthManager: McpOAuthManager | null = null;
+let durableConductor: DurableConductor | null = null;
 const sessionEnvironments = new SessionEnvironmentStore();
 const pendingAgentRequests = new Map<string, {
   resolve: (response: AgentResponse) => void;
@@ -132,6 +162,8 @@ const pendingAgentRequests = new Map<string, {
   timer: ReturnType<typeof setTimeout>;
 }>();
 const activeAgentSessions = new Set<string>();
+const activeApprovedPlanExecutions = new Map<string, string>();
+const approvedPlanAgentSessions = new Map<string, { taskId: string; executionId: string }>();
 const approvedAttachmentPaths = new Set<string>();
 const clipboardImageExtensions: Record<string, string> = {
   "image/png": ".png",
@@ -157,6 +189,17 @@ const runActivities = new Map<string, {
   tools: Map<string, Record<string, unknown>>;
   activities: RunActivity[];
 }>();
+
+function notifySessionChanged(sessionId: string): void {
+  try {
+    const session = getStore().getSession(sessionId);
+    if (session !== null && mainWindow !== null && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("session:changed", taskSchema.parse(session));
+    }
+  } catch {
+    // A completion notification must not change the result of the completed run.
+  }
+}
 
 function collectorFor(requestId: string) {
   let collector = runActivities.get(requestId);
@@ -734,17 +777,72 @@ function getAgentProcess(): UtilityProcess {
       return;
     }
     const response: AgentMessage = parsed.data;
+    if (response.type === "workflow.submit") {
+      void handleWorkflowSubmission(response).then((result) => {
+        getAgentProcess().postMessage({
+          type: "workflow.resolve",
+          requestId: randomUUID(),
+          workflowRequestId: response.workflowRequestId,
+          result,
+        });
+      }).catch((cause: unknown) => {
+        getAgentProcess().postMessage({
+          type: "workflow.resolve",
+          requestId: randomUUID(),
+          workflowRequestId: response.workflowRequestId,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+      return;
+    }
     if (response.type === "tool.approval") {
       pendingToolApprovals.set(response.approvalId, response);
+      const workflowRun = getStore().getConductorRunByExecutionId(response.sessionId);
+      const approvedExecution = approvedPlanAgentSessions.get(response.sessionId);
+      const taskId = workflowRun?.taskId
+        ?? approvedExecution?.taskId
+        ?? (activeApprovedPlanExecutions.has(response.sessionId) ? response.sessionId : null);
+      if (taskId !== null) {
+        try {
+          getStore().markAwaitingActionApproval(taskId);
+        } catch {
+          // The task may have been removed while the approval was emitted.
+        }
+      }
       mainWindow?.webContents.send("chat:tool-approval", response);
       return;
     }
     if (response.type === "event") {
+      if (response.event.kind === "runtime" && response.event.payload.state === "plan_step_update") {
+        try {
+          const executionId = String(response.event.payload.executionId ?? "");
+          const input = planStepUpdateInputSchema.parse(response.event.payload.input);
+          getStore().updatePlanExecutionStep(executionId, input);
+          const execution = getStore().getPlanExecutionDetail(executionId);
+          if (execution !== null) notifySessionChanged(execution.execution.taskId);
+        } catch (error) {
+          collectorFor(response.requestId).activities.push({
+            kind: "error",
+            title: "Plan progress rejected",
+            detail: error instanceof Error ? error.message : String(error),
+            metadata: { requestId: response.requestId },
+          });
+        }
+      }
       if (response.event.kind === "completed" || response.event.kind === "cancelled") {
         clearPendingToolApprovals(response.sessionId);
       }
-      collectRunEvent(response);
-      recordUsageEvent(response);
+      const conductorEvent = getStore().appendConductorNodeEvent({
+        executionId: response.sessionId,
+        sequence: response.event.sequence,
+        kind: response.event.kind,
+        payload: response.event.payload,
+        createdAt: response.event.timestamp,
+      });
+      if (!conductorEvent) {
+        collectRunEvent(response);
+        recordUsageEvent(response);
+      }
       try {
         getObservabilityExporter().handleEvent(response);
       } catch {
@@ -769,12 +867,25 @@ function getAgentProcess(): UtilityProcess {
     pendingAgentRequests.clear();
     for (const sessionId of activeAgentSessions) {
       try {
-        getStore().updateSession(sessionId, { running: false });
+        const approvedExecution = approvedPlanAgentSessions.get(sessionId);
+        if (approvedExecution !== undefined) {
+          getStore().failPlanExecutionRecord(
+            approvedExecution.executionId,
+            "The agent service exited before the approved plan completed.",
+          );
+          approvedPlanAgentSessions.delete(sessionId);
+          activeApprovedPlanExecutions.delete(approvedExecution.taskId);
+          notifySessionChanged(approvedExecution.taskId);
+        } else {
+          getStore().updateSession(sessionId, { running: false });
+          notifySessionChanged(sessionId);
+        }
       } catch {
         // The session may have been deleted while the utility process exited.
       }
     }
     activeAgentSessions.clear();
+    activeApprovedPlanExecutions.clear();
     pendingToolApprovals.clear();
     agentProcess = null;
   });
@@ -820,31 +931,151 @@ async function sendAgentRequest(
 
 async function generatePlan(
   task: { id: string; title: string; goal: string },
+  conversation: Array<Pick<ChatMessage, "id" | "role" | "content" | "createdAt">>,
+  previousPlan: PlanRevision | null,
+  feedbackMessageId: string | null,
   provider: SetProviderCredentialInput | null,
   modelId: string,
   thinkingLevel: ThinkingLevel,
   runtime: AgentRuntime,
-): Promise<Plan> {
+): Promise<PlanningResult> {
   const response = await sendAgentRequest({
     type: "plan",
     task,
+    conversation,
+    previousPlan,
+    feedbackMessageId,
     provider: provider ?? undefined,
     modelId,
     thinkingLevel,
     runtime,
   }, 15 * 60_000);
   if (response.type === "error") {
-    throw new Error(response.message);
+    throw new AgentRequestError(response.message, response.requestId);
   }
   if (response.type !== "plan") {
-    throw new Error("Pi planning service returned an unexpected response.");
+    throw new AgentRequestError("Pi planning service returned an unexpected response.", response.requestId);
   }
-  return response.plan;
+  flushRunActivities(response.requestId, task.id, null);
+  return response.result;
+}
+
+async function requestPlanForTask(
+  taskId: string,
+  feedbackMessageId: string | null,
+): Promise<
+  | { kind: "clarification"; question: string; options?: PlanClarificationOption[] }
+  | { kind: "proposal"; planRevision: PlanRevision }
+> {
+  const required = requireFolderTask(taskId);
+  const task = required.task.executionMode === "plan"
+    ? required.task
+    : getStore().updateSession(required.task.id, { executionMode: "plan" });
+  const { workspace } = required;
+  if (task.providerId === null || task.modelId === null) {
+    throw new Error("Choose a model before generating a plan.");
+  }
+  const credential = await providerCredential(task.providerId);
+  const previousPlan = getStore().getLatestPlanRevision(task.id);
+  const namingMessage = getStore().listMessages(task.id).find((message) => (
+    message.role === "user"
+    && (feedbackMessageId === null || message.id === feedbackMessageId)
+  )) ?? getStore().listMessages(task.id).find((message) => message.role === "user");
+  const runtime = agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id);
+  getStore().beginPlanning(task.id);
+  activeAgentSessions.add(task.id);
+  try {
+    const result = await generatePlan(
+      task,
+      getStore().listMessages(task.id),
+      previousPlan,
+      feedbackMessageId,
+      credential,
+      task.modelId,
+      task.thinkingLevel,
+      runtime,
+    );
+    if (result.kind === "clarification") {
+      const clarificationMessage = getStore().addMessage({
+        taskId: task.id,
+        role: "assistant",
+        content: result.question,
+      });
+      if (result.options !== undefined) {
+        getStore().addActivity({
+          sessionId: task.id,
+          messageId: clarificationMessage.id,
+          kind: "notice",
+          title: "Plan clarification options",
+          detail: "",
+          metadata: {
+            type: "plan_clarification_options",
+            options: result.options,
+          },
+        });
+      }
+      getStore().finishPlanningClarification(task.id);
+      if (namingMessage !== undefined) {
+        void nameUntitledSession({
+          taskId: task.id,
+          sourceMessageId: namingMessage.id,
+          prompt: namingMessage.content,
+          response: result.question,
+          provider: credential,
+          modelId: task.modelId,
+          thinkingLevel: task.thinkingLevel,
+          runtime,
+        });
+      }
+      return {
+        kind: "clarification",
+        question: result.question,
+        ...(result.options === undefined ? {} : { options: result.options }),
+      };
+    }
+    const planRevision = getStore().savePlanRevision({
+      taskId: task.id,
+      proposal: result.proposal,
+      createdFromMessageId: feedbackMessageId,
+    });
+    if (namingMessage !== undefined) {
+      void nameUntitledSession({
+        taskId: task.id,
+        sourceMessageId: namingMessage.id,
+        prompt: namingMessage.content,
+        response: `${result.proposal.title}\n${result.proposal.summary}`,
+        fallbackTitle: result.proposal.title,
+        provider: credential,
+        modelId: task.modelId,
+        thinkingLevel: task.thinkingLevel,
+        runtime,
+      });
+    }
+    return {
+      kind: "proposal",
+      planRevision,
+    };
+  } catch (error) {
+    const current = getStore().getTask(task.id);
+    if (error instanceof AgentRequestError && error.message !== "Planning was cancelled.") {
+      persistRunError(error.requestId, task.id, error);
+    }
+    if (current !== null && current.status !== "cancelled") {
+      getStore().updateSession(task.id, {
+        status: previousPlan?.status === "proposed" ? "awaiting_plan_approval" : "planning",
+        running: false,
+      });
+    }
+    throw error;
+  } finally {
+    activeAgentSessions.delete(task.id);
+    notifySessionChanged(task.id);
+  }
 }
 
 async function generateChat(
   sessionId: string,
-  messages: ChatMessage[],
+  messages: Array<Pick<ChatMessage, "role" | "content">>,
   provider: SetProviderCredentialInput | null,
   modelId: string,
   thinkingLevel: ThinkingLevel,
@@ -852,6 +1083,8 @@ async function generateChat(
   permissionMode: PermissionMode,
   images: AgentImageAttachment[],
   mcpServers: McpRuntimeServer[],
+  workflowContext: WorkflowContext | null = null,
+  planExecution: PlanExecutionContext | null = null,
 ): Promise<{ content: string; cancelled: boolean; requestId: string }> {
   const response = await sendAgentRequest({
     type: "chat",
@@ -864,6 +1097,8 @@ async function generateChat(
     runtime,
     permissionMode,
     mcpServers,
+    workflowContext,
+    planExecution,
   }, 15 * 60_000);
   if (response.type === "error") {
     throw new AgentRequestError(response.message, response.requestId);
@@ -872,6 +1107,204 @@ async function generateChat(
     throw new AgentRequestError("Pi chat service returned an unexpected response.", response.requestId);
   }
   return { content: response.content, cancelled: response.cancelled, requestId: response.requestId };
+}
+
+function compileWorkflowDraft(draft: WorkflowDraft): {
+  spec: ConductorSpec;
+  synthesisNodeId: string;
+} {
+  const ids = new Map(draft.nodes.map(({ key }) => [key, randomUUID()]));
+  const dependedOn = new Set(draft.nodes.flatMap(({ dependsOn }) => dependsOn));
+  const nodes: ConductorNode[] = draft.nodes.map((node) => ({
+    id: ids.get(node.key)!,
+    key: node.key,
+    title: node.title,
+    prompt: node.prompt,
+    dependsOn: node.dependsOn.map((key) => ids.get(key)!),
+    executionClass: node.executionClass,
+    maxAttempts: node.maxAttempts,
+  }));
+  const synthesisNodeId = randomUUID();
+  nodes.push({
+    id: synthesisNodeId,
+    key: "synthesis",
+    title: "Synthesize results",
+    prompt: [
+      "Synthesize the workflow results into the final answer for the parent conversation.",
+      "Resolve disagreements, call out incomplete or failed evidence, and give a concise actionable result.",
+      "Do not claim work that is not supported by the dependency results.",
+    ].join("\n"),
+    dependsOn: draft.nodes.filter(({ key }) => !dependedOn.has(key)).map(({ key }) => ids.get(key)!),
+    executionClass: "read",
+    maxAttempts: 1,
+  });
+  return {
+    spec: { nodes, maxParallel: draft.maxParallel },
+    synthesisNodeId,
+  };
+}
+
+async function handleWorkflowSubmission(
+  response: Extract<AgentMessage, { type: "workflow.submit" }>,
+): Promise<WorkflowSubmissionResult> {
+  const { context, draft } = response;
+  const task = getStore().getTask(context.taskId);
+  const workspace = getStore().getWorkspace(context.workspaceId);
+  if (task === null || workspace === null || task.workspaceId !== workspace.id) {
+    throw new Error("Workflow task is no longer available.");
+  }
+  if (response.sessionId !== task.id) {
+    throw new Error("Nested agents cannot create workflows.");
+  }
+  if (context.origin === "approved_plan") {
+    const approved = context.planRevisionId === null
+      ? null
+      : getStore().getPlanRevision(context.planRevisionId);
+    if (approved === null || approved.taskId !== task.id || approved.status !== "approved") {
+      throw new Error("The approved plan snapshot is no longer available.");
+    }
+  }
+  if (task.permissionMode === "explore" && draft.nodes.some(({ executionClass }) => executionClass === "write")) {
+    throw new Error("Explore mode cannot start a workflow containing write nodes.");
+  }
+  const { spec, synthesisNodeId } = compileWorkflowDraft(draft);
+  const { run, created } = getStore().createConductorRunOnce({
+    workspaceId: workspace.id,
+    taskId: task.id,
+    status: "running",
+    origin: context.origin,
+    title: draft.title,
+    summary: draft.summary,
+    dedupeKey: context.dedupeKey,
+    sourceRequestId: response.requestId,
+    sourceMessageId: context.sourceMessageId,
+    planRevisionId: context.planRevisionId,
+    synthesisNodeId,
+    spec,
+  });
+  if (created) {
+    getStore().updateSession(task.id, { status: "running", running: true });
+    getDurableConductor().start(workspace.id, run.id);
+  }
+  return { runId: run.id, status: created ? "running" : "existing" };
+}
+
+function truncateDependencyOutput(value: string | null, limit: number): string {
+  const content = value ?? "(no output)";
+  return content.length <= limit
+    ? content
+    : `${content.slice(0, limit)}\n\n[Dependency output truncated by Pi Work]`;
+}
+
+function hasActiveWorkflow(taskId: string): boolean {
+  return getStore().listTaskConductorRuns(taskId)
+    .some(({ status, origin }) => origin !== "legacy" && (status === "running" || status === "paused"));
+}
+
+function stopActiveWorkflows(taskId: string): void {
+  for (const run of getStore().listTaskConductorRuns(taskId)) {
+    if (run.status === "running" || run.status === "paused") {
+      getDurableConductor().stop(run.workspaceId, run.id);
+    }
+  }
+}
+
+async function cancelActiveApprovedPlanExecution(taskId: string): Promise<boolean> {
+  const executionId = activeApprovedPlanExecutions.get(taskId);
+  if (executionId === undefined) return false;
+  const detail = getStore().getPlanExecutionDetail(executionId);
+  if (detail === null) {
+    activeApprovedPlanExecutions.delete(taskId);
+    return false;
+  }
+  if (detail.execution.mode === "orchestration") {
+    stopActiveWorkflows(taskId);
+  } else if (detail.execution.agentSessionId !== null) {
+    const response = await sendAgentRequest({
+      type: "cancel",
+      sessionId: detail.execution.agentSessionId,
+    });
+    if (response.type === "error") throw new Error(response.message);
+  }
+  getStore().cancelPlanExecutionRecord(executionId);
+  notifySessionChanged(taskId);
+  return true;
+}
+
+async function finalizeConductorRun(run: ConductorRun): Promise<void> {
+  if (run.origin === "legacy") return;
+  try {
+    let content: string | null = null;
+    if (run.status === "completed") {
+      const synthesis = run.synthesisNodeId === null
+        ? null
+        : getStore().listConductorNodeStates(run.workspaceId, run.id)
+          .find(({ nodeId }) => nodeId === run.synthesisNodeId);
+      content = synthesis?.output?.trim() || "Workflow completed without a synthesis result.";
+    }
+    getStore().finalizeConductorRunResult(run.workspaceId, run.id, content);
+    const planExecution = getStore().getPlanExecutionByConductorRunId(run.id);
+    if (planExecution !== null) {
+      if (run.status === "completed") {
+        getStore().finishPlanExecution(planExecution.execution.id);
+      } else if (run.status === "cancelled") {
+        getStore().cancelPlanExecutionRecord(planExecution.execution.id, "Orchestration execution was cancelled.");
+      } else if (run.status === "failed") {
+        getStore().failPlanExecutionRecord(planExecution.execution.id, "Orchestration execution failed.");
+      }
+    }
+  } finally {
+    activeApprovedPlanExecutions.delete(run.taskId);
+    activeAgentSessions.delete(run.taskId);
+    notifySessionChanged(run.taskId);
+  }
+}
+
+function getDurableConductor(): DurableConductor {
+  durableConductor ??= new DurableConductor(getStore(), async (run, node, dependencies, executionId) => {
+    const task = getStore().getTask(run.taskId);
+    const workspace = getStore().getWorkspace(run.workspaceId);
+    if (task === null || workspace === null || task.workspaceId !== workspace.id) {
+      throw new Error("Conductor task is no longer available.");
+    }
+    if (task.providerId === null || task.modelId === null) {
+      throw new Error("Choose a model for the task before starting its conductor run.");
+    }
+    let remainingDependencyBudget = 48_000;
+    const dependencySections = dependencies.map((dependency) => {
+      const dependencyNode = run.spec.nodes.find(({ id }) => id === dependency.nodeId);
+      const output = truncateDependencyOutput(
+        dependency.output,
+        Math.max(0, Math.min(16_000, remainingDependencyBudget)),
+      );
+      remainingDependencyBudget -= output.length;
+      return `## ${dependencyNode?.title ?? dependency.nodeId}\n${output}`;
+    });
+    const dependencyContext = dependencySections.length === 0
+      ? ""
+      : `\n\nDependency results:\n${dependencySections.join("\n\n")}`;
+    const permissionMode = node.executionClass === "read" ? "explore" : task.permissionMode;
+    const response = await generateChat(
+      executionId,
+      [{
+        role: "user",
+        content: `Parent task: ${task.title}\nGoal: ${task.goal}\n\nNode: ${node.title}\n${node.prompt}${dependencyContext}`,
+      }],
+      await providerCredential(task.providerId),
+      task.modelId,
+      task.thinkingLevel,
+      agentRuntime(task.workingDirectory ?? workspace.rootPath, executionId),
+      permissionMode,
+      [],
+      [],
+      null,
+    );
+    if (response.cancelled) throw new Error("Node execution was cancelled.");
+    return response.content;
+  }, async (executionId) => {
+    await sendAgentRequest({ type: "cancel", sessionId: executionId });
+  }, finalizeConductorRun);
+  return durableConductor;
 }
 
 async function generateConversationTitle(
@@ -896,6 +1329,88 @@ async function generateConversationTitle(
   return result.title;
 }
 
+async function nameUntitledSession(input: {
+  taskId: string;
+  sourceMessageId: string;
+  prompt: string;
+  response: string;
+  fallbackTitle?: string | null;
+  provider: SetProviderCredentialInput | null;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+  runtime: AgentRuntime;
+}): Promise<void> {
+  const current = getStore().getTask(input.taskId);
+  if (current === null || !isUntitledSessionTitle(current.title)) return;
+  const sourceStillMatches = () => getStore().listMessages(input.taskId).some((message) => (
+    message.id === input.sourceMessageId
+    && message.role === "user"
+    && message.content === input.prompt
+  ));
+  if (!sourceStillMatches()) return;
+
+  let title = fallbackSessionTitle(input.prompt, input.fallbackTitle);
+  try {
+    title = fallbackSessionTitle(
+      input.prompt,
+      await generateConversationTitle(
+        input.prompt,
+        input.response,
+        input.provider,
+        input.modelId,
+        input.thinkingLevel,
+        input.runtime,
+      ),
+    );
+  } catch {
+    // The local fallback still gives every completed first round a useful name.
+  }
+
+  const latest = getStore().getTask(input.taskId);
+  if (
+    latest === null
+    || !isUntitledSessionTitle(latest.title)
+    || !sourceStillMatches()
+  ) {
+    return;
+  }
+  getStore().updateSession(input.taskId, { title });
+  notifySessionChanged(input.taskId);
+}
+
+function kickOffFirstMessageTitle(input: {
+  taskId: string;
+  sourceMessageId: string;
+  prompt: string;
+  title: string;
+  providerId: string | null;
+  modelId: string | null;
+  thinkingLevel: ThinkingLevel;
+  runtime: AgentRuntime;
+}): void {
+  if (!shouldGenerateFirstMessageTitle(input)) return;
+  const providerId = input.providerId;
+  const modelId = input.modelId;
+  if (providerId === null || modelId === null) return;
+  void (async () => {
+    try {
+      const credential = await providerCredential(providerId);
+      await nameUntitledSession({
+        taskId: input.taskId,
+        sourceMessageId: input.sourceMessageId,
+        prompt: input.prompt,
+        response: "",
+        provider: credential,
+        modelId,
+        thinkingLevel: input.thinkingLevel,
+        runtime: input.runtime,
+      });
+    } catch {
+      // Ignore; the post-run naming pass will still name the session once it completes.
+    }
+  })();
+}
+
 async function runChatInBackground(input: {
   taskId: string;
   workspaceId: string;
@@ -905,38 +1420,62 @@ async function runChatInBackground(input: {
   runtime: AgentRuntime;
   permissionMode: PermissionMode;
   images: AgentImageAttachment[];
+  requireWorkflow?: boolean;
 }): Promise<void> {
   try {
     activeAgentSessions.add(input.taskId);
+    const messages = getStore().listMessages(input.taskId);
+    const firstUserMessage = messages.find(({ role }) => role === "user") ?? null;
+    const sourceMessageId = [...messages].reverse().find(({ role }) => role === "user")?.id ?? null;
+    const credential = await providerCredential(input.providerId);
     const response = await generateChat(
       input.taskId,
-      getStore().listMessages(input.taskId),
-      await providerCredential(input.providerId),
+      messages,
+      credential,
       input.modelId,
       input.thinkingLevel,
       input.runtime,
       input.permissionMode,
       input.images,
       await runtimeMcpServers(),
+      {
+        workspaceId: input.workspaceId,
+        taskId: input.taskId,
+        origin: "conversation",
+        sourceMessageId,
+        planRevisionId: null,
+        dedupeKey: `conversation:${input.taskId}:${sourceMessageId ?? "root"}`,
+        required: input.requireWorkflow ?? false,
+      },
     );
+    if (input.requireWorkflow === true && !response.cancelled && !hasActiveWorkflow(input.taskId)) {
+      throw new AgentRequestError(
+        "Orchestration mode did not create a workflow. Retry the task or switch to Plan mode.",
+        response.requestId,
+      );
+    }
     const assistant = response.content !== ""
       ? getStore().addMessage({ taskId: input.taskId, role: "assistant", content: response.content })
       : null;
     flushRunActivities(response.requestId, input.taskId, assistant?.id ?? null);
-    const session = getStore().getTask(input.taskId);
-    if (assistant !== null && !response.cancelled && session?.title === "New session") {
-      void generateConversationTitle(
-        getStore().listMessages(input.taskId).find((message) => message.role === "user")?.content ?? "",
-        assistant.content,
-        await providerCredential(input.providerId),
-        input.modelId,
-        input.thinkingLevel,
-        input.runtime,
-      ).then((title) => {
-        const current = getStore().getTask(input.taskId);
-        if (current?.title === "New session") getStore().updateSession(input.taskId, { title });
-      }).catch(() => {
-        // A title is a convenience; preserve the usable session if generation fails.
+    if (!response.cancelled && firstUserMessage !== null) {
+      const workflow = getStore().listTaskConductorRuns(input.taskId).find((run) => (
+        run.origin === "conversation"
+        && run.sourceMessageId === sourceMessageId
+      ));
+      void nameUntitledSession({
+        taskId: input.taskId,
+        sourceMessageId: firstUserMessage.id,
+        prompt: firstUserMessage.content,
+        response: [
+          assistant?.content ?? "",
+          workflow?.summary ?? "",
+        ].filter(Boolean).join("\n"),
+        ...(workflow === undefined ? {} : { fallbackTitle: workflow.title }),
+        provider: credential,
+        modelId: input.modelId,
+        thinkingLevel: input.thinkingLevel,
+        runtime: input.runtime,
       });
     }
   } catch (error) {
@@ -948,13 +1487,220 @@ async function runChatInBackground(input: {
       role: "system",
       content: error instanceof Error ? error.message : "Pi could not reply.",
     });
+    if (input.requireWorkflow === true) {
+      try {
+        getStore().updateSession(input.taskId, { status: "failed", running: false });
+      } catch {
+        // The task may have been removed while orchestration was starting.
+      }
+    }
   } finally {
     try {
-      getStore().updateSession(input.taskId, { running: false });
+      if (!hasActiveWorkflow(input.taskId)) {
+        getStore().updateSession(input.taskId, { running: false });
+      }
     } catch {
       // The session can be removed while its agent request is still completing.
     }
     activeAgentSessions.delete(input.taskId);
+    notifySessionChanged(input.taskId);
+  }
+}
+
+function approvedPlanExecutionPrompt(
+  task: { title: string; goal: string; permissionMode: PermissionMode },
+  plan: PlanRevision,
+): string {
+  const permissionBoundary = task.permissionMode === "explore"
+    ? "This is a read-only execution. Inspect and verify, but do not edit files or run write-capable tools."
+    : task.permissionMode === "ask"
+      ? "Ask for approval before every edit, write, or shell command as required by Ask mode."
+      : "You may use the available tools directly within the workspace boundary.";
+  return [
+    "Execute the approved Pi Work plan snapshot below.",
+    "Treat the snapshot as fixed: do not substitute a newer plan or silently broaden its scope.",
+    permissionBoundary,
+    "Stay inside the configured workspace. Perform each verification where practical.",
+    "Finish with a concise review of changes, checks run, failures, and remaining risks.",
+    "",
+    `Task title: ${task.title}`,
+    `Task goal: ${task.goal}`,
+    "",
+    `Approved plan revision: v${plan.revision} (${plan.id})`,
+    JSON.stringify({
+      title: plan.title,
+      summary: plan.summary,
+      steps: plan.steps.map(({ id, title, detail, targets, verification }) => ({
+        id,
+        title,
+        detail,
+        targets,
+        verification,
+      })),
+      assumptions: plan.assumptions,
+      sources: plan.sources,
+    }, null, 2),
+  ].join("\n");
+}
+
+function startApprovedPlanExecution(execution: PlanExecutionDetail): void {
+  const { taskId } = execution.execution;
+  if (activeApprovedPlanExecutions.has(taskId)) {
+    throw new Error("This approved plan is already executing.");
+  }
+  activeApprovedPlanExecutions.set(taskId, execution.execution.id);
+  if (execution.execution.mode === "orchestration") {
+    try {
+      startApprovedPlanOrchestration(execution);
+    } catch (error) {
+      getStore().failPlanExecutionRecord(
+        execution.execution.id,
+        error instanceof Error ? error.message : String(error),
+      );
+      activeApprovedPlanExecutions.delete(taskId);
+      notifySessionChanged(taskId);
+    }
+    return;
+  }
+  void runApprovedPlanInBackground(execution);
+}
+
+function startApprovedPlanOrchestration(detail: PlanExecutionDetail): void {
+  const { execution } = detail;
+  const task = getStore().getTask(execution.taskId);
+  const plan = getStore().getPlanRevision(execution.planRevisionId);
+  if (task === null || plan === null || plan.status !== "approved") {
+    throw new Error("The approved task or plan snapshot is unavailable.");
+  }
+  const nodes: ConductorNode[] = [];
+  for (const [index, step] of plan.steps.entries()) {
+    const nodeId = randomUUID();
+    const previous = nodes.at(-1);
+    nodes.push({
+      id: nodeId,
+      key: `plan-step-${index + 1}`,
+      title: step.title,
+      prompt: [
+        "Execute exactly this approved plan step without reordering, splitting, or expanding its scope.",
+        `Plan step ID: ${step.id}`,
+        step.detail,
+        step.targets.length === 0 ? "" : `Targets:\n${step.targets.map((target) => `- ${target}`).join("\n")}`,
+        step.verification.length === 0 ? "" : `Verification:\n${step.verification.map((item, itemIndex) => `${itemIndex}. ${item}`).join("\n")}`,
+      ].filter(Boolean).join("\n\n"),
+      dependsOn: previous === undefined ? [] : [previous.id],
+      executionClass: task.permissionMode === "explore" ? "read" : "write",
+      maxAttempts: 1,
+    });
+    getStore().setPlanExecutionStepConductorNode(execution.id, step.id, nodeId);
+  }
+  const synthesisNodeId = randomUUID();
+  nodes.push({
+    id: synthesisNodeId,
+    key: "synthesis",
+    title: "Synthesize approved plan execution",
+    prompt: [
+      "Summarize the completed approved plan execution.",
+      "Report changes, verification outcomes, failures, and remaining risks.",
+      "Do not perform additional implementation work or expand the approved scope.",
+    ].join("\n"),
+    dependsOn: nodes.length === 0 ? [] : [nodes.at(-1)!.id],
+    executionClass: "read",
+    maxAttempts: 1,
+  });
+  const run = getStore().createConductorRun({
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    status: "running",
+    origin: "approved_plan",
+    title: plan.title,
+    summary: plan.summary,
+    dedupeKey: `approved-plan-execution:${execution.id}`,
+    sourceMessageId: plan.createdFromMessageId,
+    planRevisionId: plan.id,
+    synthesisNodeId,
+    spec: { nodes, maxParallel: 1 },
+  });
+  getStore().setPlanExecutionConductorRun(execution.id, run.id);
+  getStore().markPlanExecutionStarted(task.id, plan.id, execution.id, null);
+  getDurableConductor().start(task.workspaceId, run.id);
+  notifySessionChanged(task.id);
+}
+
+async function runApprovedPlanInBackground(detail: PlanExecutionDetail): Promise<void> {
+  const { execution } = detail;
+  const taskId = execution.taskId;
+  const agentSessionId = execution.agentSessionId;
+  try {
+    const task = getStore().getTask(taskId);
+    const workspace = task === null ? null : getStore().getWorkspace(task.workspaceId);
+    const plan = getStore().getPlanRevision(execution.planRevisionId);
+    if (
+      task === null
+      || workspace === null
+      || plan === null
+      || plan.status !== "approved"
+      || task.providerId === null
+      || task.modelId === null
+      || agentSessionId === null
+    ) {
+      throw new Error("The task, workspace, or selected model is unavailable.");
+    }
+    activeAgentSessions.add(agentSessionId);
+    approvedPlanAgentSessions.set(agentSessionId, { taskId, executionId: execution.id });
+    getStore().markPlanExecutionStarted(taskId, plan.id, execution.id, agentSessionId);
+    const response = await generateChat(
+      agentSessionId,
+      [{
+        role: "user",
+        content: approvedPlanExecutionPrompt(task, plan),
+      }],
+      await providerCredential(task.providerId),
+      task.modelId,
+      task.thinkingLevel,
+      agentRuntime(task.workingDirectory ?? workspace.rootPath, agentSessionId),
+      task.permissionMode,
+      [],
+      await runtimeMcpServers(),
+      null,
+      {
+        executionId: execution.id,
+        planRevisionId: plan.id,
+        steps: plan.steps,
+      },
+    );
+    const assistant = response.content !== ""
+      ? getStore().addMessage({ taskId, role: "assistant", content: response.content })
+      : null;
+    flushRunActivities(response.requestId, taskId, assistant?.id ?? null);
+    if (response.cancelled) {
+      getStore().cancelPlanExecutionRecord(execution.id);
+    } else {
+      getStore().finishPlanExecution(execution.id);
+    }
+  } catch (error) {
+    if (error instanceof AgentRequestError) {
+      persistRunError(error.requestId, taskId, error);
+    }
+    getStore().addMessage({
+      taskId,
+      role: "system",
+      content: error instanceof Error ? error.message : "The approved plan could not be executed.",
+    });
+    try {
+      getStore().failPlanExecutionRecord(
+        execution.id,
+        error instanceof Error ? error.message : "The approved plan could not be executed.",
+      );
+    } catch {
+      // The task may have been removed while execution was active.
+    }
+  } finally {
+    if (agentSessionId !== null) {
+      activeAgentSessions.delete(agentSessionId);
+      approvedPlanAgentSessions.delete(agentSessionId);
+    }
+    activeApprovedPlanExecutions.delete(taskId);
+    notifySessionChanged(taskId);
   }
 }
 
@@ -1238,10 +1984,11 @@ function registerIpc(): void {
       return null;
     }
 
-    const rootPath = result.filePaths[0];
-    if (rootPath === undefined) {
+    const selectedPath = result.filePaths[0];
+    if (selectedPath === undefined) {
       return null;
     }
+    const rootPath = await realpath(selectedPath);
     const existing = getStore().listWorkspaces().find((workspace) => (
       workspace.kind === "folder" && workspace.directories.includes(rootPath)
     ));
@@ -1265,8 +2012,9 @@ function registerIpc(): void {
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled) return null;
-    const directory = result.filePaths[0];
-    if (directory === undefined) return null;
+    const selectedDirectory = result.filePaths[0];
+    if (selectedDirectory === undefined) return null;
+    const directory = await realpath(selectedDirectory);
     const owner = getStore().listWorkspaces().find((candidate) => (
       candidate.kind === "folder" && candidate.directories.includes(directory)
     ));
@@ -1275,8 +2023,165 @@ function registerIpc(): void {
     }
     return workspaceSchema.parse(getStore().addWorkspaceDirectory(workspace.id, directory));
   });
+  ipcMain.handle("workspace:choose-directory", async (_event, input: unknown) => {
+    const { workspaceId } = addWorkspaceDirectoryInputSchema.parse(input);
+    const workspace = requireFolderWorkspace(workspaceId);
+    const result = await dialog.showOpenDialog({
+      title: `Add a folder to ${workspace.name}`,
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled) return null;
+    const selectedDirectory = result.filePaths[0];
+    if (selectedDirectory === undefined) return null;
+    const directory = await realpath(selectedDirectory);
+    const owner = getStore().listWorkspaces().find((candidate) => (
+      candidate.kind === "folder" && candidate.directories.includes(directory)
+    ));
+    if (owner !== undefined && owner.id !== workspace.id) {
+      throw new Error(`This folder is already associated with ${owner.name}.`);
+    }
+    return directory;
+  });
 
   ipcMain.handle("workspace:list", () => getStore().listWorkspaces().map((workspace) => workspaceSchema.parse(workspace)));
+  ipcMain.handle("workspace:get", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    const workspace = getStore().getWorkspace(id);
+    return workspace === null ? null : workspaceSchema.parse(workspace);
+  });
+  ipcMain.handle("workspace:update", async (_event, input: unknown) => {
+    const { workspaceId, ...changes } = updateWorkspaceInputSchema.parse(input);
+    const workspace = requireFolderWorkspace(workspaceId);
+    const directories = changes.directories === undefined
+      ? undefined
+      : await Promise.all(changes.directories.map((directory) => realpath(directory)));
+    if (directories !== undefined) {
+      if (!directories.includes(workspace.rootPath)) {
+        throw new Error("The workspace root directory cannot be removed.");
+      }
+      for (const directory of directories) {
+        const owner = getStore().listWorkspaces().find((candidate) => (
+          candidate.id !== workspace.id
+          && candidate.kind === "folder"
+          && candidate.directories.includes(directory)
+        ));
+        if (owner !== undefined) {
+          throw new Error(`This folder is already associated with ${owner.name}.`);
+        }
+      }
+    }
+    return workspaceSchema.parse(getStore().updateWorkspace(workspaceId, withoutUndefined({
+      ...changes,
+      directories,
+    })));
+  });
+  ipcMain.handle("workspace:directories", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    requireFolderWorkspace(id);
+    return getStore().listWorkspaceDirectories(id);
+  });
+  ipcMain.handle("workspace:remove-directory", (_event, input: unknown) => {
+    const { workspaceId, directoryId } = removeWorkspaceDirectoryInputSchema.parse(input);
+    requireFolderWorkspace(workspaceId);
+    return workspaceSchema.parse(getStore().removeWorkspaceDirectory(workspaceId, directoryId));
+  });
+
+  ipcMain.handle("board:list", (_event, workspaceId: unknown) => {
+    const id = workspaceSchema.shape.id.parse(workspaceId);
+    return getStore().listBoards(id);
+  });
+  ipcMain.handle("board:snapshot", (_event, input: unknown) => {
+    const value = input as { workspaceId?: unknown; boardId?: unknown };
+    const workspaceId = workspaceSchema.shape.id.parse(value.workspaceId);
+    const boardId = value.boardId === undefined ? undefined : workspaceSchema.shape.id.parse(value.boardId);
+    return getStore().getBoardSnapshot(workspaceId, boardId);
+  });
+  ipcMain.handle("board:column-create", (_event, input: unknown) => (
+    getStore().createBoardColumn(createBoardColumnInputSchema.parse(input))
+  ));
+  ipcMain.handle("board:column-update", (_event, input: unknown) => {
+    const { workspaceId, boardId, columnId, ...changes } = updateBoardColumnInputSchema.parse(input);
+    return getStore().updateBoardColumn(workspaceId, boardId, columnId, withoutUndefined(changes));
+  });
+  ipcMain.handle("board:column-remove", (_event, input: unknown) => {
+    const parsed = removeBoardColumnInputSchema.parse(input);
+    getStore().removeBoardColumn(
+      parsed.workspaceId,
+      parsed.boardId,
+      parsed.columnId,
+      parsed.migrateToColumnId,
+    );
+  });
+  ipcMain.handle("board:move-card", (_event, input: unknown) => (
+    getStore().moveBoardCard(moveBoardCardInputSchema.parse(input))
+  ));
+
+  ipcMain.handle("conductor:list", (_event, input: unknown) => {
+    const value = input as { workspaceId?: unknown; taskId?: unknown };
+    const workspaceId = workspaceSchema.shape.id.parse(value.workspaceId);
+    const taskId = value.taskId === undefined ? undefined : workspaceSchema.shape.id.parse(value.taskId);
+    return getStore().listConductorRuns(workspaceId, taskId);
+  });
+  ipcMain.handle("conductor:get", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getStore().getConductorRun(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:create", (_event, input: unknown) => (
+    getStore().createConductorRun(createConductorRunInputSchema.parse(input))
+  ));
+  ipcMain.handle("conductor:nodes", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getStore().listConductorNodeStates(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:attempts", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getStore().listConductorNodeAttempts(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:start", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().start(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:pause", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().pause(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:resume", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().resume(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:stop", (_event, input: unknown) => {
+    const { workspaceId, runId } = conductorRunCommandInputSchema.parse(input);
+    return getDurableConductor().stop(workspaceId, runId);
+  });
+  ipcMain.handle("conductor:retry", (_event, input: unknown) => {
+    const { workspaceId, runId } = retryConductorRunInputSchema.parse(input);
+    const previous = getStore().getConductorRun(workspaceId, runId);
+    if (previous === null || !["failed", "cancelled"].includes(previous.status)) {
+      throw new Error("Only failed or cancelled workflows can be retried.");
+    }
+    const activeRetry = getStore().listConductorRuns(workspaceId, previous.taskId)
+      .find((run) => (
+        run.parentRunId === previous.id
+        && (run.status === "pending" || run.status === "running" || run.status === "paused")
+      ));
+    if (activeRetry !== undefined) return activeRetry;
+    const next = getStore().createConductorRun({
+      workspaceId,
+      taskId: previous.taskId,
+      status: "running",
+      origin: previous.origin,
+      title: previous.title,
+      summary: previous.summary,
+      dedupeKey: `workflow-retry:${previous.id}:${randomUUID()}`,
+      sourceMessageId: previous.sourceMessageId,
+      planRevisionId: previous.planRevisionId,
+      parentRunId: previous.id,
+      synthesisNodeId: previous.synthesisNodeId,
+      spec: previous.spec,
+    });
+    getStore().updateSession(previous.taskId, { status: "running", running: true });
+    return getDurableConductor().start(workspaceId, next.id);
+  });
   ipcMain.handle("provider:list", () => getCredentialBroker().list());
   ipcMain.handle("provider:save", (_event, input: unknown) => {
     const parsed = setProviderCredentialInputSchema.parse(input);
@@ -1599,8 +2504,12 @@ function registerIpc(): void {
   });
   ipcMain.handle("session:stop", async (_event, sessionId: unknown) => {
     const { taskId: id } = abortTaskInputSchema.parse({ taskId: sessionId });
-    const response = await sendAgentRequest({ type: "cancel", sessionId: id });
-    if (response.type === "error") throw new Error(response.message);
+    const cancelledApprovedPlan = await cancelActiveApprovedPlanExecution(id);
+    if (!cancelledApprovedPlan && activeAgentSessions.has(id)) {
+      const response = await sendAgentRequest({ type: "cancel", sessionId: id });
+      if (response.type === "error") throw new Error(response.message);
+    }
+    stopActiveWorkflows(id);
     getStore().updateSession(id, { running: false });
     clearPendingToolApprovals(id);
   });
@@ -1623,12 +2532,21 @@ function registerIpc(): void {
   });
   ipcMain.handle("chat:resolve-tool-approval", (_event, input: unknown) => {
     const parsed = resolveToolApprovalInputSchema.parse(input);
+    const approval = pendingToolApprovals.get(parsed.approvalId);
     getAgentProcess().postMessage({
       type: "tool.resolve",
       requestId: randomUUID(),
       ...parsed,
     });
     pendingToolApprovals.delete(parsed.approvalId);
+    if (approval !== undefined) {
+      const workflowRun = getStore().getConductorRunByExecutionId(approval.sessionId);
+      const approvedExecution = approvedPlanAgentSessions.get(approval.sessionId);
+      const taskId = workflowRun?.taskId
+        ?? approvedExecution?.taskId
+        ?? null;
+      if (taskId !== null) getStore().resumePlanExecution(taskId);
+    }
   });
   ipcMain.handle("task:list", (_event, workspaceId: unknown) => getStore().listTasks(workspaceSchema.shape.id.parse(workspaceId)).map((task) => taskSchema.parse(task)));
   ipcMain.handle("task:create", async (_event, input: unknown) => {
@@ -1657,6 +2575,7 @@ function registerIpc(): void {
       thinkingLevel: parsed.thinkingLevel,
       permissionMode: "explore",
       planMode: false,
+      executionMode: "direct",
       workingDirectory: workspace.rootPath,
     }));
   });
@@ -1665,27 +2584,13 @@ function registerIpc(): void {
     requireFolderTask(taskId);
     return taskSchema.parse(getStore().updateTaskBrief(taskId, withoutUndefined(value)));
   });
-  ipcMain.handle("task:generate-plan", async (_event, input: unknown) => {
-    const { taskId } = generatePlanInputSchema.parse(input);
-    const { task, workspace } = requireFolderTask(taskId);
-    if (task.providerId === null || task.modelId === null) {
-      throw new Error("Choose a model before generating a plan.");
-    }
-    const plan = await generatePlan(
-      task,
-      await providerCredential(task.providerId),
-      task.modelId,
-      task.thinkingLevel,
-      agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
-    );
-    getStore().savePlan(plan);
-    getStore().addMessage({
-      taskId: task.id,
-      role: "assistant",
-      content: `Plan ready for review: ${plan.summary}`,
-    });
-    return planSchema.parse(plan);
-  });
+  const handlePlanRequest = async (input: unknown) => {
+    const { taskId, feedbackMessageId } = requestPlanInputSchema.parse(input);
+    return requestPlanForTask(taskId, feedbackMessageId ?? null);
+  };
+  ipcMain.handle("task:request-plan", (_event, input: unknown) => handlePlanRequest(input));
+  // Compatibility for older renderer bundles during rolling desktop updates.
+  ipcMain.handle("task:generate-plan", (_event, input: unknown) => handlePlanRequest(input));
   ipcMain.handle("chat:list", (_event, taskId: unknown) => getStore().listMessages(taskSchema.shape.id.parse(taskId)));
   ipcMain.handle("chat:tool-approvals", (_event, taskId: unknown) => {
     const parsedTaskId = taskId === undefined ? null : taskSchema.shape.id.parse(taskId);
@@ -1775,24 +2680,93 @@ function registerIpc(): void {
         throw new Error("Send a message or set /goal before requesting /plan.");
       }
       task = saveConversationModel(task.id, parsed);
-      getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
+      const planRequestMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
       const goal = command[2]?.trim();
       if (goal) {
         task = getStore().updateTaskGoal(task.id, goal);
       }
-      const plan = await generatePlan(
-        task,
-        await providerCredential(parsed.providerId),
-        parsed.modelId,
-        parsed.thinkingLevel,
-        agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
+      await requestPlanForTask(task.id, planRequestMessage.id);
+      return taskSchema.parse(getStore().getTask(task.id));
+    }
+
+    if (parsed.editMessageId !== undefined && task !== null) {
+      if (task.running) {
+        const cancelResponse = await sendAgentRequest({ type: "cancel", sessionId: task.id });
+        if (cancelResponse.type === "error") throw new Error(cancelResponse.message);
+      }
+      stopActiveWorkflows(task.id);
+      clearPendingToolApprovals(task.id);
+      task = getStore().updateSession(task.id, { running: false });
+    }
+
+    const requestedExecutionMode = parsed.executionMode ?? task?.executionMode ?? "direct";
+    const revisingPlan = task !== null
+      && task.kind === "task"
+      && requestedExecutionMode === "plan"
+      && (
+        parsed.editMessageId !== undefined
+        || task.status === "planning"
+        || task.status === "awaiting_plan_approval"
       );
-      getStore().savePlan(plan);
-      getStore().addMessage({
-        taskId: task.id,
-        role: "assistant",
-        content: `Plan ready for review: ${plan.summary}`,
+    if (revisingPlan && task !== null) {
+      task = saveConversationModel(task.id, parsed);
+      task = getStore().updateSession(task.id, {
+        permissionMode: parsed.permissionMode ?? task.permissionMode,
+        unread: false,
       });
+      let feedbackMessageId: string;
+      if (parsed.editMessageId !== undefined) {
+        feedbackMessageId = getStore().editMessage(parsed.editMessageId, parsed.content).id;
+      } else {
+        const userMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
+        feedbackMessageId = userMessage.id;
+        for (const attachment of inspectedAttachments) {
+          getStore().addAttachment({
+            sessionId: task.id,
+            messageId: userMessage.id,
+            ...attachment,
+          });
+          approvedAttachmentPaths.delete(attachment.path);
+        }
+      }
+      await requestPlanForTask(task.id, feedbackMessageId);
+      return taskSchema.parse(getStore().getTask(task.id));
+    }
+
+    const firstTaskMessage = task !== null
+      && task.kind === "task"
+      && task.status === "draft"
+      && getStore().listMessages(task.id).length === 0;
+    if (firstTaskMessage && task !== null && requestedExecutionMode === "plan") {
+      task = saveConversationModel(task.id, parsed);
+      task = getStore().updateTaskBrief(task.id, {
+        goal: parsed.content,
+      });
+      task = getStore().updateSession(task.id, {
+        permissionMode: parsed.permissionMode ?? task.permissionMode,
+        executionMode: requestedExecutionMode,
+        unread: false,
+      });
+      const userMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
+      for (const attachment of inspectedAttachments) {
+        getStore().addAttachment({
+          sessionId: task.id,
+          messageId: userMessage.id,
+          ...attachment,
+        });
+        approvedAttachmentPaths.delete(attachment.path);
+      }
+      kickOffFirstMessageTitle({
+        taskId: task.id,
+        sourceMessageId: userMessage.id,
+        prompt: parsed.content,
+        title: task.title,
+        providerId: parsed.providerId,
+        modelId: parsed.modelId,
+        thinkingLevel: parsed.thinkingLevel,
+        runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
+      });
+      await requestPlanForTask(task.id, userMessage.id);
       return taskSchema.parse(getStore().getTask(task.id));
     }
 
@@ -1815,17 +2789,24 @@ function registerIpc(): void {
       workingDirectory: workspace.rootPath,
       ...(parsed.permissionMode === undefined ? {} : { permissionMode: parsed.permissionMode }),
       ...(parsed.planMode === undefined ? {} : { planMode: parsed.planMode }),
+      ...(parsed.executionMode === undefined ? {} : { executionMode: parsed.executionMode }),
     });
     task = saveConversationModel(task.id, parsed);
     task = getStore().updateSession(task.id, {
       permissionMode: parsed.permissionMode ?? task.permissionMode,
-      planMode: parsed.planMode ?? task.planMode,
+      executionMode: parsed.executionMode ?? task.executionMode,
       running: true,
       unread: false,
     });
+    if (firstTaskMessage) {
+      task = getStore().updateTaskBrief(task.id, {
+        goal: parsed.content,
+      });
+    }
     if (parsed.editMessageId !== undefined) {
       getStore().editMessage(parsed.editMessageId, parsed.content);
     } else {
+      const isFirstUserMessage = getStore().listMessages(task.id).every(({ role }) => role !== "user");
       const userMessage = getStore().addMessage({ taskId: task.id, role: "user", content: parsed.content });
       for (const attachment of inspectedAttachments) {
         getStore().addAttachment({
@@ -1834,6 +2815,18 @@ function registerIpc(): void {
           ...attachment,
         });
         approvedAttachmentPaths.delete(attachment.path);
+      }
+      if (isFirstUserMessage) {
+        kickOffFirstMessageTitle({
+          taskId: task.id,
+          sourceMessageId: userMessage.id,
+          prompt: parsed.content,
+          title: task.title,
+          providerId: parsed.providerId,
+          modelId: parsed.modelId,
+          thinkingLevel: parsed.thinkingLevel,
+          runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
+        });
       }
     }
     void runChatInBackground({
@@ -1845,26 +2838,96 @@ function registerIpc(): void {
       runtime: agentRuntime(task.workingDirectory ?? workspace.rootPath, task.id),
       permissionMode: parsed.permissionMode ?? task.permissionMode,
       images,
+      requireWorkflow: task.executionMode === "orchestration",
     });
     return taskSchema.parse(task);
   });
-  ipcMain.handle("task:plan", (_event, taskId: unknown) => {
-    const { task } = requireFolderTask(taskSchema.shape.id.parse(taskId));
-    const plan = getStore().getPlan(task.id);
-    return plan === null ? null : planSchema.parse(plan);
+  ipcMain.handle("task:plan-revisions", (_event, taskId: unknown) => {
+    const parsedTaskId = taskSchema.shape.id.parse(taskId);
+    const task = getStore().getTask(parsedTaskId);
+    if (task === null) throw new Error("Task not found.");
+    return getStore().listPlanRevisions(task.id).map((revision) => planRevisionSchema.parse(revision));
   });
-  ipcMain.handle("task:approve-plan", (_event, input: unknown) => {
-    const parsed = approvePlanInputSchema.parse(input);
+  ipcMain.handle("task:plan", (_event, taskId: unknown) => {
+    const parsedTaskId = taskSchema.shape.id.parse(taskId);
+    const plan = getStore().getLatestPlanRevision(parsedTaskId);
+    return plan === null ? null : planRevisionSchema.parse(plan);
+  });
+  ipcMain.handle("task:plan-executions", (_event, taskId: unknown) => {
+    const parsedTaskId = taskSchema.shape.id.parse(taskId);
+    return getStore().listPlanExecutions(parsedTaskId);
+  });
+  ipcMain.handle("task:save-plan-revision", (_event, input: unknown) => {
+    const parsed = planRevisionEditInputSchema.parse(input);
     requireFolderTask(parsed.taskId);
-    return taskSchema.parse(getStore().approvePlan(parsed.taskId, parsed.approved));
+    return planRevisionSchema.parse(getStore().saveEditedPlanRevision(parsed));
+  });
+  ipcMain.handle("task:plan-revision-diff", (_event, input: unknown) => {
+    const parsed = planRevisionDiffInputSchema.parse(input);
+    requireFolderTask(parsed.taskId);
+    return planRevisionDiffSchema.parse(getStore().getPlanRevisionDiff(
+      parsed.taskId,
+      parsed.revisionId,
+      parsed.compareToRevisionId,
+    ));
+  });
+  ipcMain.handle("task:approve-plan", async (_event, input: unknown) => {
+    const parsed = approvePlanInputSchema.parse(input);
+    const { task } = requireFolderTask(parsed.taskId);
+    if (task.executionMode !== "plan") {
+      throw new Error("Switch to Plan mode before approving a plan.");
+    }
+    if (
+      parsed.action !== "approve_only"
+      && (activeApprovedPlanExecutions.has(task.id) || activeAgentSessions.has(task.id))
+    ) {
+      throw new Error("This task already has an active execution.");
+    }
+    const approved = getStore().approvePlanRevisionForAction(
+      parsed.taskId,
+      parsed.planRevisionId,
+      parsed.action,
+    );
+    if (approved.execution !== null) startApprovedPlanExecution(approved.execution);
+    return taskSchema.parse(getStore().getTask(task.id));
+  });
+  ipcMain.handle("task:execute-approved-plan", async (_event, input: unknown) => {
+    const parsed = executeApprovedPlanInputSchema.parse(input);
+    const { task } = requireFolderTask(parsed.taskId);
+    if (activeApprovedPlanExecutions.has(task.id) || activeAgentSessions.has(task.id)) {
+      throw new Error("This task already has an active execution.");
+    }
+    const execution = getStore().createPlanExecutionForApprovedRevision(
+      parsed.taskId,
+      parsed.planRevisionId,
+      parsed.mode,
+    );
+    startApprovedPlanExecution(execution);
+    return taskSchema.parse(getStore().getTask(task.id));
+  });
+  ipcMain.handle("task:retry-approved-plan", async (_event, input: unknown) => {
+    const parsed = retryApprovedPlanInputSchema.parse(input);
+    const { task } = requireFolderTask(parsed.taskId);
+    if (activeApprovedPlanExecutions.has(task.id) || activeAgentSessions.has(task.id)) {
+      throw new Error("This task already has an active execution.");
+    }
+    const execution = getStore().createPlanExecutionForApprovedRevision(
+      parsed.taskId,
+      parsed.planRevisionId,
+      "current_session",
+    );
+    startApprovedPlanExecution(execution);
+    return taskSchema.parse(getStore().getTask(task.id));
   });
   ipcMain.handle("task:abort", async (_event, input: unknown) => {
     const parsed = abortTaskInputSchema.parse(input);
     requireFolderTask(parsed.taskId);
-    if (activeAgentSessions.has(parsed.taskId)) {
+    const cancelledApprovedPlan = await cancelActiveApprovedPlanExecution(parsed.taskId);
+    if (!cancelledApprovedPlan && activeAgentSessions.has(parsed.taskId)) {
       const response = await sendAgentRequest({ type: "cancel", sessionId: parsed.taskId });
       if (response.type === "error") throw new Error(response.message);
     }
+    stopActiveWorkflows(parsed.taskId);
     return taskSchema.parse(getStore().cancelTask(parsed.taskId));
   });
   ipcMain.handle("task:complete", (_event, input: unknown) => {
@@ -1966,6 +3029,10 @@ function registerIpc(): void {
     });
     ipcMain.handle(`${name}:update`, (_event, input: unknown) => {
       const parsed = updateDomainEntityInputSchema.parse(input);
+      if (parsed.workspaceId !== undefined) {
+        const current = definition.list(parsed.workspaceId).find(({ id }) => id === parsed.id);
+        if (current === undefined) throw new Error(`${name} belongs to a different workspace.`);
+      }
       if (domainName === "source") {
         const current = findSource(parsed.id);
         if (current === undefined) throw new Error("Unknown source.");
@@ -1974,7 +3041,11 @@ function registerIpc(): void {
       return getStore().updateDomainEntity(domainName, schema, parsed.id, parsed.value);
     });
     ipcMain.handle(`${name}:remove`, (_event, input: unknown) => {
-      const { id } = removeDomainEntityInputSchema.parse(input);
+      const { id, workspaceId } = removeDomainEntityInputSchema.parse(input);
+      if (workspaceId !== undefined) {
+        const current = definition.list(workspaceId).find((entity) => entity.id === id);
+        if (current === undefined) throw new Error(`${name} belongs to a different workspace.`);
+      }
       if (domainName === "status") getStore().removeStatus(id);
       else if (domainName === "label") getStore().removeLabel(id);
       else {
@@ -2067,10 +3138,10 @@ function ensureDefaultStatuses(workspaceId: string): void {
   if (getStore().listStatuses(workspaceId).length > 0) return;
   const english = getStore().getAppSettings().language === "en";
   [
-    { name: english ? "To do" : "待处理", color: "#8a8275", position: 0 },
-    { name: english ? "In progress" : "进行中", color: "#a66f2b", position: 1 },
-    { name: english ? "Waiting" : "等待", color: "#967448", position: 2 },
-    { name: english ? "Completed" : "已完成", color: "#58745d", position: 3 },
+    { name: english ? "To do" : "待处理", color: "#8a8275", position: 0, category: "open" as const },
+    { name: english ? "In progress" : "进行中", color: "#a66f2b", position: 1, category: "active" as const },
+    { name: english ? "Waiting" : "等待", color: "#967448", position: 2, category: "review" as const },
+    { name: english ? "Completed" : "已完成", color: "#58745d", position: 3, category: "closed" as const },
   ].forEach((value) => getStore().createDomainEntity("status", statusDefinitionSchema, {
     workspaceId,
     ...value,
@@ -2084,6 +3155,20 @@ app.whenReady().then(async () => {
     getStore().updateAppSettings(legacyDefault);
   }
   registerIpc();
+  getDurableConductor().recover();
+  getStore().reconcileInterruptedSessions();
+  for (const workspace of getStore().listWorkspaces()) {
+    if (workspace.kind !== "folder") continue;
+    for (const run of getStore().listConductorRuns(workspace.id)) {
+      if (
+        run.origin !== "legacy"
+        && ["completed", "failed", "cancelled"].includes(run.status)
+        && run.finalizationStatus !== "published"
+      ) {
+        void finalizeConductorRun(run);
+      }
+    }
+  }
   getObservabilityExporter();
   createWindow();
   app.on("activate", () => {
@@ -2101,6 +3186,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   closeBrowserView();
+  durableConductor?.dispose();
   void skillManager?.dispose();
   observabilityExporter?.persistPendingSync();
   store?.close();

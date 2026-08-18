@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -10,13 +12,17 @@ import { z } from "zod";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertAuthorizedFilePath,
+  buildChatPrompt,
   consumeSessionEvent,
   extensionToolNames,
   mergeAgentBashEnvironment,
   PiAdapter,
+  planningInspectionTools,
+  planningTerminalTools,
 } from "./index.js";
 
 const temporaryDirectories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(
@@ -25,6 +31,119 @@ afterEach(async () => {
 });
 
 describe("PiAdapter", () => {
+  it("records the first terminal planning tool result and terminates the tool batch", async () => {
+    const results: unknown[] = [];
+    const [question, complete] = planningTerminalTools((result) => results.push(result));
+    const signal = new AbortController().signal;
+
+    const questionResult = await question!.execute("question", {
+      question: "Which compatibility target should be used?",
+      options: [
+        { label: "Current", description: "Target the current protocol." },
+        { label: "Legacy", description: "Preserve the legacy protocol." },
+      ],
+    }, signal, undefined, {} as never);
+    const completeResult = await complete!.execute("complete", {
+      title: "Upgrade planning",
+      summary: "Use terminal tools.",
+      steps: [{
+        title: "Register tools",
+        detail: "Expose structured terminal tools.",
+        targets: ["packages/pi-adapter/src/index.ts"],
+        verification: ["Run adapter tests"],
+      }],
+      assumptions: [],
+    }, signal, undefined, {} as never);
+
+    expect(questionResult.terminate).toBe(true);
+    expect(completeResult.terminate).toBe(true);
+    expect(results).toEqual([
+      {
+        kind: "clarification",
+        question: "Which compatibility target should be used?",
+        options: [
+          { label: "Current", description: "Target the current protocol." },
+          { label: "Legacy", description: "Preserve the legacy protocol." },
+        ],
+      },
+      {
+        kind: "proposal",
+        proposal: {
+          title: "Upgrade planning",
+          summary: "Use terminal tools.",
+          steps: [{
+            title: "Register tools",
+            detail: "Expose structured terminal tools.",
+            targets: ["packages/pi-adapter/src/index.ts"],
+            verification: ["Run adapter tests"],
+          }],
+          assumptions: [],
+        },
+      },
+    ]);
+  });
+
+  it("requires the workflow tool for a new orchestration session", () => {
+    const prompt = buildChatPrompt(
+      [{ role: "user", content: "Analyze the repository in parallel." }],
+      false,
+      {
+        workspaceId: randomUUID(),
+        taskId: randomUUID(),
+        origin: "conversation",
+        sourceMessageId: randomUUID(),
+        planRevisionId: null,
+        dedupeKey: "chat:test",
+        required: true,
+      },
+    );
+
+    expect(prompt).toContain("MUST call the workflow tool");
+    expect(prompt).toContain("Analyze the repository in parallel.");
+  });
+
+  it("keeps required workflow instructions when resuming an existing agent session", () => {
+    const prompt = buildChatPrompt(
+      [
+        { role: "user", content: "Earlier request" },
+        { role: "user", content: "Run this as an orchestration." },
+      ],
+      true,
+      {
+        workspaceId: randomUUID(),
+        taskId: randomUUID(),
+        origin: "conversation",
+        sourceMessageId: randomUUID(),
+        planRevisionId: null,
+        dedupeKey: "chat:resume",
+        required: true,
+      },
+    );
+
+    expect(prompt).toContain("MUST call the workflow tool");
+    expect(prompt).toContain("Run this as an orchestration.");
+    expect(prompt).not.toContain("Earlier request");
+  });
+
+  it("does not force workflow instructions for an optional existing session", () => {
+    const prompt = buildChatPrompt(
+      [{ role: "user", content: "Update the typo." }],
+      true,
+      {
+        workspaceId: randomUUID(),
+        taskId: randomUUID(),
+        origin: "conversation",
+        sourceMessageId: randomUUID(),
+        planRevisionId: null,
+        dedupeKey: "chat:optional",
+        required: false,
+      },
+    );
+
+    expect(prompt).toBe("Update the typo.");
+    expect(prompt).not.toContain("MUST call the workflow tool");
+  });
+
   it("merges session variables into the spawned bash environment without mutating the process environment", () => {
     const processEnvironment = { PATH: "/system/bin", SHARED: "process" };
     const merged = mergeAgentBashEnvironment(processEnvironment, {
@@ -201,14 +320,32 @@ describe("PiAdapter", () => {
   });
 
   it("creates a structured read-only planning fallback", () => {
-    const plan = new PiAdapter().createPlanningFallback({
+    const result = new PiAdapter().createPlanningFallback({
       id: randomUUID(),
       title: "Decision brief",
       goal: "Compare authorized sources.",
     });
 
-    expect(plan.steps).toHaveLength(3);
-    expect(plan.steps[0]?.title).toBe("Review authorized sources");
+    expect(result.kind).toBe("proposal");
+    if (result.kind !== "proposal") throw new Error("Expected a proposal fallback.");
+    expect(result.proposal.steps).toHaveLength(3);
+    expect(result.proposal.steps[0]?.title).toBe("Review authorized sources");
+  });
+
+  it("preserves inspected sources when recovering from unstructured planning output", () => {
+    const result = new PiAdapter().createPlanningFallback({
+      id: randomUUID(),
+      title: "Decision brief",
+      goal: "Compare authorized sources.",
+    }, {
+      assumption: "The planning model did not return structured tool output.",
+      sources: [{ path: "packages/pi-adapter/src/index.ts", operation: "read" }],
+    });
+
+    expect(result.kind).toBe("proposal");
+    if (result.kind !== "proposal") throw new Error("Expected a proposal fallback.");
+    expect(result.proposal.assumptions).toEqual(["The planning model did not return structured tool output."]);
+    expect(result.proposal.sources).toEqual([{ path: "packages/pi-adapter/src/index.ts", operation: "read" }]);
   });
 
   it("installs, loads, lists, and removes a local provider extension", async () => {
@@ -428,4 +565,224 @@ describe("PiAdapter", () => {
     await expect(assertAuthorizedFilePath(root, "escape/secret.txt")).rejects.toThrow("outside");
     await expect(assertAuthorizedFilePath(root, "new/nested/file.txt")).resolves.toBeUndefined();
   });
+
+  it("runs only fixed read-only Git inspections and rejects path argument escapes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-work-planning-git-"));
+    const outside = await mkdtemp(join(tmpdir(), "pi-work-planning-git-outside-"));
+    temporaryDirectories.push(root, outside);
+    await execFileAsync("/usr/bin/git", ["init"], { cwd: root });
+    await execFileAsync("/usr/bin/git", ["config", "user.name", "Pi Work Test"], { cwd: root });
+    await execFileAsync("/usr/bin/git", ["config", "user.email", "pi-work@example.test"], { cwd: root });
+    await writeFile(join(root, "tracked.txt"), "before\n");
+    await execFileAsync("/usr/bin/git", ["add", "tracked.txt"], { cwd: root });
+    await execFileAsync("/usr/bin/git", ["commit", "-m", "Initial commit"], { cwd: root });
+    await writeFile(join(root, "tracked.txt"), "after\n");
+    await symlink(outside, join(root, "escape"));
+
+    const tools = planningInspectionTools(root);
+    expect(tools.map(({ name }) => name)).toEqual([
+      "git_status",
+      "git_diff",
+      "git_log",
+      "run_validation",
+    ]);
+    const status = requiredTool(tools, "git_status");
+    const diff = requiredTool(tools, "git_diff");
+    const log = requiredTool(tools, "git_log");
+
+    const statusResult = await executeTool(status, {});
+    expect(toolText(statusResult)).toContain("tracked.txt");
+    const diffResult = await executeTool(diff, { scope: "working", paths: ["tracked.txt"] });
+    expect(toolText(diffResult)).toContain("-before");
+    expect(toolText(diffResult)).toContain("+after");
+    const logResult = await executeTool(log, { limit: 1 });
+    expect(toolText(logResult)).toContain("Initial commit");
+
+    await expect(executeTool(diff, { scope: "working", paths: ["--output=/tmp/leak"] }))
+      .rejects.toThrow("option prefix");
+    await expect(executeTool(diff, { scope: "working", paths: ["../outside.txt"] }))
+      .rejects.toThrow("outside");
+    await expect(executeTool(diff, { scope: "working", paths: ["escape/secret.txt"] }))
+      .rejects.toThrow("outside");
+    await expect(executeTool(diff, { scope: "everything" }))
+      .rejects.toThrow();
+  });
+
+  it.runIf(process.platform === "darwin")("runs declared validations with literal argv in a read-only, network-disabled sandbox", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-work-planning-validation-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".pi-work"), { recursive: true });
+    const forbiddenPath = join(root, "forbidden.txt");
+    const shellMarkerPath = join(root, "shell-marker.txt");
+    await writeFile(join(root, ".pi-work", "validations.json"), JSON.stringify({
+      version: 1,
+      validations: [
+        {
+          id: "literal-argv",
+          label: "Literal argv",
+          argv: [
+            process.execPath,
+            "-e",
+            "console.log(process.argv[1])",
+            `literal; touch ${shellMarkerPath}`,
+          ],
+          timeoutMs: 5_000,
+        },
+        {
+          id: "temporary-write",
+          label: "Temporary write",
+          argv: [
+            process.execPath,
+            "-e",
+            "const fs=require('node:fs');const p=require('node:path').join(process.env.TMPDIR,'ok.txt');fs.writeFileSync(p,'ok');console.log(fs.readFileSync(p,'utf8'))",
+          ],
+          timeoutMs: 5_000,
+        },
+        {
+          id: "workspace-write",
+          label: "Workspace write",
+          argv: [
+            process.execPath,
+            "-e",
+            `require('node:fs').writeFileSync(${JSON.stringify(forbiddenPath)},'blocked')`,
+          ],
+          timeoutMs: 5_000,
+        },
+      ],
+    }));
+    const validation = requiredTool(planningInspectionTools(root), "run_validation");
+
+    const literal = await executeTool(validation, { id: "literal-argv" });
+    expect(toolText(literal)).toContain(`literal; touch ${shellMarkerPath}`);
+    await expect(readFile(shellMarkerPath, "utf8")).rejects.toThrow();
+
+    const temporaryWrite = await executeTool(validation, { id: "temporary-write" });
+    expect(toolText(temporaryWrite)).toContain("Temporary write: passed");
+
+    const workspaceWrite = await executeTool(validation, { id: "workspace-write" });
+    expect(toolText(workspaceWrite)).toContain("failed with exit code");
+    await expect(readFile(forbiddenPath, "utf8")).rejects.toThrow();
+
+    await expect(executeTool(validation, { id: "undeclared" }))
+      .rejects.toThrow("Unknown planning validation");
+  });
+
+  it("fails closed without a validation sandbox and rejects malformed declarations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-work-planning-validation-config-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, ".pi-work"), { recursive: true });
+    await writeFile(join(root, ".pi-work", "validations.json"), JSON.stringify({
+      version: 1,
+      validations: [{
+        id: "check",
+        label: "Check",
+        argv: [process.execPath, "-e", "console.log('ok')"],
+        timeoutMs: 5_000,
+      }],
+    }));
+    const unavailable = requiredTool(planningInspectionTools(root, undefined, {
+      sandboxExecutable: join(root, "missing-sandbox"),
+    }), "run_validation");
+    await expect(executeTool(unavailable, { id: "check" }))
+      .rejects.toThrow("sandbox is unavailable");
+
+    await writeFile(join(root, ".pi-work", "validations.json"), JSON.stringify({
+      version: 1,
+      validations: [{
+        id: "check",
+        label: "Check",
+        argv: [process.execPath],
+        timeoutMs: 5_000,
+        environment: { SECRET: "not allowed" },
+      }],
+    }));
+    const validation = requiredTool(planningInspectionTools(root), "run_validation");
+    await expect(executeTool(validation, { id: "check" })).rejects.toThrow();
+  });
+
+  it("caps validation output, reports timeouts, and supports cancellation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-work-planning-validation-limits-"));
+    temporaryDirectories.push(root);
+    const sandboxExecutable = await createPassthroughSandbox(root);
+    await mkdir(join(root, ".pi-work"), { recursive: true });
+    await writeFile(join(root, ".pi-work", "validations.json"), JSON.stringify({
+      version: 1,
+      validations: [
+        {
+          id: "large-output",
+          label: "Large output",
+          argv: [process.execPath, "-e", "process.stdout.write('x'.repeat(120*1024))"],
+          timeoutMs: 5_000,
+        },
+        {
+          id: "timeout",
+          label: "Timeout",
+          argv: [process.execPath, "-e", "setTimeout(()=>{},5000)"],
+          timeoutMs: 50,
+        },
+        {
+          id: "cancel",
+          label: "Cancel",
+          argv: [process.execPath, "-e", "setTimeout(()=>{},5000)"],
+          timeoutMs: 5_000,
+        },
+      ],
+    }));
+    const validation = requiredTool(planningInspectionTools(root, undefined, {
+      sandboxExecutable,
+    }), "run_validation");
+
+    const largeOutput = await executeTool(validation, { id: "large-output" });
+    expect(toolText(largeOutput)).toContain("[output truncated at 100 KB]");
+    expect((largeOutput as any).details.truncated).toBe(true);
+
+    const timeout = await executeTool(validation, { id: "timeout" });
+    expect(toolText(timeout)).toContain("timed out");
+    expect((timeout as any).details.timedOut).toBe(true);
+
+    const controller = new AbortController();
+    const cancelled = executeTool(validation, { id: "cancel" }, controller.signal);
+    setTimeout(() => controller.abort(new DOMException("Cancelled", "AbortError")), 50);
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  });
 });
+
+async function createPassthroughSandbox(root: string): Promise<string> {
+  const executable = join(root, "sandbox-exec-test-stub");
+  await writeFile(executable, [
+    "#!/bin/sh",
+    "while [ \"$#\" -gt 0 ] && [ \"$1\" != \"--\" ]; do",
+    "  shift",
+    "done",
+    "if [ \"$#\" -eq 0 ]; then",
+    "  exit 64",
+    "fi",
+    "shift",
+    "exec \"$@\"",
+    "",
+  ].join("\n"));
+  await chmod(executable, 0o755);
+  return executable;
+}
+
+function requiredTool(
+  tools: ReturnType<typeof planningInspectionTools>,
+  name: string,
+): ReturnType<typeof planningInspectionTools>[number] {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (tool === undefined) throw new Error(`Missing tool: ${name}`);
+  return tool;
+}
+
+function executeTool(
+  tool: ReturnType<typeof planningInspectionTools>[number],
+  params: Record<string, unknown>,
+  signal = new AbortController().signal,
+): Promise<unknown> {
+  return tool.execute("test-call", params, signal, undefined, {} as never);
+}
+
+function toolText(result: unknown): string {
+  const content = (result as { content?: Array<{ type?: string; text?: string }> }).content ?? [];
+  return content.filter(({ type }) => type === "text").map(({ text }) => text ?? "").join("\n");
+}

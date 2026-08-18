@@ -19,13 +19,19 @@ test("an approved plan gates a staged artifact and explicit publication", async 
     title: "Decision brief",
     goal: "Summarize the authorized notes.",
   });
-  const plan = new PiAdapter().createPlanningFallback(task);
+  const planningResult = new PiAdapter().createPlanningFallback(task);
+  if (planningResult.kind !== "proposal") throw new Error("Expected the local planner to return a proposal.");
 
-  store.savePlan(plan);
+  const plan = store.savePlanRevision({
+    taskId: task.id,
+    proposal: planningResult.proposal,
+  });
   expect(store.getTask(task.id)?.status).toBe("awaiting_plan_approval");
   expect(store.listArtifacts(task.id)).toHaveLength(0);
 
-  const approvedTask = store.approvePlan(task.id, true);
+  store.approvePlanRevision(task.id, plan.id);
+  const approvedTask = store.getTask(task.id);
+  if (approvedTask === null) throw new Error("Expected the approved task to remain available.");
   expect(approvedTask.status).toBe("running");
 
   const content = "# Decision brief\n\nApproved findings.";

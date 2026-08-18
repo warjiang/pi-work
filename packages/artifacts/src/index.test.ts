@@ -16,7 +16,9 @@ describe("artifact lifecycle", () => {
       directories: [rootPath],
       outputPath: join(rootPath, "Pi Work"),
       kind: "folder" as const,
+      version: 1,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     const task = {
       id: taskId,

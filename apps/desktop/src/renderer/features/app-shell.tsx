@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AppSettings,
   BuildInfo,
   ModelCatalog,
   ModelOption,
-  PermissionMode,
   ProviderConfig,
   Session,
   Skill,
@@ -25,6 +24,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu.js";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field.js";
 import { Icon } from "@/components/ui/icon.js";
 import type { IconName } from "@/components/ui/icon.js";
@@ -37,9 +43,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.js";
-import { Switch } from "@/components/ui/switch.js";
-import { Textarea } from "@/components/ui/textarea.js";
-import { thinkingLevelLabel } from "@/i18n.js";
 import type { MessageKey } from "@/i18n.js";
 import {
   clampSidebarWidth,
@@ -58,62 +61,106 @@ export const workspaceSidebarIcons = {
   board: "folder-kanban",
   sources: "source",
   automations: "automation",
-  folderSettings: "folder-settings",
   settings: "settings",
 } as const satisfies Record<string, IconName>;
 
 export function TopBar(props: {
   workspaceScope: WorkspaceScope;
   workspaces: Workspace[];
-  sessionTitle?: string;
   t: T;
+  onWorkspaceScope(scope: WorkspaceScope): void;
   onToggleSidebar(): void;
   consoleOpen: boolean;
   onToggleConsole(): void;
 }) {
+  const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const folder = props.workspaces.find(({ id }) => id === props.workspaceScope);
   const personal = props.workspaceScope === "personal";
   const scopeLabel = personal ? props.t("personal") : (folder?.name ?? props.t("personal"));
   return (
-    <header className="topbar">
-      <div className="topbar-leading">
-        <Button variant="ghost" size="icon" className="topbar-menu" aria-label={props.t("toggleSidebar")} onClick={props.onToggleSidebar}>
-          <Icon name="panel" />
-        </Button>
-      </div>
-      <div className="topbar-context">
-        {props.sessionTitle !== undefined ? (
-          <>
-            {!personal ? <Icon name="workspace" size={14} /> : null}
-            <h1 title={props.sessionTitle}>{props.sessionTitle}</h1>
-          </>
-        ) : !personal ? (
-          <div className="workspace-switcher"><span>{scopeLabel}</span></div>
-        ) : null}
-        <div className="topbar-task-actions" id="topbar-task-actions" />
-      </div>
-      <div className="topbar-trailing">
-        <Button
-          variant="ghost"
-          size="icon"
-          className={`topbar-console-trigger${props.consoleOpen ? " is-active" : ""}`}
-          aria-label={props.t("piConsole")}
-          aria-pressed={props.consoleOpen}
-          onClick={props.onToggleConsole}
-        >
-          <Icon name="terminal" />
-        </Button>
-      </div>
-    </header>
+    <>
+      <header className="topbar">
+        <div className="topbar-leading">
+          <Button variant="ghost" size="icon" className="topbar-menu" aria-label={props.t("toggleSidebar")} onClick={props.onToggleSidebar}>
+            <Icon name="panel" />
+          </Button>
+        </div>
+        <div className="topbar-context">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="workspace-switcher" aria-label={props.t("allWorkspaces")}>
+                <Icon name={personal ? "inbox" : "workspace"} size={14} />
+                <span>{scopeLabel}</span>
+                <Icon name="chevron-down" size={14} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="workspace-switcher-menu" align="start">
+              <DropdownMenuLabel>{props.t("allWorkspaces")}</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => props.onWorkspaceScope("personal")}>
+                <Icon name="inbox" />
+                <span>{props.t("personal")}</span>
+                {personal ? <Icon name="check" /> : null}
+              </DropdownMenuItem>
+              {props.workspaces.filter(({ kind }) => kind === "folder").map((workspace) => (
+                <DropdownMenuItem key={workspace.id} onSelect={() => props.onWorkspaceScope(workspace.id)}>
+                  <Icon name="workspace" />
+                  <span>{workspace.name}</span>
+                  {workspace.id === props.workspaceScope ? <Icon name="check" /> : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="topbar-task-actions" id="topbar-task-actions" />
+          {!personal && folder !== undefined ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="topbar-workspace-edit"
+              aria-label={props.t("editWorkspace")}
+              title={props.t("editWorkspace")}
+              onClick={() => setEditingWorkspace(folder)}
+            >
+              <Icon name="folder-settings" />
+            </Button>
+          ) : null}
+        </div>
+        <div className="topbar-trailing">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`topbar-console-trigger${props.consoleOpen ? " is-active" : ""}`}
+            aria-label={props.t("piConsole")}
+            aria-pressed={props.consoleOpen}
+            onClick={props.onToggleConsole}
+          >
+            <Icon name="terminal" />
+          </Button>
+        </div>
+      </header>
+      <WorkspaceEditDialog
+        workspace={editingWorkspace}
+        t={props.t}
+        onOpenChange={(open) => {
+          if (!open) setEditingWorkspace(null);
+        }}
+      />
+    </>
   );
+}
+
+export function recentSessions(sessions: Session[], limit = 8): Session[] {
+  const seen = new Set<string>();
+  return sessions.filter((session) => {
+    if (session.archived || seen.has(session.id)) return false;
+    seen.add(session.id);
+    return true;
+  }).slice(0, limit);
 }
 
 export function Sidebar(props: {
   view: AppView;
   buildInfo: BuildInfo;
   sessions: Session[];
-  personalSessions: Session[];
-  workspaces: Workspace[];
   workspaceScope: WorkspaceScope;
   selectedTaskId: string | null;
   attentionIds: Set<string>;
@@ -124,7 +171,6 @@ export function Sidebar(props: {
   t: T;
   onNewTask(): void;
   onView(view: AppView): void;
-  onWorkspaceScope(scope: WorkspaceScope): void;
   onOpenSettings(): void;
   onOpenTask(taskId: string): void;
   onCloseDrawer(): void;
@@ -137,9 +183,7 @@ export function Sidebar(props: {
     latestWidth: number;
   } | null>(null);
   const [resizing, setResizing] = useState(false);
-  const recent = props.sessions.filter(({ archived }) => !archived).slice(0, 14);
-  const personalRecent = props.personalSessions.filter(({ archived }) => !archived).slice(0, 14);
-  const folders = props.workspaces.filter(({ kind }) => kind === "folder");
+  const recent = recentSessions(props.sessions);
   const attentionCount = props.sessions.filter(({ id }) => props.attentionIds.has(id)).length;
   const completedCount = props.sessions.filter(({ status, archived }) => status === "completed" && !archived).length;
   const version = props.buildInfo.version.startsWith("v") ? props.buildInfo.version : `v${props.buildInfo.version}`;
@@ -169,43 +213,13 @@ export function Sidebar(props: {
             <Icon name="plus" size={14} />
             {props.workspaceScope === "personal" ? props.t("newSession") : props.t("newTask")}
           </Button>
-          <SidebarSection className="workspace-list-section" title={props.t("allWorkspaces")}>
-            {folders.map((workspace) => (
-              <SidebarNavButton
-                key={workspace.id}
-                active={props.workspaceScope === workspace.id}
-                icon="workspace"
-                label={workspace.name}
-                {...(workspace.directories.length > 1 ? { badge: workspace.directories.length } : {})}
-                onClick={() => props.onWorkspaceScope(workspace.id)}
-              />
-            ))}
-            {folders.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
-          </SidebarSection>
-          <SidebarSection className="recent-section personal-recent-section" title={props.t("personalSessions")} count={personalRecent.length}>
-            <div className="recent-task-list">
-              {personalRecent.map((session) => (
-                <Button
-                  variant="ghost"
-                  className={`recent-task ${props.selectedTaskId === session.id ? "selected" : ""}`}
-                  key={session.id}
-                  aria-current={props.selectedTaskId === session.id ? "page" : undefined}
-                  onClick={() => props.onOpenTask(session.id)}
-                >
-                  <span>{session.title}</span>
-                  {session.flagged ? <Icon name="flag" size={14} /> : null}
-                </Button>
-              ))}
-              {personalRecent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
-            </div>
-          </SidebarSection>
           <SidebarSection title={props.t("work")}>
             <SidebarNavButton active={props.view === "inbox"} icon={workspaceSidebarIcons.inbox} label={props.t("inbox")} onClick={() => props.onView("inbox")} />
             <SidebarNavButton active={props.view === "attention"} icon={workspaceSidebarIcons.attention} label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
             <SidebarNavButton active={props.view === "completed"} icon={workspaceSidebarIcons.completed} label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
             {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon={workspaceSidebarIcons.board} label={props.t("board")} onClick={() => props.onView("board")} /> : null}
           </SidebarSection>
-          {props.isFolder ? <SidebarSection className="recent-section workspace-task-section" title={props.t("folderTasks")} count={recent.length}>
+          <SidebarSection className="recent-section workspace-task-section" title={props.t("recentTasks")} count={recent.length}>
             <div className="recent-task-list">
               {recent.map((session) => (
                 <Button
@@ -221,12 +235,11 @@ export function Sidebar(props: {
               ))}
               {recent.length === 0 ? <p className="sidebar-empty">{props.t("noItems")}</p> : null}
             </div>
-          </SidebarSection> : null}
+          </SidebarSection>
           {props.isFolder ? (
             <SidebarSection title={props.t("library")}>
               <SidebarNavButton active={props.view === "sources"} icon={workspaceSidebarIcons.sources} label={props.t("sources")} onClick={() => props.onView("sources")} />
               <SidebarNavButton active={props.view === "automations"} icon={workspaceSidebarIcons.automations} label={props.t("automations")} onClick={() => props.onView("automations")} />
-              <SidebarNavButton active={props.view === "folder-settings"} icon={workspaceSidebarIcons.folderSettings} label={props.t("folderSettings")} onClick={() => props.onView("folder-settings")} />
             </SidebarSection>
           ) : null}
         </div>
@@ -286,6 +299,129 @@ export function Sidebar(props: {
         />
       </aside>
     </>
+  );
+}
+
+function WorkspaceEditDialog(props: {
+  workspace: Workspace | null;
+  t: T;
+  onOpenChange(open: boolean): void;
+}) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [outputPath, setOutputPath] = useState("");
+  const [directoryPaths, setDirectoryPaths] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setName(props.workspace?.name ?? "");
+    setOutputPath(props.workspace?.outputPath ?? "");
+    setDirectoryPaths(props.workspace?.directories ?? []);
+    setError(null);
+  }, [props.workspace]);
+  const refresh = async () => {
+    if (props.workspace === null) return;
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["workspace", props.workspace.id] }),
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+      queryClient.invalidateQueries({ queryKey: ["workspace-directories", props.workspace.id] }),
+    ]);
+  };
+  const save = useMutation({
+    mutationFn: async () => {
+      if (props.workspace === null) throw new Error(props.t("chooseFolder"));
+      return window.piWork.workspace.update({
+        workspaceId: props.workspace.id,
+        name: name.trim(),
+        outputPath: outputPath.trim(),
+        directories: directoryPaths,
+        expectedVersion: props.workspace.version,
+      });
+    },
+    onSuccess: async () => {
+      await refresh();
+      props.onOpenChange(false);
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+  async function addDirectory() {
+    if (props.workspace === null) return;
+    try {
+      const directory = await window.piWork.workspace.chooseDirectory(props.workspace.id);
+      if (directory !== null) {
+        setDirectoryPaths((current) => current.includes(directory) ? current : [...current, directory]);
+      }
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+  function removeDirectory(directory: string) {
+    if (props.workspace === null || directory === props.workspace.rootPath) return;
+    setDirectoryPaths((current) => current.filter((path) => path !== directory));
+    setError(null);
+  }
+  return (
+    <Dialog open={props.workspace !== null} onOpenChange={props.onOpenChange}>
+      <DialogContent className="workspace-edit-dialog">
+        <DialogHeader>
+          <DialogTitle>{props.t("editWorkspace")}</DialogTitle>
+          <DialogDescription>{props.t("editWorkspaceDetail")}</DialogDescription>
+        </DialogHeader>
+        <FieldGroup className="workspace-edit-fields">
+          <Field>
+            <FieldLabel>{props.t("workspaceName")}</FieldLabel>
+            <Input value={name} onChange={(event) => setName(event.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel>{props.t("artifactRoot")}</FieldLabel>
+            <Input value={outputPath} onChange={(event) => setOutputPath(event.target.value)} />
+          </Field>
+        </FieldGroup>
+        <section className="workspace-source-folders">
+          <div className="workspace-source-folders-header">
+            <div>
+              <h3>{props.t("sourceFolders")}</h3>
+              <p>{props.t("sourceFoldersDetail")}</p>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => void addDirectory()}>
+              <Icon name="folder-plus" />
+              {props.t("addDirectory")}
+            </Button>
+          </div>
+          <div className="workspace-source-folder-list">
+            {directoryPaths.map((directory) => {
+              const isRoot = directory === props.workspace?.rootPath;
+              return (
+                <div className="workspace-source-folder-row" key={directory}>
+                  <Icon name="workspace" />
+                  <span>
+                    <span>{isRoot ? props.t("folderRoot") : directory.split("/").filter(Boolean).at(-1)}</span>
+                    <code>{directory}</code>
+                  </span>
+                  {!isRoot ? (
+                    <Button type="button" variant="ghost" size="icon" aria-label={props.t("delete")} onClick={() => removeDirectory(directory)}>
+                      <Icon name="close" />
+                    </Button>
+                  ) : <small>{props.t("required")}</small>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+        {error === null ? null : <Alert><AlertDescription>{error}</AlertDescription></Alert>}
+        <DialogFooter>
+          <Button type="button" variant="ghost" size="sm" onClick={() => props.onOpenChange(false)}>{props.t("cancel")}</Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={save.isPending || name.trim() === "" || outputPath.trim() === ""}
+            onClick={() => save.mutate()}
+          >
+            {props.t("save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -544,144 +680,34 @@ export function createNewSessionInput(
   };
 }
 
-export function NewTaskDialog(props: {
-  open: boolean;
-  scope: WorkspaceScope;
-  workspaces: Workspace[];
-  providers: ProviderConfig[];
-  models: ModelCatalog | undefined;
-  settings: AppSettings | undefined;
-  t: T;
-  onOpenChange(open: boolean): void;
-  onCreated(session: Session): void;
-}) {
-  const workspace = props.workspaces.find(({ id, kind }) => id === props.scope && kind === "folder") ?? null;
-  const availableModels = configuredModels(props.providers, props.models, props.settings);
-  const defaultModel = resolveDefaultModel(props.providers, props.models, props.settings);
-  const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("");
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("auto");
-  const [planMode, setPlanMode] = useState(true);
-  const [advanced, setAdvanced] = useState(false);
-  const [modelKey, setModelKey] = useState(defaultModel ? `${defaultModel.providerId}/${defaultModel.modelId}` : "");
-  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(props.settings?.thinkingLevel ?? "off");
-  const [workingDirectory, setWorkingDirectory] = useState(workspace?.rootPath ?? "");
-  const [error, setError] = useState<string | null>(null);
+export function createNewFolderTaskInput(
+  workspace: Workspace,
+  model: ModelOption,
+  thinkingLevel: ThinkingLevel,
+) {
+  return {
+    workspaceId: workspace.id,
+    title: "New session",
+    goal: "New session",
+    kind: "task" as const,
+    providerId: model.providerId,
+    modelId: model.modelId,
+    thinkingLevel,
+    permissionMode: "ask" as const,
+    planMode: true,
+    executionMode: "plan" as const,
+    workingDirectory: workspace.rootPath,
+  };
+}
 
-  useEffect(() => {
-    if (modelKey === "" && defaultModel) {
-      setModelKey(`${defaultModel.providerId}/${defaultModel.modelId}`);
-      setThinkingLevel(defaultModel.thinkingLevels.includes(props.settings?.thinkingLevel ?? "off")
-        ? (props.settings?.thinkingLevel ?? "off")
-        : (defaultModel.thinkingLevels[0] ?? "off"));
-    }
-  }, [defaultModel, modelKey, props.settings?.thinkingLevel]);
-  useEffect(() => setWorkingDirectory(workspace?.rootPath ?? ""), [workspace?.id, workspace?.rootPath]);
-
-  const selectedModel = availableModels.find((model) => `${model.providerId}/${model.modelId}` === modelKey);
-  const create = useMutation({
-    mutationFn: async () => {
-      const cleanGoal = goal.trim();
-      if (cleanGoal === "") throw new Error(props.t("validationRequired"));
-      if (selectedModel === undefined) throw new Error(props.t("configureModel"));
-      if (workspace === null) throw new Error(props.t("chooseFolder"));
-      return window.piWork.task.create({
-        workspaceId: workspace.id,
-        title: title.trim() || cleanGoal.slice(0, 80),
-        goal: cleanGoal,
-        kind: "task",
-        providerId: selectedModel.providerId,
-        modelId: selectedModel.modelId,
-        thinkingLevel,
-        permissionMode,
-        planMode,
-        workingDirectory: workingDirectory || workspace.rootPath,
-      });
-    },
-    onSuccess: (session) => {
-      props.onCreated(session);
-      props.onOpenChange(false);
-      setTitle("");
-      setGoal("");
-      setError(null);
-    },
-    onError: (cause: Error) => setError(cause.message),
-  });
-
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="new-task-dialog">
-        <DialogHeader>
-          <DialogTitle>{props.t("newTask")}</DialogTitle>
-          <DialogDescription>{props.t("noTasksDetail")}</DialogDescription>
-        </DialogHeader>
-        <FieldGroup>
-          <Field>
-            <FieldLabel>{props.t("taskTitle")}</FieldLabel>
-            <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={props.t("taskTitle")} />
-          </Field>
-          <Field>
-            <FieldLabel>{props.t("taskDescription")}</FieldLabel>
-            <Textarea autoFocus value={goal} onChange={(event) => setGoal(event.target.value)} rows={5} placeholder={props.t("goal")} />
-          </Field>
-          <Field>
-            <FieldLabel>{props.t("confirmation")}</FieldLabel>
-            <Select value={permissionMode} onValueChange={(value) => setPermissionMode(value as PermissionMode)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent><SelectGroup>
-                <SelectItem value="ask">{props.t("askEveryTime")}</SelectItem>
-                <SelectItem value="explore">{props.t("exploreOnly")}</SelectItem>
-                <SelectItem value="auto">{props.t("automatic")}</SelectItem>
-              </SelectGroup></SelectContent>
-            </Select>
-            {permissionMode === "auto" ? <Alert className="risk-alert"><AlertDescription>{props.t("automaticRisk")}</AlertDescription></Alert> : null}
-          </Field>
-        </FieldGroup>
-        <Button variant="ghost" className="advanced-toggle" onClick={() => setAdvanced((value) => !value)}>
-          <Icon name="sliders" />{props.t("advanced")}<Icon name="chevron-down" size={14} className={advanced ? "rotated" : ""} />
-        </Button>
-        {advanced ? (
-          <FieldGroup className="advanced-fields">
-            <Field>
-              <FieldLabel>{props.t("currentFolder")}</FieldLabel>
-              <Select value={workingDirectory} onValueChange={setWorkingDirectory}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectGroup>{workspace?.directories.map((directory) => (
-                  <SelectItem key={directory} value={directory}>{directory}</SelectItem>
-                ))}</SelectGroup></SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel>{props.t("model")}</FieldLabel>
-              <Select value={modelKey} onValueChange={(value) => {
-                setModelKey(value);
-                const model = availableModels.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === value);
-                if (model && !model.thinkingLevels.includes(thinkingLevel)) setThinkingLevel(model.thinkingLevels[0] ?? "off");
-              }}>
-                <SelectTrigger><SelectValue placeholder={props.t("noModel")} /></SelectTrigger>
-                <SelectContent><SelectGroup>{availableModels.map((model) => <SelectItem key={`${model.providerId}/${model.modelId}`} value={`${model.providerId}/${model.modelId}`}>{model.providerName} · {model.modelName}</SelectItem>)}</SelectGroup></SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel>{props.t("thinking")}</FieldLabel>
-              <Select value={thinkingLevel} onValueChange={(value) => setThinkingLevel(value as ThinkingLevel)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectGroup>{(selectedModel?.thinkingLevels ?? ["off"]).map((level) => <SelectItem key={level} value={level}>{thinkingLevelLabel(level, props.t)}</SelectItem>)}</SelectGroup></SelectContent>
-              </Select>
-            </Field>
-            <label className="switch-row"><span><strong>{props.t("planFirst")}</strong><small>{props.t("generatePlanNext")}</small></span><Switch checked={planMode} onCheckedChange={setPlanMode} /></label>
-          </FieldGroup>
-        ) : null}
-        {error ? <Alert className="form-error"><AlertDescription>{error}</AlertDescription></Alert> : null}
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => props.onOpenChange(false)}>{props.t("cancel")}</Button>
-          <Button disabled={create.isPending || goal.trim() === ""} onClick={() => create.mutate()}>
-            {create.isPending ? props.t("sending") : props.t("createTask")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
+export function mergeSessionSnapshot(
+  sessions: Session[] | undefined,
+  snapshot: Session,
+): Session[] | undefined {
+  if (sessions === undefined) return sessions;
+  const index = sessions.findIndex(({ id }) => id === snapshot.id);
+  if (index === -1) return [...sessions, snapshot];
+  return sessions.map((session, sessionIndex) => sessionIndex === index ? snapshot : session);
 }
 
 export function OnboardingDialog(props: {
