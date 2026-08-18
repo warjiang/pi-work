@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -608,7 +608,7 @@ describe("PiAdapter", () => {
       .rejects.toThrow();
   });
 
-  it("runs declared validations with literal argv in a read-only, network-disabled sandbox", async () => {
+  it.runIf(process.platform === "darwin")("runs declared validations with literal argv in a read-only, network-disabled sandbox", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-work-planning-validation-"));
     temporaryDirectories.push(root);
     await mkdir(join(root, ".pi-work"), { recursive: true });
@@ -703,6 +703,7 @@ describe("PiAdapter", () => {
   it("caps validation output, reports timeouts, and supports cancellation", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-work-planning-validation-limits-"));
     temporaryDirectories.push(root);
+    const sandboxExecutable = await createPassthroughSandbox(root);
     await mkdir(join(root, ".pi-work"), { recursive: true });
     await writeFile(join(root, ".pi-work", "validations.json"), JSON.stringify({
       version: 1,
@@ -727,7 +728,9 @@ describe("PiAdapter", () => {
         },
       ],
     }));
-    const validation = requiredTool(planningInspectionTools(root), "run_validation");
+    const validation = requiredTool(planningInspectionTools(root, undefined, {
+      sandboxExecutable,
+    }), "run_validation");
 
     const largeOutput = await executeTool(validation, { id: "large-output" });
     expect(toolText(largeOutput)).toContain("[output truncated at 100 KB]");
@@ -743,6 +746,24 @@ describe("PiAdapter", () => {
     await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
   });
 });
+
+async function createPassthroughSandbox(root: string): Promise<string> {
+  const executable = join(root, "sandbox-exec-test-stub");
+  await writeFile(executable, [
+    "#!/bin/sh",
+    "while [ \"$#\" -gt 0 ] && [ \"$1\" != \"--\" ]; do",
+    "  shift",
+    "done",
+    "if [ \"$#\" -eq 0 ]; then",
+    "  exit 64",
+    "fi",
+    "shift",
+    "exec \"$@\"",
+    "",
+  ].join("\n"));
+  await chmod(executable, 0o755);
+  return executable;
+}
 
 function requiredTool(
   tools: ReturnType<typeof planningInspectionTools>,
