@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, ConductorNodeState, ConductorRun, PlanRevision } from "@pi-work/protocol";
 import {
@@ -27,6 +29,7 @@ import {
   processSummary,
   reduceLiveProcess,
   restoreFailedComposerInput,
+  SessionEmptyState,
   serializeConductorDraft,
   summarizeProcessValue,
   toolFromActivity,
@@ -42,6 +45,21 @@ const t = (key: string) => key;
 const empty = { thoughts: [], tools: [], timeline: [], notice: null };
 
 describe("live Pi process reducer", () => {
+  it("gives the personal empty state a visible new-session action", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionEmptyState, {
+        personal: true,
+        t,
+        onNewTask: () => undefined,
+      }),
+    );
+
+    expect(html).toContain("personalEmptyTitle");
+    expect(html).toContain("newSession");
+    expect(html).toContain("<button");
+    expect(html).toContain("⌘ N");
+  });
+
   it("keeps legacy conductor specs readable", () => {
     const draft = createConductorDraft(
       "Preflight",

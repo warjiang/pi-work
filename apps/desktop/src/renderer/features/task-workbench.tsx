@@ -436,6 +436,7 @@ function ComposerModelMenu(props: {
           type="button"
           className="composer-model-trigger"
           aria-label={`${props.t("model")}: ${activeModelSummary}; ${props.t("thinking")}: ${thinking}`}
+          title={`${activeModelSummary} · ${thinking}`}
           disabled={props.disabled}
         >
           <span className="composer-model-summary">
@@ -564,14 +565,19 @@ export function SessionEmptyState(props: { personal: boolean; t: T; onNewTask():
       <section className="session-empty-state session-empty-state-personal" aria-label="Pi Work">
         <div className="session-empty-personal-layout">
           <div className="session-empty-brand-copy">
-            <p className="session-empty-kicker">{props.t("personalWorkspace")}</p>
             <h1>{props.t("personalEmptyTitle")}</h1>
             <p>{props.t("personalEmptyDetail")}</p>
           </div>
-          <p className="session-empty-shortcut">
-            <kbd>⌘ N</kbd>
-            <span>{props.t("personalEmptyShortcut")}</span>
-          </p>
+          <div className="session-empty-actions">
+            <Button size="prominent" onClick={props.onNewTask}>
+              <Icon name="plus" size={14} />
+              {props.t("newSession")}
+            </Button>
+            <p className="session-empty-shortcut">
+              <kbd>⌘ N</kbd>
+              <span>{props.t("personalEmptyShortcut")}</span>
+            </p>
+          </div>
         </div>
       </section>
     );
