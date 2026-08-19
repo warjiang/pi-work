@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { useGSAP } from "@gsap/react";
 import { createPortal } from "react-dom";
@@ -436,6 +436,7 @@ function ComposerModelMenu(props: {
           type="button"
           className="composer-model-trigger"
           aria-label={`${props.t("model")}: ${activeModelSummary}; ${props.t("thinking")}: ${thinking}`}
+          title={`${activeModelSummary} · ${thinking}`}
           disabled={props.disabled}
         >
           <span className="composer-model-summary">
@@ -564,14 +565,19 @@ export function SessionEmptyState(props: { personal: boolean; t: T; onNewTask():
       <section className="session-empty-state session-empty-state-personal" aria-label="Pi Work">
         <div className="session-empty-personal-layout">
           <div className="session-empty-brand-copy">
-            <p className="session-empty-kicker">{props.t("personalWorkspace")}</p>
             <h1>{props.t("personalEmptyTitle")}</h1>
             <p>{props.t("personalEmptyDetail")}</p>
           </div>
-          <p className="session-empty-shortcut">
-            <kbd>⌘ N</kbd>
-            <span>{props.t("personalEmptyShortcut")}</span>
-          </p>
+          <div className="session-empty-actions">
+            <Button size="prominent" onClick={props.onNewTask}>
+              <Icon name="plus" size={14} />
+              {props.t("newSession")}
+            </Button>
+            <p className="session-empty-shortcut">
+              <kbd>⌘ N</kbd>
+              <span>{props.t("personalEmptyShortcut")}</span>
+            </p>
+          </div>
         </div>
       </section>
     );
@@ -2242,13 +2248,59 @@ function MessageEditor({ initialContent, t, onSave, onCancel }: {
   );
 }
 
+export function technicalTextSegments(content: string): Array<{ text: string; breakAfter: boolean }> {
+  const segments: Array<{ text: string; breakAfter: boolean }> = [];
+  const identifierPattern = /[A-Za-z0-9]+(?:[._][A-Za-z0-9]+)+/g;
+  let cursor = 0;
+
+  for (const match of content.matchAll(identifierPattern)) {
+    const matchIndex = match.index;
+    if (matchIndex > cursor) {
+      segments.push({ text: content.slice(cursor, matchIndex), breakAfter: false });
+    }
+
+    const identifier = match[0];
+    let identifierCursor = 0;
+    for (const delimiter of identifier.matchAll(/[._]/g)) {
+      const delimiterEnd = delimiter.index + 1;
+      segments.push({
+        text: identifier.slice(identifierCursor, delimiterEnd),
+        breakAfter: true,
+      });
+      identifierCursor = delimiterEnd;
+    }
+    if (identifierCursor < identifier.length) {
+      segments.push({ text: identifier.slice(identifierCursor), breakAfter: false });
+    }
+    cursor = matchIndex + identifier.length;
+  }
+
+  if (cursor < content.length) {
+    segments.push({ text: content.slice(cursor), breakAfter: false });
+  }
+  return segments;
+}
+
+function BreakableTechnicalText({ content }: { content: string }) {
+  return technicalTextSegments(content).map((segment, index) => (
+    <Fragment key={`${index}:${segment.text}`}>
+      {segment.text}
+      {segment.breakAfter ? <wbr /> : null}
+    </Fragment>
+  ));
+}
+
 function UserMessageContent({ content, links = knownPlatformLinks(content) }: { content: string; links?: ReturnType<typeof knownPlatformLinks> }) {
-  if (links.length === 0) return <div className="message-user-content">{content}</div>;
+  if (links.length === 0) {
+    return <div className="message-user-content"><BreakableTechnicalText content={content} /></div>;
+  }
   const parts = platformLinkSegments(content);
   return <div className="message-user-content has-platform-links">
     {parts.map((part, index) => part.type === "link"
       ? <PlatformLinkCard key={`${part.value.url}-${index}`} link={part.value} appearance="message" />
-      : part.value !== "" ? <span className="message-user-text" key={index}>{part.value}</span> : null)}
+      : part.value !== ""
+        ? <span className="message-user-text" key={index}><BreakableTechnicalText content={part.value} /></span>
+        : null)}
   </div>;
 }
 

@@ -11,7 +11,7 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        "flex h-10 min-w-0 items-center justify-between gap-2 rounded-[var(--radius-field)] border border-input bg-background px-3.5 text-sm text-foreground outline-none transition-colors data-[placeholder]:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-8 min-w-0 items-center justify-between gap-1.5 rounded-[var(--radius-field)] border border-input bg-background px-2.5 text-[13px] text-foreground outline-none transition-[color,background-color,border-color,box-shadow] duration-[var(--dur-fast)] ease-[var(--ease-standard)] data-[placeholder]:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
@@ -30,7 +30,7 @@ export function SelectContent({ className, children, position = "popper", ...pro
       <SelectPrimitive.Content
         position={position}
         className={cn(
-          "z-[70] max-h-72 min-w-[8rem] overflow-hidden rounded-[var(--radius-overlay)] border border-border bg-popover text-popover-foreground shadow-[var(--shadow-raised)] data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "z-[70] max-h-72 min-w-[8rem] overflow-hidden rounded-[var(--radius-surface)] border border-border bg-popover text-popover-foreground shadow-[var(--shadow-raised)] data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           position === "popper" && "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
           className,
         )}
@@ -46,12 +46,12 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
   return (
     <SelectPrimitive.Item
       className={cn(
-        "relative flex h-9 cursor-default select-none items-center rounded-[var(--radius-control)] py-1 pl-8 pr-3 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
+        "relative flex h-8 cursor-default select-none items-center rounded-[var(--radius-control)] py-1 pl-7 pr-2.5 text-[13px] outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
         className,
       )}
       {...props}
     >
-      <span className="absolute left-2 flex size-3.5 items-center justify-center">
+      <span className="absolute left-1.5 flex size-3.5 items-center justify-center">
         <SelectPrimitive.ItemIndicator><Icon name="check" size={14} /></SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>

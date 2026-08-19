@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, Workspace } from "@pi-work/protocol";
+import type { AppSettings, BuildInfo, ModelCatalog, ProviderConfig, UsageSummary, Workspace } from "@pi-work/protocol";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { translator } from "@/i18n.js";
 import { BrowserPage } from "./browser-page.js";
-import { settingsNavigationGroups, SettingsPage } from "./settings-page.js";
+import { hasRecordedUsage, settingsNavigationGroups, SettingsPage } from "./settings-page.js";
 
 const settings: AppSettings = {
   onboardingSkipped: true,
@@ -51,6 +51,33 @@ const models: ModelCatalog = {
 };
 
 describe("SettingsPage", () => {
+  it("collapses usage analytics when the selected range has no recorded activity", () => {
+    const emptyUsage: UsageSummary = {
+      totals: {
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0,
+        totalCost: 0,
+      },
+      byModel: [],
+      byDay: [],
+      byModelDay: [],
+      byHour: [],
+      byModelHour: [],
+    };
+
+    expect(hasRecordedUsage(undefined)).toBe(false);
+    expect(hasRecordedUsage(emptyUsage)).toBe(false);
+    expect(hasRecordedUsage({
+      ...emptyUsage,
+      totals: { ...emptyUsage.totals, requests: 1 },
+    })).toBe(true);
+  });
+
   it("uses a distinct semantic icon for every settings navigation item", () => {
     const icons = Object.fromEntries(settingsNavigationGroups.flatMap((group) => group.sections.map((section) => [section.id, section.icon])));
 

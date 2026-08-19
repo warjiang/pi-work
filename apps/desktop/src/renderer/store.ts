@@ -2,8 +2,6 @@ import { create } from "zustand";
 
 export type AppView =
   | "inbox"
-  | "attention"
-  | "completed"
   | "board"
   | "sources"
   | "automations";

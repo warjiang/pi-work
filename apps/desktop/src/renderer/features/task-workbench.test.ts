@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, ConductorNodeState, ConductorRun, PlanRevision } from "@pi-work/protocol";
 import {
@@ -27,8 +29,10 @@ import {
   processSummary,
   reduceLiveProcess,
   restoreFailedComposerInput,
+  SessionEmptyState,
   serializeConductorDraft,
   summarizeProcessValue,
+  technicalTextSegments,
   toolFromActivity,
   toolPreview,
   turnHoverDistance,
@@ -42,6 +46,21 @@ const t = (key: string) => key;
 const empty = { thoughts: [], tools: [], timeline: [], notice: null };
 
 describe("live Pi process reducer", () => {
+  it("gives the personal empty state a visible new-session action", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionEmptyState, {
+        personal: true,
+        t,
+        onNewTask: () => undefined,
+      }),
+    );
+
+    expect(html).toContain("personalEmptyTitle");
+    expect(html).toContain("newSession");
+    expect(html).toContain("<button");
+    expect(html).toContain("⌘ N");
+  });
+
   it("keeps legacy conductor specs readable", () => {
     const draft = createConductorDraft(
       "Preflight",
@@ -354,6 +373,19 @@ describe("live Pi process reducer", () => {
   it("keeps the target active while smooth scrolling past intermediate turns", () => {
     expect(activeTurnDuringScroll("turn-2", "turn-4")).toBe("turn-4");
     expect(activeTurnDuringScroll("turn-4", null)).toBe("turn-4");
+  });
+
+  it("adds optional wrap points without changing technical identifier text", () => {
+    const content = "查询 data.agent.llm_secret_log，sessionid=1942494";
+    const segments = technicalTextSegments(content);
+
+    expect(segments.map(({ text }) => text).join("")).toBe(content);
+    expect(segments.filter(({ breakAfter }) => breakAfter).map(({ text }) => text)).toEqual([
+      "data.",
+      "agent.",
+      "llm_",
+      "secret_",
+    ]);
   });
 
   it("expands the hovered turn and nearby indicators by distance", () => {

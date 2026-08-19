@@ -634,6 +634,7 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
       <ContentEditable
         className="composer-editor-content"
         aria-label={ariaLabel}
+        tabIndex={0}
         spellCheck
       />
     ) : (
@@ -642,6 +643,7 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
         aria-label={ariaLabel}
         aria-placeholder={placeholder}
         placeholder={<div className="composer-editor-placeholder">{placeholder}</div>}
+        tabIndex={0}
         spellCheck
       />
     );

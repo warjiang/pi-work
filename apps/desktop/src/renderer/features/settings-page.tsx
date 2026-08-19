@@ -337,6 +337,8 @@ function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
   const [customRange, setCustomRange] = useState({ start: "", end: "" });
   const [customPickerOpen, setCustomPickerOpen] = useState(false);
   const window = useMemo(() => resolveUsageWindow(range, customRange.start, customRange.end), [range, customRange]);
+  const usage = useUsageSummary(window);
+  const hasUsage = hasRecordedUsage(usage.data);
   const dateLocale = props.settings.language === "zh-CN" ? zhCN : undefined;
   const customSelection: DateRange | undefined = customRange.start
     ? { from: new Date(`${customRange.start}T00:00:00`), to: customRange.end ? new Date(`${customRange.end}T00:00:00`) : undefined }
@@ -394,9 +396,13 @@ function GeneralSettings(props: BaseProps & { buildInfo: BuildInfo }) {
         </Popover>
       </div>
     </div>
-    <UsageSettings t={t} window={window} />
-    <UsageTrendSettings t={t} window={window} />
-    <ModelCallAnalytics t={t} window={window} />
+    <UsageSettings t={t} summary={usage.data} loading={usage.data === undefined} />
+    {hasUsage && usage.data !== undefined ? (
+      <>
+        <UsageTrendSettings t={t} window={window} summary={usage.data} />
+        <ModelCallAnalytics t={t} window={window} summary={usage.data} />
+      </>
+    ) : null}
     <section className="settings-general-onboarding">
       <SettingsSubsection className="settings-utility-onboarding" title={props.t("onboardingTitle")} detail={props.t("onboardingAppearanceDetail")}>
         <Button variant="outline" size="sm" onClick={() => void props.onRestartOnboarding()}>{props.t("restartOnboarding")}</Button>
@@ -784,13 +790,15 @@ function ModelSettings(props: BaseProps) {
                 <span>
                   <button
                     type="button"
-                    className={`model-test-checkbox${allProviderModelsSelected ? " is-checked" : ""}`}
+                    className="model-test-checkbox-button"
                     aria-label={props.t("selectAllModels")}
                     aria-pressed={allProviderModelsSelected}
                     disabled={selectedProviderModels.length === 0 || testModels.isPending}
                     onClick={toggleAllTestSelection}
                   >
-                    {allProviderModelsSelected ? <Icon name="check" size={14} /> : null}
+                    <span className={`model-test-checkbox${allProviderModelsSelected ? " is-checked" : ""}`}>
+                      {allProviderModelsSelected ? <Icon name="check" size={14} /> : null}
+                    </span>
                   </button>
                   {props.t("model")}
                 </span>
@@ -1399,14 +1407,24 @@ function ObservabilitySettings(props: { t: T }) {
   );
 }
 
-function UsageSettings(props: { t: T; window: UsageWindow }) {
+export function hasRecordedUsage(summary: UsageSummary | undefined): boolean {
+  if (summary === undefined) return false;
+  return summary.totals.requests > 0
+    || summary.totals.totalTokens > 0
+    || summary.totals.totalCost > 0
+    || summary.byModel.length > 0
+    || summary.byDay.length > 0
+    || summary.byHour.length > 0;
+}
+
+function UsageSettings(props: { t: T; summary: UsageSummary | undefined; loading: boolean }) {
   const { t } = props;
-  const usage = useUsageSummary(props.window);
-  const totals = usage.data?.totals;
+  const totals = props.summary?.totals;
+  const hasUsage = hasRecordedUsage(props.summary);
 
   return (
     <SettingsSubsection className="settings-usage" title={t("usageOverview")} detail={t("usageDetail")}>
-      {usage.data === undefined ? (
+      {props.loading ? (
         <div className="settings-observability-loading"><Spinner /></div>
       ) : (
         <>
@@ -1417,16 +1435,17 @@ function UsageSettings(props: { t: T; window: UsageWindow }) {
             <div><dt>{t("usageOutputTokens")}</dt><dd>{formatTokens(totals?.outputTokens ?? 0)}</dd></div>
             <div><dt>{t("usageTotalCost")}</dt><dd>{formatCost(totals?.totalCost ?? 0)}</dd></div>
           </dl>
-          <UsageByModelTable summary={usage.data} t={t} />
+          {hasUsage && props.summary !== undefined
+            ? <UsageByModelTable summary={props.summary} t={t} />
+            : <p className="settings-observability-empty settings-usage-empty">{t("usageNoUsage")}</p>}
         </>
       )}
     </SettingsSubsection>
   );
 }
 
-function UsageTrendSettings(props: { t: T; window: UsageWindow }) {
+function UsageTrendSettings(props: { t: T; window: UsageWindow; summary: UsageSummary }) {
   const { t } = props;
-  const usage = useUsageSummary(props.window);
   return (
     <section className="settings-usage-trend">
       <header className="settings-model-calls-head">
@@ -1436,11 +1455,7 @@ function UsageTrendSettings(props: { t: T; window: UsageWindow }) {
         </div>
       </header>
       <p className="settings-model-calls-detail">{t(props.window.hourly ? "usageTokensByHourDetail" : "usageTokensByDayDetail")}</p>
-      {usage.data === undefined ? (
-        <div className="settings-observability-loading"><Spinner /></div>
-      ) : (
-        <UsageByDayChart summary={usage.data} window={props.window} t={t} />
-      )}
+      <UsageByDayChart summary={props.summary} window={props.window} t={t} />
     </section>
   );
 }
@@ -1714,18 +1729,16 @@ interface ModelCallEntry {
   color: string;
 }
 
-function ModelCallAnalytics(props: { t: T; window: UsageWindow }) {
+function ModelCallAnalytics(props: { t: T; window: UsageWindow; summary: UsageSummary }) {
   const { t } = props;
   const [tab, setTab] = useState<ModelCallTab>("trend");
-  const usage = useUsageSummary(props.window);
-  const summary = usage.data;
-  const models: ModelCallEntry[] = (summary?.byModel ?? []).map((row, index) => ({
+  const models: ModelCallEntry[] = props.summary.byModel.map((row, index) => ({
     key: `${row.provider}:${row.model || "unknown"}`,
     label: row.model || t("unavailable"),
     requests: row.requests,
     color: MODEL_BAR_COLORS[index % MODEL_BAR_COLORS.length] ?? "#64748b",
   }));
-  const totalRequests = summary?.totals.requests ?? 0;
+  const totalRequests = props.summary.totals.requests;
 
   return (
     <section className="settings-model-calls">
@@ -1746,12 +1759,10 @@ function ModelCallAnalytics(props: { t: T; window: UsageWindow }) {
         </div>
       </header>
       <p className="settings-model-calls-detail">{t("usageModelCallsDetail")}</p>
-      {summary === undefined ? (
-        <div className="settings-observability-loading"><Spinner /></div>
-      ) : models.length === 0 ? (
+      {models.length === 0 ? (
         <p className="settings-observability-empty">{t("usageNoUsage")}</p>
       ) : tab === "trend" ? (
-        <ModelCallTrend summary={summary} window={props.window} models={models} />
+        <ModelCallTrend summary={props.summary} window={props.window} models={models} />
       ) : tab === "distribution" ? (
         <ModelCallDistribution models={models} totalRequests={totalRequests} />
       ) : (
@@ -1792,7 +1803,7 @@ function ModelCallTrend(props: { summary: UsageSummary; window: UsageWindow; mod
   const tickInterval = Math.max(Math.ceil(data.length / 8) - 1, 0);
   return (
     <div className="settings-usage-chart-figure">
-      <ResponsiveContainer width="100%" height={240}>
+      <ResponsiveContainer width="100%" height={180}>
         <AreaChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 0 }}>
           <defs>
             {models.map((model, index) => (
@@ -1880,7 +1891,7 @@ function ModelCallDistribution(props: { models: ModelCallEntry[]; totalRequests:
   const data = models.filter((model) => model.requests > 0);
   return (
     <div className="settings-usage-chart-figure">
-      <ResponsiveContainer width="100%" height={240}>
+      <ResponsiveContainer width="100%" height={180}>
         <PieChart>
           <Pie
             data={data}
