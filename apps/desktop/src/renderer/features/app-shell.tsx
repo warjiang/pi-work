@@ -55,9 +55,6 @@ import type { AppView, SettingsSection, WorkspaceScope } from "@/store.js";
 type T = (key: MessageKey) => string;
 
 export const workspaceSidebarIcons = {
-  inbox: "inbox",
-  attention: "attention",
-  completed: "check-circle",
   board: "folder-kanban",
   sources: "source",
   automations: "automation",
@@ -163,7 +160,6 @@ export function Sidebar(props: {
   sessions: Session[];
   workspaceScope: WorkspaceScope;
   selectedTaskId: string | null;
-  attentionIds: Set<string>;
   isFolder: boolean;
   collapsed: boolean;
   drawerOpen: boolean;
@@ -184,8 +180,6 @@ export function Sidebar(props: {
   } | null>(null);
   const [resizing, setResizing] = useState(false);
   const recent = recentSessions(props.sessions);
-  const attentionCount = props.sessions.filter(({ id }) => props.attentionIds.has(id)).length;
-  const completedCount = props.sessions.filter(({ status, archived }) => status === "completed" && !archived).length;
   const version = props.buildInfo.version.startsWith("v") ? props.buildInfo.version : `v${props.buildInfo.version}`;
   const buildSummary = props.buildInfo.commit?.slice(0, 7);
   useEffect(() => {
@@ -213,13 +207,12 @@ export function Sidebar(props: {
             <Icon name="plus" size={14} />
             {props.workspaceScope === "personal" ? props.t("newSession") : props.t("newTask")}
           </Button>
-          <SidebarSection title={props.t("work")}>
-            <SidebarNavButton active={props.view === "inbox"} icon={workspaceSidebarIcons.inbox} label={props.t("inbox")} onClick={() => props.onView("inbox")} />
-            <SidebarNavButton active={props.view === "attention"} icon={workspaceSidebarIcons.attention} label={props.t("attention")} badge={attentionCount} onClick={() => props.onView("attention")} />
-            <SidebarNavButton active={props.view === "completed"} icon={workspaceSidebarIcons.completed} label={props.t("completed")} badge={completedCount} onClick={() => props.onView("completed")} />
-            {props.isFolder ? <SidebarNavButton active={props.view === "board"} icon={workspaceSidebarIcons.board} label={props.t("board")} onClick={() => props.onView("board")} /> : null}
-          </SidebarSection>
-          <SidebarSection className="recent-section workspace-task-section" title={props.t("recentTasks")} count={recent.length}>
+          {props.isFolder ? (
+            <SidebarSection title={props.t("work")}>
+              <SidebarNavButton active={props.view === "board"} icon={workspaceSidebarIcons.board} label={props.t("board")} onClick={() => props.onView("board")} />
+            </SidebarSection>
+          ) : null}
+          <SidebarSection className="recent-section workspace-task-section" title={props.t("recentTasks")}>
             <div className="recent-task-list">
               {recent.map((session) => (
                 <Button
@@ -246,7 +239,7 @@ export function Sidebar(props: {
         <footer className="sidebar-footer">
           <Button type="button" variant="ghost" className="sidebar-settings-button" onClick={props.onOpenSettings}>
             <Icon name={workspaceSidebarIcons.settings} />
-            <strong>{props.t("settings")}</strong>
+            <span className="sidebar-settings-label">{props.t("settings")}</span>
             <span
               className="sidebar-settings-version"
               title={buildSummary ? `${version} · ${props.buildInfo.commit}` : version}
@@ -425,10 +418,10 @@ function WorkspaceEditDialog(props: {
   );
 }
 
-function SidebarSection(props: { title: string; count?: number; className?: string; children: ReactNode }) {
+function SidebarSection(props: { title: string; className?: string; children: ReactNode }) {
   return (
     <section className={`sidebar-section ${props.className ?? ""}`}>
-      <header><span>{props.title}</span>{props.count === undefined ? null : <small>{props.count}</small>}</header>
+      <header><span>{props.title}</span></header>
       <nav>{props.children}</nav>
     </section>
   );

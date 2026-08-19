@@ -17965,11 +17965,11 @@ body {
 }
 
 .desktop {
-  grid-template-rows: var(--density-bar) minmax(0, 1fr) 0;
+  grid-template-rows: var(--density-bar) minmax(0, 1fr) var(--console-panel-height, 0px);
 }
 
 .desktop.pi-console-open {
-  grid-template-rows: var(--density-bar) minmax(0, 1fr) clamp(220px, 36vh, 380px);
+  grid-template-rows: var(--density-bar) minmax(0, 1fr) var(--console-panel-height, 0px);
 }
 
 .topbar,
@@ -17984,6 +17984,7 @@ body {
 
 .topbar-leading,
 .topbar-trailing {
+  height: var(--density-bar);
   gap: var(--density-gap-1);
 }
 
@@ -18651,4 +18652,77 @@ body {
   .settings-content-inner {
     padding: 12px 14px 20px;
   }
+}
+
+/* Keep workspace switching visually quiet across pointer and keyboard states. */
+.workspace-switcher:hover,
+.workspace-switcher[aria-expanded="true"] {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.workspace-switcher:focus,
+.workspace-switcher:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.workspace-switcher-menu [role="menuitem"]:hover,
+.workspace-switcher-menu [role="menuitem"]:focus,
+.workspace-switcher-menu [role="menuitem"]:focus-visible,
+.workspace-switcher-menu [role="menuitem"][data-highlighted] {
+  background: transparent !important;
+  color: inherit !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Keep turn navigation compact while preserving its 32px horizontal target. */
+.turn-navigator-item {
+  min-height: 16px;
+  height: 16px;
+  max-height: 16px;
+  flex-basis: 16px;
+}
+
+.turn-navigator-button {
+  min-height: 16px;
+  height: 16px;
+}
+
+@media (min-width: 901px) {
+  .sidebar-body {
+    gap: 8px;
+    padding-top: 44px;
+  }
+}
+
+.message.user > .message-user-content {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+@media (min-width: 761px) {
+  .message.user {
+    max-width: min(68%, 420px);
+  }
+}
+
+.sidebar-footer {
+  padding-block: 2px 3px;
+}
+
+.sidebar-settings-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.sidebar-settings-version {
+  font-weight: 400;
 }

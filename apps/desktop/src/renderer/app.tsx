@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useGSAP } from "@gsap/react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session, Workspace } from "@pi-work/protocol";
 import { gsap } from "gsap";
 import { Alert, AlertDescription } from "./components/ui/alert.js";
@@ -21,7 +21,7 @@ import {
 } from "./features/app-shell.js";
 import { SettingsPage } from "./features/settings-page.js";
 import { PiConsolePanel } from "./features/pi-console-panel.js";
-import { SessionEmptyState, TaskListPage, TaskWorkbench } from "./features/task-workbench.js";
+import { SessionEmptyState, TaskWorkbench } from "./features/task-workbench.js";
 import {
   AutomationsPage,
   BoardPage,
@@ -155,38 +155,6 @@ export function App() {
     enabled: workflowWorkspaceId !== null,
   });
   useEffect(() => setSelectedBoardId(undefined), [workflowWorkspaceId]);
-  const folderSessions = scopedSessions.filter((session) => (
-    session.kind === "task" && workspaceById.get(session.workspaceId)?.kind === "folder"
-  ));
-  const artifactQueries = useQueries({
-    queries: folderSessions.map((session) => ({
-      queryKey: ["artifacts", session.id],
-      queryFn: () => window.piWork.artifact.list(session.id),
-      staleTime: 2_000,
-    })),
-  });
-  const unpublishedBySessionId = useMemo(() => new Map(
-    folderSessions.map((session, index) => [
-      session.id,
-      (artifactQueries[index]?.data ?? []).some(({ publishedPath }) => publishedPath === null),
-    ]),
-  ), [artifactQueries, folderSessions]);
-  const attentionIds = useMemo(() => {
-    const ids = new Set<string>();
-    scopedSessions.forEach((session) => {
-      if (
-        session.status === "awaiting_plan_approval"
-        || session.status === "awaiting_action_approval"
-        || session.status === "failed"
-        || (toolApprovals.data ?? []).some(({ sessionId }) => sessionId === session.id)
-        || unpublishedBySessionId.get(session.id) === true
-      ) {
-        ids.add(session.id);
-      }
-    });
-    return ids;
-  }, [scopedSessions, toolApprovals.data, unpublishedBySessionId]);
-
   useEffect(() => {
     const value = settings.data;
     if (value === undefined) return;
@@ -536,14 +504,6 @@ export function App() {
     return <AppLoading t={t} />;
   }
 
-  const inboxSessions = scopedSessions.filter(({ archived, status }) => !archived && status !== "completed");
-  const attentionSessions = scopedSessions.filter(({ id, archived }) => !archived && attentionIds.has(id));
-  const completedSessions = scopedSessions.filter(({ archived, status }) => !archived && status === "completed");
-  const pageSessions = ui.view === "attention"
-    ? attentionSessions
-    : ui.view === "completed"
-      ? completedSessions
-      : inboxSessions;
   const resourceWorkspaceId = scopeWorkspace?.kind === "folder" ? scopeWorkspace.id : null;
   const appSettings = settings.data;
   const onboardingOpen = !appSettings.onboardingSkipped;
@@ -593,7 +553,6 @@ export function App() {
           sessions={scopedSessions}
           workspaceScope={ui.workspaceScope}
           selectedTaskId={ui.selectedTaskId}
-          attentionIds={attentionIds}
           isFolder={scopeWorkspace?.kind === "folder"}
           collapsed={ui.sidebarCollapsed}
           drawerOpen={ui.sidebarDrawerOpen}
@@ -650,20 +609,6 @@ export function App() {
             personal={ui.workspaceScope === "personal"}
             t={t}
             onNewTask={createNewItem}
-          />
-        ) : null}
-        {ui.view === "attention" || ui.view === "completed" ? (
-          <TaskListPage
-            title={t(ui.view === "attention"
-              ? "attention"
-              : ui.view === "completed"
-                ? "completed"
-                : "inbox")}
-            sessions={pageSessions}
-            workspaces={workspaces.data ?? []}
-            t={t}
-            onNewTask={createNewItem}
-            onOpenTask={openSession}
           />
         ) : null}
         {ui.view === "board" && boardWorkspace !== null ? (

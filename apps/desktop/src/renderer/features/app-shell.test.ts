@@ -151,14 +151,14 @@ describe("command settings", () => {
 describe("workspace sidebar icons", () => {
   it("uses distinct semantic icons for workspace navigation", () => {
     expect(workspaceSidebarIcons).toMatchObject({
-      inbox: "inbox",
-      attention: "attention",
-      completed: "check-circle",
       board: "folder-kanban",
       sources: "source",
       automations: "automation",
       settings: "settings",
     });
+    expect(workspaceSidebarIcons).not.toHaveProperty("inbox");
+    expect(workspaceSidebarIcons).not.toHaveProperty("attention");
+    expect(workspaceSidebarIcons).not.toHaveProperty("completed");
   });
 
   it("keeps at most eight unique unarchived recent sessions", () => {

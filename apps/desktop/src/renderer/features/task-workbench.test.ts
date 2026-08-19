@@ -32,6 +32,7 @@ import {
   SessionEmptyState,
   serializeConductorDraft,
   summarizeProcessValue,
+  technicalTextSegments,
   toolFromActivity,
   toolPreview,
   turnHoverDistance,
@@ -372,6 +373,19 @@ describe("live Pi process reducer", () => {
   it("keeps the target active while smooth scrolling past intermediate turns", () => {
     expect(activeTurnDuringScroll("turn-2", "turn-4")).toBe("turn-4");
     expect(activeTurnDuringScroll("turn-4", null)).toBe("turn-4");
+  });
+
+  it("adds optional wrap points without changing technical identifier text", () => {
+    const content = "查询 data.agent.llm_secret_log，sessionid=1942494";
+    const segments = technicalTextSegments(content);
+
+    expect(segments.map(({ text }) => text).join("")).toBe(content);
+    expect(segments.filter(({ breakAfter }) => breakAfter).map(({ text }) => text)).toEqual([
+      "data.",
+      "agent.",
+      "llm_",
+      "secret_",
+    ]);
   });
 
   it("expands the hovered turn and nearby indicators by distance", () => {
